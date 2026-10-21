@@ -1,4 +1,8 @@
-"""Клиент нейросети через официальный SDK openai (любой OpenAI-совместимый провайдер).
+"""Клиенты нейросети: общий интерфейс и OpenAI-совместимый клиент (официальный SDK openai).
+
+Профиль с provider: openai — любой OpenAI-совместимый API (DeepSeek, ChatGPT, Ollama, Zen),
+provider: anthropic — Claude через официальный SDK anthropic (llm/anthropic_client.py).
+Клиента по профилю выбирает create_client.
 
 Ответ читается потоком: текст отдаётся по кусочкам (озвучка начинается с первого
 предложения), вызовы инструментов собираются из кусочков в конце. Повторы при
@@ -18,7 +22,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from assistant.config import LlmConfig, LlmProfile
 
@@ -29,10 +33,19 @@ _NO_KEY = "not-needed"
 # Как часто проверять отмену, пока нейросеть молчит, секунды.
 _CANCEL_POLL = 0.1
 _END = object()  # поток ответа закончился
+_NOTHING = object()  # за время ожидания ничего не пришло
 
 
 class LlmError(Exception):
     """Нейросеть не ответила. Текст объясняет причину пользователю (без секретов)."""
+
+    spoken = "Нейросеть недоступна"  # что сказать вслух
+
+
+class LlmRefused(LlmError):
+    """Модель отказалась отвечать на запрос (фильтр безопасности провайдера)."""
+
+    spoken = "С этим я помочь не могу"
 
 
 class LlmCancelled(Exception):
@@ -55,11 +68,15 @@ class LlmReply:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     reasoning: str = ""  # reasoning_content: DeepSeek в режиме рассуждений требует вернуть его
+    native: Any = None  # ответ в формате провайдера (Claude: блоки, которые возвращаются как есть)
     first_token_ms: float | None = None
     total_ms: float = 0.0
 
     def assistant_message(self) -> dict[str, Any]:
-        """Сообщение ассистента для продолжения разговора."""
+        """Сообщение ассистента для продолжения разговора.
+
+        Поля с «_» служебные: их видит только клиент нейросети, провайдеру они не уходят.
+        """
         message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
         if self.tool_calls:
             message["tool_calls"] = [
@@ -68,21 +85,56 @@ class LlmReply:
             ]
         if self.reasoning:
             message["reasoning_content"] = self.reasoning
+        if self.native is not None:
+            message["_native"] = self.native
         return message
 
 
+class ChatClient(Protocol):
+    """Клиент выбранного профиля нейросети."""
+
+    profile_name: str
+    profile: LlmProfile
+
+    def describe(self) -> str: ...
+
+    def complete(
+        self,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]] = (),
+        on_text: Callable[[str], None] | None = None,
+        cancel: threading.Event | None = None,
+        timeout: float | None = None,
+    ) -> LlmReply: ...
+
+    def list_models(self) -> list[str]: ...
+
+
+def create_client(settings: LlmConfig) -> ChatClient:
+    """Клиент для выбранного профиля.
+
+    Raises:
+        LlmError: ключ нужен, но не задан.
+    """
+    if settings.active.provider == "anthropic":
+        from assistant.llm.anthropic_client import AnthropicClient
+
+        return AnthropicClient(settings)
+    return LlmClient(settings)
+
+
 def describe_error(exc: Exception, profile_name: str, profile: LlmProfile) -> str:
-    """Понятное объяснение ошибки провайдера."""
+    """Понятное объяснение ошибки OpenAI-совместимого провайдера."""
     import openai
 
     detail = str(getattr(exc, "message", "") or exc)
     if isinstance(exc, openai.AuthenticationError):
-        return f"ключ API не подошёл (профиль {profile_name}) — проверьте {profile.api_key_env} в .env"
+        return f"ключ API не подошёл (профиль {profile_name}) — проверьте ключ в настройках"
     if isinstance(exc, openai.PermissionDeniedError):
         if "FreeTierError" in detail or "free tier" in detail.lower():
             return (
                 "бесплатные модели OpenCode Zen работают только в приложении OpenCode (403 FreeTierError). "
-                "Выберите в config.yaml профиль deepseek или ollama либо платную модель Zen"
+                "Выберите в настройках другого провайдера или платную модель Zen"
             )
         return f"доступ запрещён (403): {detail}"
     if isinstance(exc, openai.RateLimitError):
@@ -113,12 +165,70 @@ def resolve_api_key(profile_name: str, profile: LlmProfile) -> str:
         return _NO_KEY
     key = os.environ.get(profile.api_key_env, "").strip()
     if not key:
-        raise LlmError(f"нет ключа API для профиля {profile_name}: впишите {profile.api_key_env} в .env")
+        raise LlmError(
+            f"нет ключа API для профиля {profile_name}: укажите его в настройках "
+            f"(или {profile.api_key_env} в .env)"
+        )
     return key
 
 
+def public_messages(messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сообщения без служебных полей (ключи с «_»): их видит только наш код."""
+    return [{key: value for key, value in m.items() if not key.startswith("_")} for m in messages]
+
+
+@dataclass(frozen=True)
+class _Failure:
+    error: Exception
+
+
+def stream_in_background(
+    produce: Callable[[Callable[[Any], None], threading.Event], None],
+    cancel: threading.Event | None,
+) -> Generator[Any, None, None]:
+    """Выполняет produce(put, abandoned) в отдельном потоке и отдаёт всё, что он положил.
+
+    Пока провайдер молчит, отмена проверяется каждые 0,1 с. Ошибка внутри produce
+    поднимается здесь. Когда чтение прекращено (отмена, ошибка у вызывающего),
+    выставляется abandoned: produce должен перестать читать и закрыть соединение —
+    брошенный запрос закроется, когда придёт его следующий кусочек или истечёт таймаут.
+
+    Raises:
+        LlmCancelled: пользователь прервал запрос.
+    """
+    items: queue.Queue[Any] = queue.Queue()
+    abandoned = threading.Event()
+
+    def run() -> None:
+        try:
+            produce(items.put, abandoned)
+        except Exception as exc:  # ошибку разбирает вызывающий поток
+            items.put(_Failure(exc))
+        else:
+            items.put(_END)
+
+    threading.Thread(target=run, name="llm-request", daemon=True).start()
+    try:
+        while True:
+            try:
+                item = items.get(timeout=_CANCEL_POLL)
+            except queue.Empty:
+                item = _NOTHING
+            if cancel is not None and cancel.is_set():
+                raise LlmCancelled
+            if item is _NOTHING:
+                continue
+            if item is _END:
+                return
+            if isinstance(item, _Failure):
+                raise item.error
+            yield item
+    finally:
+        abandoned.set()
+
+
 class LlmClient:
-    """Запросы к выбранному профилю.
+    """Запросы к OpenAI-совместимому профилю (DeepSeek, ChatGPT, Ollama, Zen).
 
     Args:
         settings: раздел llm конфига.
@@ -170,10 +280,13 @@ class LlmClient:
         started = time.perf_counter()
         request: dict[str, Any] = {
             "model": self.profile.model,
-            "messages": list(messages),
+            "messages": public_messages(messages),
             "stream": True,
-            "temperature": self._settings.temperature,
         }
+        if self.profile.temperature is not None:
+            request["temperature"] = self.profile.temperature
+        if self.profile.max_tokens is not None:
+            request["max_tokens"] = self.profile.max_tokens
         if tools:
             request["tools"] = list(tools)
         if self.profile.extra_body:
@@ -196,53 +309,35 @@ class LlmClient:
         )
         return reply
 
-    def _chunks(self, request: dict[str, Any], cancel: threading.Event | None) -> Generator[Any, None, None]:
-        """Кусочки ответа. Запрос выполняется в отдельном потоке, а здесь ждём кусочки и отмену.
-
-        Брошенный запрос (отмена, ошибка при разборе) закрывается, когда придёт его
-        следующий кусочек или истечёт таймаут.
+    def list_models(self) -> list[str]:
+        """Модели, доступные по ключу (GET /models).
 
         Raises:
-            LlmCancelled: пользователь прервал запрос.
+            LlmError: провайдер не ответил или отказал.
         """
-        items: queue.Queue[Any] = queue.Queue()
-        abandoned = threading.Event()
+        import openai
 
-        def pump() -> None:
-            try:
-                stream = self._client.chat.completions.create(**request)
-                try:
-                    for chunk in stream:
-                        if abandoned.is_set():
-                            break
-                        items.put(chunk)
-                finally:
-                    close = getattr(stream, "close", None)
-                    if close is not None:
-                        close()
-            except Exception as exc:  # ошибку разбирает вызывающий поток
-                items.put(exc)
-            else:
-                items.put(_END)
-
-        threading.Thread(target=pump, name="llm-request", daemon=True).start()
         try:
-            while True:
-                try:
-                    item = items.get(timeout=_CANCEL_POLL)
-                except queue.Empty:
-                    item = None
-                if cancel is not None and cancel.is_set():
-                    raise LlmCancelled
-                if item is None:
-                    continue
-                if item is _END:
-                    return
-                if isinstance(item, Exception):
-                    raise item
-                yield item
-        finally:
-            abandoned.set()
+            return sorted(model.id for model in self._client.models.list())
+        except openai.OpenAIError as exc:
+            raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
+
+    def _chunks(self, request: dict[str, Any], cancel: threading.Event | None) -> Generator[Any, None, None]:
+        """Кусочки ответа: запрос выполняется в отдельном потоке."""
+
+        def produce(put: Callable[[Any], None], abandoned: threading.Event) -> None:
+            stream = self._client.chat.completions.create(**request)
+            try:
+                for chunk in stream:
+                    if abandoned.is_set():
+                        break
+                    put(chunk)
+            finally:
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+
+        return stream_in_background(produce, cancel)
 
     @staticmethod
     def _read(

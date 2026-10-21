@@ -203,13 +203,14 @@ faster-whisper) нет, драйвер NVIDIA собирает их из уни�
 
 ### Выбор провайдера
 
-Нейросеть подключается через профиль (`llm.profile` в `config.yaml`). Встроены три:
+Нейросеть подключается через профиль (`llm.profile` в `config.yaml`). Встроены:
 
 | Профиль | Модель | Ключ в `.env` | Что нужно знать |
 |---|---|---|---|
-| `deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` | платно, но недорого; нужен интернет. Режим рассуждений выключен — так быстрее |
+| `deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` | выбран по умолчанию; платно, но недорого; нужен интернет. Режим рассуждений выключен — так быстрее |
+| `anthropic` | `claude-opus-5-5` | `ANTHROPIC_API_KEY` | Claude через официальный SDK `anthropic`; платно. Рассуждения у этой модели не выключаются — стоит минимальный уровень (`effort: low`) |
 | `ollama` | `qwen3:8b` | не нужен | бесплатно и без интернета: модель работает на вашем компьютере через [Ollama](https://ollama.com) |
-| `opencode_zen` | `deepseek-v4-flash-free` | `OPENCODE_API_KEY` | выбран по умолчанию, но бесплатные модели сейчас недоступны другим программам (см. ниже) |
+| `opencode_zen` | `deepseek-v4-flash-free` | `OPENCODE_API_KEY` | бесплатные модели сейчас недоступны другим программам (см. ниже) |
 
 **OpenCode Zen.** С сентября 2026 бесплатные модели Zen (с `-free` в названии) работают только
 в приложении OpenCode, а другим программам отвечают ошибкой 403 FreeTierError. Ассистент
@@ -313,7 +314,7 @@ browser:
   search_url: "https://www.google.com/search?q={query}"   # можно заменить на Яндекс
 
 llm:
-  profile: deepseek          # deepseek, ollama, opencode_zen или свой (см. «Нейросеть»)
+  profile: deepseek          # deepseek, anthropic, ollama, opencode_zen или свой (см. «Нейросеть»)
 ```
 
 Ключи API хранятся в файле `.env` — скопируйте `.env.example`. `.env` не попадает в git,

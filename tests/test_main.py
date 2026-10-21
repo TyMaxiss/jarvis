@@ -23,9 +23,9 @@ def test_keys_of_all_profiles_are_masked(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_start_message_explains_missing_key_and_zen_free_tier(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
-    text = describe_llm(AppConfig())
+    text = describe_llm(AppConfig.model_validate({"llm": {"profile": "opencode_zen"}}))
     assert "профиль opencode_zen, модель deepseek-v4-flash-free" in text
-    assert "впишите OPENCODE_API_KEY в .env" in text
+    assert "укажите его в настройках (или OPENCODE_API_KEY в .env)" in text
     assert "403 FreeTierError" in text
 
 

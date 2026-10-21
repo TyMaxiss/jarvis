@@ -174,38 +174,74 @@ class TtsConfig(_Section):
 
 
 class LlmProfile(_Section):
-    """Провайдер нейросети с OpenAI-совместимым API."""
+    """Провайдер нейросети: OpenAI-совместимый API (DeepSeek, ChatGPT, Ollama…) или Claude."""
 
-    base_url: str
+    title: str = Field("", description="Название в интерфейсе; пусто — имя профиля")
+    provider: Literal["openai", "anthropic"] = Field(
+        "openai", description="openai — любой OpenAI-совместимый API; anthropic — Claude через SDK anthropic"
+    )
+    base_url: str = Field("", description="Адрес API; для anthropic можно не указывать")
     model: str
     api_key_env: str = Field("", description="Переменная в .env с ключом API; пусто — ключ не нужен")
     vision: bool = Field(False, description="Модель принимает картинки (снимок экрана — этап 5)")
+    temperature: float | None = Field(
+        None, ge=0, le=2, description="Не задана — не передаётся: часть моделей её не принимает"
+    )
+    max_tokens: int | None = Field(None, ge=1, description="Предел длины ответа; для Claude — 16000")
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        None, description="Claude: сколько думать перед ответом; low — быстрее всего"
+    )
+    fallbacks: bool = Field(
+        True, description="Claude: если модель откажется отвечать, повторить на рекомендованной запасной"
+    )
     extra_body: dict[str, Any] = Field(
         default_factory=dict, description="Дополнительные поля запроса, например отключение рассуждений"
     )
+
+    @model_validator(mode="after")
+    def _base_url_for_openai(self) -> LlmProfile:
+        if self.provider == "openai" and not self.base_url:
+            raise ValueError("для провайдера openai нужен base_url — адрес OpenAI-совместимого API")
+        return self
 
 
 # Профили из ТЗ. Пользовательские настройки профиля дополняют эти, а не заменяют целиком.
 DEFAULT_LLM_PROFILES: dict[str, dict[str, Any]] = {
     "deepseek": {
+        "title": "DeepSeek",
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-flash",
         "api_key_env": "DEEPSEEK_API_KEY",
         "vision": True,
+        "temperature": 0.3,
         # Для команд нужен быстрый режим без рассуждений (api-docs.deepseek.com, Thinking Mode).
         "extra_body": {"thinking": {"type": "disabled"}},
     },
-    "opencode_zen": {
-        "base_url": "https://opencode.ai/zen/v1",
-        "model": "deepseek-v4-flash-free",
-        "api_key_env": "OPENCODE_API_KEY",
+    "anthropic": {
+        "title": "Claude",
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "vision": True,
+        "max_tokens": 16000,
+        # Рассуждения у Claude Opus 5.5 не выключаются; low — самый быстрый ответ.
+        "effort": "low",
     },
     "ollama": {
+        "title": "Ollama (без интернета)",
         "base_url": "http://localhost:11434/v1",
         "model": "qwen3:8b",
+        "temperature": 0.3,
         # Без «размышлений»: быстрее отвечает. Для моделей вроде qwen3 Ollama переводит
         # reasoning_effort "none" в think=false (docs/api/openai-compatibility в репозитории ollama).
         "extra_body": {"reasoning_effort": "none"},
+    },
+    "opencode_zen": {
+        "title": "OpenCode Zen",
+        "base_url": "https://opencode.ai/zen/v1",
+        "model": "deepseek-v4-flash-free",
+        "api_key_env": "OPENCODE_API_KEY",
+        "temperature": 0.3,
     },
 }
 
@@ -214,7 +250,7 @@ class LlmConfig(_Section):
     """Нейросеть: профиль провайдера и лимиты агента."""
 
     enabled: bool = Field(True, description="false — фразы, которых нет в командах, не обрабатываются")
-    profile: str = Field("opencode_zen", description="Какой профиль из profiles использовать")
+    profile: str = Field("deepseek", description="Какой профиль из profiles использовать")
     profiles: dict[str, LlmProfile] = Field(
         default_factory=lambda: {name: LlmProfile(**data) for name, data in DEFAULT_LLM_PROFILES.items()}
     )
@@ -224,7 +260,6 @@ class LlmConfig(_Section):
     retries: int = Field(2, ge=0, le=5, description="Повторы при ошибках сети, таймаутах и 429")
     history: int = Field(10, ge=0, le=50, description="Сколько последних обменов помнить")
     reset_after: float = Field(300, ge=0, description="Через сколько секунд тишины забыть разговор")
-    temperature: float = Field(0.3, ge=0, le=2)
 
     @field_validator("profiles", mode="before")
     @classmethod

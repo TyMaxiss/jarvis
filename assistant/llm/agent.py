@@ -26,20 +26,22 @@ from assistant.actions.executor import ActionExecutor, PlannedStep, StepStatus
 from assistant.actions.registry import ArgsError, UnknownActionError
 from assistant.actions.winapi import WindowInfo
 from assistant.config import LlmConfig
-from assistant.llm.client import LlmCancelled, LlmClient, LlmError
-from assistant.llm.prompts import build_system_prompt
+from assistant.llm.client import ChatClient, LlmCancelled, LlmError, create_client
+from assistant.llm.prompts import build_context, build_system_prompt
 from assistant.safety.confirm import Confirmer
 from assistant.tts.base import Speaker
 
 log = logging.getLogger(__name__)
 
-UNAVAILABLE = "Нейросеть недоступна"
+UNAVAILABLE = LlmError.spoken
 _TIMEOUT_REPLY = "Не успел выполнить задачу вовремя."
 _STEP_LIMIT_REPLY = "Задача оказалась слишком длинной, я остановился."
 _CANCELLED_TOOL = "Отменено пользователем"
 # Ответ модели и так озвучивается: отдельный инструмент «сказать» ей не нужен.
 _HIDDEN_TOOLS = ("say",)
 _SENTENCE_END = re.compile(r"[.!?…]+[»\")]*\s+")
+# Исходы шага, о которых модели сообщается как об ошибке (Claude: tool_result с is_error).
+_FAILED_STEPS = frozenset({"error", "failed", "forbidden"})
 
 
 class AgentStatus(StrEnum):
@@ -126,8 +128,8 @@ class Agent:
         executor: исполнитель действий (политика, подтверждение, журнал, dry-run).
         speaker: кто произносит ответ.
         name: имя ассистента (для промпта).
-        client_factory: создаёт клиента нейросети; по умолчанию LlmClient(settings).
-        window_provider: активное окно (для промпта).
+        client_factory: создаёт клиента нейросети; по умолчанию — по профилю (create_client).
+        window_provider: активное окно (для контекста в сообщении пользователя).
         clock: монотонные часы (подменяются в тестах).
         now: текущие дата и время (для промпта).
     """
@@ -139,7 +141,7 @@ class Agent:
         speaker: Speaker,
         *,
         name: str = "джарвис",
-        client_factory: Callable[[], LlmClient] | None = None,
+        client_factory: Callable[[], ChatClient] | None = None,
         window_provider: Callable[[], WindowInfo] | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = datetime.now,
@@ -148,8 +150,8 @@ class Agent:
         self._executor = executor
         self._speaker = speaker
         self._name = name
-        self._client_factory = client_factory or (lambda: LlmClient(settings))
-        self._client: LlmClient | None = None
+        self._client_factory = client_factory or (lambda: create_client(self._settings))
+        self._client: ChatClient | None = None
         self._window_provider = window_provider
         self._clock = clock
         self._now = now
@@ -163,6 +165,21 @@ class Agent:
     def forget(self) -> None:
         """Забывает разговор."""
         self._history.clear()
+
+    def reconfigure(self, settings: LlmConfig) -> None:
+        """Новые настройки нейросети (сменили профиль, модель или ключ в интерфейсе).
+
+        Клиент создаётся заново при следующей просьбе, разговор забывается: в нём могут
+        быть данные в формате прежнего провайдера.
+        """
+        self._settings = settings
+        self._client = None
+        self.forget()
+
+    @property
+    def settings(self) -> LlmConfig:
+        """Текущий раздел llm."""
+        return self._settings
 
     def run(
         self,
@@ -192,12 +209,13 @@ class Agent:
                 self._say(result, sentence)
 
         streamer = SentenceStreamer(speak)
-        exchange: list[dict[str, Any]] = [{"role": "user", "content": text}]
+        exchange: list[dict[str, Any]] = [{"role": "user", "content": f"{self._context()}\n{text}"}]
         try:
             client = self._get_client()
         except LlmError as exc:
-            return self._unavailable(result, str(exc), started)
+            return self._unavailable(result, exc, started)
         tools = self._executor.registry.tools(exclude=_HIDDEN_TOOLS)
+        system = build_system_prompt(self._name)
 
         for _ in range(self._settings.max_steps):
             remaining = deadline - self._clock()
@@ -207,7 +225,7 @@ class Agent:
             if remaining <= 0:
                 self._finish(result, AgentStatus.TIMEOUT, _TIMEOUT_REPLY, exchange)
                 break
-            messages = [{"role": "system", "content": self._system_prompt()}, *self._past(), *exchange]
+            messages = [{"role": "system", "content": system}, *self._past(), *exchange]
             try:
                 reply = client.complete(
                     messages,
@@ -221,9 +239,9 @@ class Agent:
                 break
             except LlmError as exc:
                 if result.requests == 0:
-                    return self._unavailable(result, str(exc), started)
+                    return self._unavailable(result, exc, started)
                 result.error = str(exc)
-                self._finish(result, AgentStatus.ERROR, UNAVAILABLE, exchange)
+                self._finish(result, AgentStatus.ERROR, exc.spoken, exchange)
                 break
             result.requests += 1
             result.llm_ms += reply.total_ms
@@ -240,7 +258,10 @@ class Agent:
                 result.steps.append(step)
                 if on_step is not None:
                     on_step(step)
-                exchange.append({"role": "tool", "tool_call_id": call.id, "content": step.text})
+                message = {"role": "tool", "tool_call_id": call.id, "content": step.text}
+                if step.status in _FAILED_STEPS:
+                    message["_is_error"] = True
+                exchange.append(message)
         else:
             self._finish(result, AgentStatus.STEP_LIMIT, _STEP_LIMIT_REPLY, exchange)
 
@@ -254,19 +275,19 @@ class Agent:
 
     # --- Внутреннее ------------------------------------------------------------------
 
-    def _get_client(self) -> LlmClient:
+    def _get_client(self) -> ChatClient:
         if self._client is None:
             self._client = self._client_factory()
         return self._client
 
-    def _system_prompt(self) -> str:
+    def _context(self) -> str:
         window = None
         if self._window_provider is not None:
             try:
                 window = self._window_provider()
             except Exception:
-                log.debug("Не удалось узнать активное окно для промпта", exc_info=True)
-        return build_system_prompt(self._name, self._now(), window)
+                log.debug("Не удалось узнать активное окно для контекста", exc_info=True)
+        return build_context(self._now(), window)
 
     def _past(self) -> list[dict[str, Any]]:
         return [message for exchange in self._history for message in exchange]
@@ -290,11 +311,11 @@ class Agent:
         self._say(result, reply)
         exchange.append({"role": "assistant", "content": reply})
 
-    def _unavailable(self, result: AgentResult, reason: str, started: float) -> AgentResult:
-        log.info("Нейросеть недоступна: %s", reason)
+    def _unavailable(self, result: AgentResult, exc: LlmError, started: float) -> AgentResult:
+        log.info("Нейросеть недоступна: %s", exc)
         result.status = AgentStatus.ERROR
-        result.error = reason
-        self._say(result, UNAVAILABLE)
+        result.error = str(exc)
+        self._say(result, exc.spoken)
         result.total_ms = (self._clock() - started) * 1000
         return result
 

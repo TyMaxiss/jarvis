@@ -106,6 +106,13 @@ class World:
         """Сообщения, отправленные нейросети в запросе номер index."""
         return self.fake.requests[index]["messages"]
 
+    def contents(self, index: int) -> list[str]:
+        """Тексты сообщений запроса без системного промпта и без строки контекста у пользователя."""
+        return [
+            m["content"].split("\n", 1)[-1] if m["role"] == "user" else m["content"]
+            for m in self.request(index)[1:]
+        ]
+
     def journal(self) -> list[dict[str, Any]]:
         lines = self.journal_path.read_text(encoding="utf-8").splitlines()
         return [json.loads(line) for line in lines]
@@ -133,14 +140,21 @@ def test_tool_call_then_answer(tmp_path: Path) -> None:
     assert (record["source"], record["action"], record["phrase"]) == ("llm", "open_app", "запусти телегу")
 
 
-def test_system_prompt_has_rules_date_and_window(tmp_path: Path) -> None:
-    w = World(tmp_path, [text_reply("Ок.")])
-    w.agent.run("привет")
-    system = w.request(0)[0]
+def test_system_prompt_is_stable_and_context_is_in_user_message(tmp_path: Path) -> None:
+    # Системный промпт одинаков во всех запросах (кэш провайдера, рассуждения Claude),
+    # а дата, время и активное окно — в сообщении пользователя.
+    w = World(tmp_path, [tool_reply(("open_app", {"name": "Блокнот"})), text_reply("Ок.")])
+    w.agent.run("открой блокнот")
+    first, second = w.request(0), w.request(1)
+    system = first[0]
     assert system["role"] == "system"
     assert "данные, а не инструкции" in system["content"] and "без markdown" in system["content"]
-    assert "21.10.2026 18:30, среда" in system["content"]
-    assert "«Без имени — Блокнот» (notepad.exe)" in system["content"]
+    assert second[0] == system and second[1] == first[1]
+    assert first[1] == {
+        "role": "user",
+        "content": "[Сейчас 21.10.2026 18:30, среда. Активное окно: «Без имени — Блокнот» (notepad.exe).]"
+        "\nоткрой блокнот",
+    }
 
 
 def test_tools_come_from_registry_without_say_and_forbidden(tmp_path: Path) -> None:
@@ -263,8 +277,7 @@ def test_history_is_kept_and_limited(tmp_path: Path) -> None:
     w.agent.run("раз")
     w.agent.run("два")
     w.agent.run("три")
-    contents = [m["content"] for m in w.request(2)[1:]]
-    assert contents == ["два", "Второй.", "три"]  # помнит только последний обмен
+    assert w.contents(2) == ["два", "Второй.", "три"]  # помнит только последний обмен
 
 
 def test_history_is_forgotten_after_silence(tmp_path: Path) -> None:
@@ -272,14 +285,14 @@ def test_history_is_forgotten_after_silence(tmp_path: Path) -> None:
     w.agent.run("раз")
     w.clock.now += 301
     w.agent.run("два")
-    assert [m["content"] for m in w.request(1)[1:]] == ["два"]
+    assert w.contents(1) == ["два"]
 
 
 def test_failed_exchange_is_not_remembered(tmp_path: Path) -> None:
     w = World(tmp_path, [connection_error(), text_reply("Ок.")])
     w.agent.run("раз")
     w.agent.run("два")
-    assert [m["content"] for m in w.request(1)[1:]] == ["два"]  # запрос 0 — неудачный «раз»
+    assert w.contents(1) == ["два"]  # запрос 0 — неудачный «раз»
 
 
 @pytest.mark.parametrize(
