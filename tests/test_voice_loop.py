@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
@@ -35,8 +36,19 @@ SCRIPT = {
 }
 
 
+@dataclass(frozen=True)
+class Unhandled:
+    """Результат конвейера для фразы, которую он не понял («Не знаю такой команды»)."""
+
+    text: str
+    handled: bool = False
+
+
 class Harness:
-    """Собирает цикл и запоминает, какие фразы дошли до конвейера."""
+    """Собирает цикл и запоминает, какие фразы дошли до конвейера.
+
+    understood=False — конвейер отвечает «не понял» на любую фразу.
+    """
 
     def __init__(
         self,
@@ -45,6 +57,7 @@ class Harness:
         speech_out: FakeSpeech | None = None,
         settings: VoiceSettings | None = None,
         reply: str | None = "Готово",
+        understood: bool = True,
     ) -> None:
         self.handled: list[str] = []
         self.source = FakeSource(audio)
@@ -53,11 +66,11 @@ class Harness:
         self.stt = FakeSTT(SCRIPT)
         self._reply = reply
 
-        def handle(text: str, confirmer: object) -> str:
+        def handle(text: str, confirmer: object) -> object:
             self.handled.append(text)
             if self._reply:
                 self.speech.say(self._reply)
-            return text
+            return text if understood else Unhandled(text)
 
         self.loop = VoiceLoop(
             source=self.source,
@@ -188,6 +201,26 @@ def test_follow_up_without_name() -> None:
     )
     h = Harness(audio).run()
     assert h.handled == ["Джарвис, открой ютуб.", "Сделай громче."]
+
+
+def test_no_follow_up_after_unknown_command() -> None:
+    # После «Не знаю такой команды» окно продолжения не открывается: иначе разговор
+    # рядом или эхо ответа получали бы ответ за ответом.
+    audio = np.concatenate(
+        [speech(WAKE, 300), speech(5001, 700), silence(1500), speech(5002, 700), silence(1500)]
+    )
+    h = Harness(audio, understood=False).run()
+    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.loop.state is VoiceState.IDLE
+
+
+def test_end_of_listening_is_reported_once() -> None:
+    # Когда окно продолжения закрылось, консоль должна узнать, что ассистент снова ждёт имя.
+    audio = np.concatenate([speech(WAKE, 300), speech(5001, 700), silence(5000)])
+    h = Harness(audio).run()
+    kinds = [kind for kind, _ in h.status.events]
+    assert kinds[-2:] == ["listening", "idle"]
+    assert all(a != b for a, b in zip(kinds, kinds[1:], strict=False))  # без повторов подряд
 
 
 def test_follow_up_window_expires() -> None:

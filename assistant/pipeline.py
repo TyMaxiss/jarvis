@@ -47,6 +47,11 @@ class PipelineResult:
     match_ms: float = 0.0
     total_ms: float = 0.0
 
+    @property
+    def handled(self) -> bool:
+        """Фраза обработана: найдена команда (на этапе 3 — и ответ нейросети)."""
+        return self.route == "local"
+
 
 class Pipeline:
     """Обрабатывает фразы пользователя.

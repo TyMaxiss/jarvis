@@ -79,7 +79,7 @@ def build(tmp_path: Path, confirm_answer: bool = True) -> tuple[Pipeline, Record
 def test_local_command_with_reply(tmp_path: Path) -> None:
     pipeline, speaker, calls = build(tmp_path)
     result = pipeline.handle_text("Джарвис, громкость на сорок")
-    assert result.route == "local"
+    assert result.route == "local" and result.handled
     assert calls == ["volume:40"]
     assert speaker.said == ["Громкость 40"]
     assert result.total_ms >= result.match_ms >= 0
@@ -123,7 +123,7 @@ def test_confirmation_declined(tmp_path: Path) -> None:
 def test_unknown_phrase_goes_to_llm_route(tmp_path: Path) -> None:
     pipeline, speaker, calls = build(tmp_path)
     result = pipeline.handle_text("расскажи сказку")
-    assert result.route == "llm"
+    assert result.route == "llm" and not result.handled
     assert calls == []
     assert speaker.said == ["Не знаю такой команды"]
 

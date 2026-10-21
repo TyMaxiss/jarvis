@@ -32,6 +32,7 @@ HELP = """\
   :q              выход"""
 
 _VOICE_MESSAGES = {
+    "idle": "Жду обращения",
     "listening": "Слушаю…",
     "holding": "Слушаю, пока клавиши зажаты…",
     "recognizing": "Распознаю…",

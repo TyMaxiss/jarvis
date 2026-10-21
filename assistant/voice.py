@@ -120,6 +120,8 @@ class VoiceLoop:
         spotter: распознаватель имени ассистента (None — только push-to-talk).
         stt: распознавание речи.
         handle_text: обработка фразы (конвейер), принимает текст и способ подтверждения.
+            Если у результата handled=False («Не знаю такой команды»), продолжение
+            без имени не слушается.
         speech: озвучка (для полудуплекса и сигналов).
         normalizer: чтобы понять, что во фразе было только имя.
         settings: настройки.
@@ -338,8 +340,10 @@ class VoiceLoop:
         self._set_state(VoiceState.LISTENING)
 
     def _set_state(self, state: VoiceState) -> None:
-        if state is not self.state:
-            log.debug("Голос: %s", state)
+        """Меняет состояние и сообщает о нём (только о смене, без повторов)."""
+        if state is self.state:
+            return
+        log.debug("Голос: %s", state)
         self.state = state
         self._report(state.value)
 
@@ -407,13 +411,16 @@ class VoiceLoop:
         log.info("Текст → результат: %.0f мс", (time.perf_counter() - started) * 1000)
         if self._status is not None and result is not None:
             self._status.voice_result(result)
-        self._after_response()
+        self._after_response(followup=getattr(result, "handled", True))
 
-    def _after_response(self) -> None:
-        """После ответа: дождаться конца речи, затем слушать продолжение без имени."""
+    def _after_response(self, followup: bool) -> None:
+        """После ответа: дождаться конца речи, затем слушать продолжение без имени.
+
+        Если фраза не обработана («Не знаю такой команды»), продолжения не ждём:
+        иначе разговор рядом или эхо ответа получали бы ответ за ответом.
+        """
         self._source.flush()
-        if self._settings.followup_seconds > 0:
+        if followup and self._settings.followup_seconds > 0:
             self._listen(chime=False, seconds=self._settings.followup_seconds)
         else:
-            self._reset_audio_state()
             self._enter_idle()
