@@ -193,7 +193,10 @@ def test_llm_save_custom_service(world: SimpleNamespace) -> None:
     [
         ({"profile": "nope", "model": "m"}, "Нет профиля"),
         ({"profile": "openai", "model": ""}, "Укажите модель"),
-        ({"profile": "openai", "model": "m", "key": "ключ с пробелами"}, "не похоже на ключ"),
+        (
+            {"profile": "openai", "model": "m", "key": "ключ с пробелами"},
+            "Ключ не подходит: в ключе символ «к»",
+        ),
         ({"profile": "custom", "model": "m", "base_url": ""}, "base_url"),
     ],
 )

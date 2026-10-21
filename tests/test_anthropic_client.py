@@ -164,7 +164,10 @@ def test_fallbacks_only_for_models_that_support_them() -> None:
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
-        (status_error(anthropic.AuthenticationError, 401, "invalid x-api-key"), "ключ API не подошёл"),
+        (
+            status_error(anthropic.AuthenticationError, 401, "invalid x-api-key"),
+            "api.anthropic.com не принял ключ API",
+        ),
         (status_error(anthropic.NotFoundError, 404, "model: x"), "claude-opus-5-5 не найдена"),
         (status_error(anthropic.RateLimitError, 429, "slow down"), "лимит запросов"),
         (
@@ -182,6 +185,17 @@ def test_errors_are_explained(error: Exception, expected: str) -> None:
     client, _ = make([error])
     with pytest.raises(LlmError, match=expected):
         client.complete([{"role": "user", "content": "?"}])
+
+
+def test_windows_variables_do_not_redirect_claude(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Так их ставят, чтобы пустить Claude Code через другой сервис: ключ Claude там не подойдёт.
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example/anthropic")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "proxy-token-1234567890")
+    settings = LlmConfig.model_validate({"profile": "anthropic"})
+    client = AnthropicClient(settings, api_key="sk-ant-api03-typed-key-123456")
+    sdk = client._client
+    assert str(sdk.base_url).rstrip("/") == "https://api.anthropic.com"
+    assert sdk.auth_headers == {"X-Api-Key": "sk-ant-api03-typed-key-123456"}
 
 
 def test_cancel_works_while_claude_is_silent() -> None:

@@ -117,6 +117,24 @@ def test_bad_keys_are_rejected(bad: str) -> None:
         check_key(bad)
 
 
+def test_key_check_names_the_problem() -> None:
+    with pytest.raises(SettingsError, match="сокращённая запись ключа"):
+        check_key("sk-ant-api03-R2D...7QAA")
+    with pytest.raises(SettingsError, match="символ «к» \\(4-й\\)"):
+        check_key("sk-ключ-1234567890")
+    # Невидимые символы из браузера или мессенджера убираются молча.
+    assert check_key("\u200bsk-test-openai-1234567890\ufeff") == "sk-test-openai-1234567890"
+
+
+def test_key_from_windows_is_marked(settings: SettingsStore, environ: dict[str, str]) -> None:
+    environ["ANTHROPIC_API_KEY"] = "sk-ant-api03-from-windows-1234"
+    claude = next(v for v in llm_profiles_view(settings.load(), settings) if v["name"] == "anthropic")
+    assert claude["key_set"] and claude["key_from_system"] and claude["key_example"] == "sk-ant-api03-…"
+    settings.save_key("ANTHROPIC_API_KEY", "sk-ant-api03-saved-key-5678")
+    claude = next(v for v in llm_profiles_view(settings.load(), settings) if v["name"] == "anthropic")
+    assert claude["key_hint"] == "••••5678" and not claude["key_from_system"]
+
+
 def test_env_variable_name_is_checked(settings: SettingsStore) -> None:
     with pytest.raises(SettingsError):
         settings.save_key("PATH\nEVIL", "sk-test-openai-1234567890")

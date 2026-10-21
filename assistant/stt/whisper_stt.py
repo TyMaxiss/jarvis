@@ -33,6 +33,9 @@ HALLUCINATION_MARKERS = (
     "подпишись на канал",
 )
 _MAX_PROMPT_CHARS = 600
+# Без этих DLL CTranslate2 не запустит Whisper на видеокарте. Версии CUDA и cuDNN — те же,
+# что у пакетов nvidia-*-cu12 в pyproject.toml (uv sync --extra cuda).
+CUDA_LIBRARIES = ("cublas64_12.dll", "cudnn64_9.dll")
 # Тишина по краям фразы: без неё Whisper иногда «съедает» первый звук («Делай» вместо «Сделай»).
 _PAD_SECONDS = 0.3
 
@@ -88,6 +91,24 @@ def register_cuda_dlls() -> None:
             log.debug("DLL CUDA: %s", bin_dir)
 
 
+def missing_cuda_library() -> str:
+    """Какой DLL CUDA не находится ('' — все на месте или проверять нечего: не Windows).
+
+    Ищет так же, как CTranslate2 (LoadLibrary по имени: папка Python, системные папки, PATH),
+    поэтому после register_cuda_dlls находит и DLL из пакетов nvidia-*.
+    """
+    if sys.platform != "win32":
+        return ""
+    import ctypes
+
+    for name in CUDA_LIBRARIES:
+        try:
+            ctypes.WinDLL(name, winmode=0)
+        except OSError:
+            return name
+    return ""
+
+
 def default_cpu_threads() -> int:
     """Потоков для Whisper на процессоре: по числу физических ядер, но не меньше 4.
 
@@ -140,22 +161,36 @@ class WhisperSTT:
         self._model: Any = None
         self.model_name = ""
         self.device = ""
+        self.cuda_problem = ""  # почему не на видеокарте, хотя она есть ('' — всё в порядке)
 
     def load(self) -> None:
-        """Загружает модель: видеокарта, а при ошибке — процессор."""
+        """Загружает модель: видеокарта, а если она не запускается — процессор (cuda_problem — почему)."""
         register_cuda_dlls()
         model, device, compute = resolve_settings(self._config, cuda_available())
+        self.cuda_problem = ""
         if device == "cuda":
-            try:
-                self._load(model, device, compute)
-                self._warm_up()  # ошибки отсутствующих DLL CUDA видны только при распознавании
-                return
-            except Exception as exc:
-                log.warning("Whisper на видеокарте не запустился (%s) — переключаюсь на процессор", exc)
-                self._model = None
-                cpu_config = self._config.model_copy(update={"device": "cpu"})
-                model, device, _ = resolve_settings(cpu_config, has_cuda=False)
-                compute = "int8"
+            missing = missing_cuda_library()
+            if missing:
+                # Модель для видеокарты даже не загружаем: без DLL она не заработает.
+                self.cuda_problem = (
+                    f"Видеокарта NVIDIA не используется: нет библиотек CUDA ({missing}), распознаю "
+                    "на процессоре — это медленнее. Включить видеокарту: uv sync --extra cuda. "
+                    "Чтобы не видеть это сообщение, выберите в настройках распознавания «Процессор»."
+                )
+            else:
+                try:
+                    self._load(model, device, compute)
+                    self._warm_up()  # часть ошибок CUDA видна только при распознавании
+                    return
+                except Exception as exc:
+                    self._model = None
+                    self.cuda_problem = (
+                        f"Whisper на видеокарте не запустился ({exc}) — распознаю на процессоре."
+                    )
+            log.info("%s", self.cuda_problem)
+            cpu_config = self._config.model_copy(update={"device": "cpu"})
+            model, device, _ = resolve_settings(cpu_config, has_cuda=False)
+            compute = "int8"
         self._load(model, device, compute)
 
     def _load(self, model: str, device: str, compute: str) -> None:

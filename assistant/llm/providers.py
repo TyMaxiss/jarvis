@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from assistant.config import LlmConfig, LlmProfile
 from assistant.llm.client import LlmError, create_client
+from assistant.llm.keys import ANTHROPIC, DEEPSEEK, OPENAI
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ class ProviderInfo:
 
     models: tuple[str, ...] = ()  # рекомендуемые модели
     key_url: str = ""  # где создать ключ
+    key_example: str = ""  # как начинается ключ — подсказка в поле ввода
     note: str = ""  # пояснение; названия моделей — в `обратных кавычках`
     base_url_editable: bool = False
 
@@ -30,6 +32,7 @@ PROVIDERS: dict[str, ProviderInfo] = {
     "deepseek": ProviderInfo(
         models=("deepseek-flash",),
         key_url="https://platform.deepseek.com/api_keys",
+        key_example=DEEPSEEK.example,
         note="Быстрая и недорогая. Ключ работает, только если на счёте есть деньги.",
     ),
     # Только модели, которые в Chat Completions вызывают инструменты (с reasoning_effort "none").
@@ -37,11 +40,13 @@ PROVIDERS: dict[str, ProviderInfo] = {
     "openai": ProviderInfo(
         models=("gpt-6-luna", "gpt-5.4-mini", "gpt-6-sol", "gpt-5.5"),
         key_url="https://platform.openai.com/settings/organization/api-keys",
+        key_example=OPENAI.example,
         note="Модели OpenAI. В списке те, что умеют вызывать действия; быстрее всех — `gpt-6-luna`.",
     ),
     "anthropic": ProviderInfo(
         models=("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"),
         key_url="https://platform.claude.com/settings/keys",
+        key_example=ANTHROPIC.example,
         note=(
             "Модели Anthropic. Сложные задачи лучше всех решает `claude-opus-5-5`, "
             "быстрее всех отвечает `claude-haiku-5-5`."

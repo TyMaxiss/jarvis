@@ -102,7 +102,7 @@ def test_check_connection_accepts_tool_call_as_answer(fake: FakeOpenAI) -> None:
 def test_check_connection_explains_errors(fake: FakeOpenAI, monkeypatch: pytest.MonkeyPatch) -> None:
     fake.responses = [status_error(openai.AuthenticationError, 401, "Invalid key")]
     result = check_connection(LlmConfig(), api_key="sk-bad-key-1234567890")
-    assert not result.ok and "ключ API не подошёл" in result.error
+    assert not result.ok and "не принял ключ API (Invalid key)" in result.error
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     result = check_connection(LlmConfig())  # ключа нет ни в поле, ни в .env
     assert not result.ok and "DEEPSEEK_API_KEY" in result.error

@@ -63,6 +63,19 @@ class TestConfig:
         assert os.environ["JARVIS_TEST_KEY"] == "abc123456"
         monkeypatch.delenv("JARVIS_TEST_KEY")
 
+    def test_env_file_wins_over_windows_variable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Ключ, сохранённый в настройках, работает, даже если в Windows задан старый.
+        monkeypatch.setenv("JARVIS_TEST_KEY", "old-key-from-windows")
+        (tmp_path / ".env").write_text("JARVIS_TEST_KEY='new-key-from-settings'\n", encoding="utf-8")
+        with caplog.at_level("INFO", logger="assistant.config"):
+            load_config(tmp_path / "config.yaml")
+        import os
+
+        assert os.environ["JARVIS_TEST_KEY"] == "new-key-from-settings"
+        assert "JARVIS_TEST_KEY берётся из .env" in caplog.text and "new-key" not in caplog.text
+
 
 class TestSecrets:
     def test_masks_env_secrets_and_key_like_strings(self) -> None:

@@ -38,6 +38,7 @@ from assistant.llm.client import (
     resolve_api_key,
     stream_in_background,
 )
+from assistant.llm.keys import ANTHROPIC_API, rejected_key_message
 
 log = logging.getLogger(__name__)
 
@@ -49,13 +50,13 @@ DEFAULT_MAX_TOKENS = 16000
 _THINKING_BLOCKS = ("thinking", "redacted_thinking")
 
 
-def describe_error(exc: Exception, profile_name: str, profile: LlmProfile) -> str:
-    """Понятное объяснение ошибки Anthropic API."""
+def describe_error(exc: Exception, profile: LlmProfile, key: str = "") -> str:
+    """Понятное объяснение ошибки Anthropic API (key — чтобы подсказать, что с ключом не так)."""
     import anthropic
 
     detail = str(getattr(exc, "message", "") or exc)
     if isinstance(exc, anthropic.AuthenticationError):
-        return f"ключ API не подошёл (профиль {profile_name}) — проверьте ключ в настройках"
+        return rejected_key_message(exc, key, profile.base_url or ANTHROPIC_API)
     if isinstance(exc, anthropic.PermissionDeniedError):
         return f"доступ запрещён (403): {detail}"
     if isinstance(exc, anthropic.NotFoundError):
@@ -163,14 +164,15 @@ class AnthropicClient:
             from anthropic import Anthropic
 
             factory = Anthropic
-        options: dict[str, Any] = {
-            "api_key": api_key or resolve_api_key(self.profile_name, self.profile),
-            "max_retries": settings.retries,
-            "timeout": settings.request_timeout,
-        }
-        if self.profile.base_url:
-            options["base_url"] = self.profile.base_url
-        self._client = factory(**options)
+        self._key = api_key or resolve_api_key(self.profile_name, self.profile)
+        # Адрес передаётся всегда: иначе SDK возьмёт ANTHROPIC_BASE_URL из переменных Windows
+        # (её ставят, например, чтобы пустить Claude Code через другой сервис) — и ключ не подойдёт.
+        self._client = factory(
+            api_key=self._key,
+            base_url=self.profile.base_url or ANTHROPIC_API,
+            max_retries=settings.retries,
+            timeout=settings.request_timeout,
+        )
         self._use_betas = True
         self._lock = threading.Lock()
 
@@ -209,10 +211,10 @@ class AnthropicClient:
                         self._use_betas = False
                     continue
                 log.info("Нейросеть %s: %s", self.describe(), exc)
-                raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
+                raise LlmError(describe_error(exc, self.profile, self._key)) from exc
             except anthropic.AnthropicError as exc:
                 log.info("Нейросеть %s: %s", self.describe(), exc)
-                raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
+                raise LlmError(describe_error(exc, self.profile, self._key)) from exc
             except ValueError as exc:  # SDK не смог разобрать поток ответа
                 log.info("Нейросеть %s: испорченный ответ: %s", self.describe(), exc)
                 raise LlmError("ответ Claude пришёл испорченным — повторите просьбу") from exc
@@ -237,7 +239,7 @@ class AnthropicClient:
         try:
             return [model.id for model in self._client.models.list()]
         except anthropic.AnthropicError as exc:
-            raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
+            raise LlmError(describe_error(exc, self.profile, self._key)) from exc
 
     def _request(
         self,

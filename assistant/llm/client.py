@@ -26,6 +26,7 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from assistant.config import LlmConfig, LlmProfile
+from assistant.llm.keys import rejected_key_message
 
 log = logging.getLogger(__name__)
 
@@ -128,13 +129,13 @@ def create_client(settings: LlmConfig, api_key: str | None = None) -> ChatClient
     return LlmClient(settings, api_key=api_key)
 
 
-def describe_error(exc: Exception, profile_name: str, profile: LlmProfile) -> str:
-    """Понятное объяснение ошибки OpenAI-совместимого провайдера."""
+def describe_error(exc: Exception, profile: LlmProfile, key: str = "") -> str:
+    """Понятное объяснение ошибки OpenAI-совместимого провайдера (key — для подсказки о ключе)."""
     import openai
 
     detail = str(getattr(exc, "message", "") or exc)
     if isinstance(exc, openai.AuthenticationError):
-        return f"ключ API не подошёл (профиль {profile_name}) — проверьте ключ в настройках"
+        return rejected_key_message(exc, key, profile.base_url)
     if isinstance(exc, openai.PermissionDeniedError):
         if "FreeTierError" in detail or "free tier" in detail.lower():
             return (
@@ -262,9 +263,10 @@ class LlmClient:
             from openai import OpenAI
 
             factory = OpenAI
+        self._key = api_key or resolve_api_key(self.profile_name, self.profile)
         self._client = factory(
             base_url=self.profile.base_url,
-            api_key=api_key or resolve_api_key(self.profile_name, self.profile),
+            api_key=self._key,
             max_retries=settings.retries,
             timeout=settings.request_timeout,
         )
@@ -321,7 +323,7 @@ class LlmClient:
             raise
         except openai.OpenAIError as exc:
             log.info("Нейросеть %s: %s", self.describe(), exc)
-            raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
+            raise LlmError(describe_error(exc, self.profile, self._key)) from exc
         log.info(
             "Нейросеть %s: первый токен %s мс, всего %.0f мс, вызовов инструментов %d",
             self.describe(),
@@ -342,7 +344,7 @@ class LlmClient:
         try:
             return sorted(model.id for model in self._client.models.list())
         except openai.OpenAIError as exc:
-            raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
+            raise LlmError(describe_error(exc, self.profile, self._key)) from exc
 
     def _chunks(self, request: dict[str, Any], cancel: threading.Event | None) -> Generator[Any, None, None]:
         """Кусочки ответа: запрос выполняется в отдельном потоке."""

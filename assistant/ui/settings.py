@@ -22,6 +22,7 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
 from assistant.config import DEFAULT_LLM_PROFILES, AppConfig, LlmProfile, format_validation_error
+from assistant.llm.keys import clean_key, format_problem
 from assistant.llm.providers import CUSTOM_KEY_ENV, CUSTOM_PROFILE, CUSTOM_TITLE, provider_info
 
 log = logging.getLogger(__name__)
@@ -73,14 +74,17 @@ def needs_restart(patch: Mapping[str, Mapping[str, Any]]) -> bool:
 
 
 def check_key(value: str) -> str:
-    """Ключ API без пробелов по краям.
+    """Ключ API без пробелов по краям и невидимых символов, прилипших при копировании.
 
     Raises:
-        SettingsError: в ключе пробелы, переносы строк или не-ASCII символы.
+        SettingsError: ключ записан с ошибкой: сокращённая запись, пробелы, не латиница.
     """
-    key = value.strip()
+    key = clean_key(value)
+    problem = format_problem(key)
+    if problem:
+        raise SettingsError([f"Ключ не подходит: {problem}"])
     if not _KEY_RE.match(key):
-        raise SettingsError(["Это не похоже на ключ API: в нём пробелы, переносы строк или русские буквы"])
+        raise SettingsError(["Ключ не подходит: он длиннее 512 символов"])
     return key
 
 
@@ -262,6 +266,16 @@ class SettingsStore:
         """Значение ключа из окружения ('' — не задан)."""
         return self._environ.get(env_name, "").strip() if env_name else ""
 
+    def key_from_system(self, env_name: str) -> bool:
+        """Ключ задан переменной окружения Windows, а не сохранён в .env."""
+        from dotenv import dotenv_values
+
+        if not self.key(env_name):
+            return False
+        with self._lock:
+            saved = dotenv_values(self.env_path) if self.env_path.exists() else {}
+        return not saved.get(env_name)
+
 
 # --- Представление для интерфейса ------------------------------------------------------
 
@@ -333,8 +347,10 @@ def profile_view(name: str, profile: LlmProfile, store: SettingsStore) -> dict[s
         "key_env": key_env,
         "key_set": bool(key),
         "key_hint": key_hint(key),
+        "key_from_system": store.key_from_system(key_env),
         "key_optional": custom,
         "key_url": info.key_url,
+        "key_example": info.key_example,
         "note": info.note,
     }
 
@@ -355,8 +371,10 @@ def custom_view(store: SettingsStore) -> dict[str, Any]:
         "key_env": CUSTOM_KEY_ENV,
         "key_set": bool(key),
         "key_hint": key_hint(key),
+        "key_from_system": store.key_from_system(CUSTOM_KEY_ENV),
         "key_optional": True,
         "key_url": "",
+        "key_example": "",
         "note": info.note,
     }
 

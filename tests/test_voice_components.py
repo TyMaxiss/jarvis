@@ -22,6 +22,7 @@ from assistant.safety.confirm import VoiceConfirmer
 from assistant.stt.whisper_stt import WhisperSTT, build_prompt, is_hallucination, resolve_settings
 from assistant.tts.base import SpeechQueue, TeeSpeaker, split_sentences
 from assistant.tts.sapi_tts import sapi_rate, token_languages
+from tests.conftest import ROOT
 from tests.voice_fakes import FakeSource, FakeSpeech, silence, speech
 
 # --- VAD и границы фразы -----------------------------------------------------------
@@ -379,10 +380,78 @@ def test_cuda_failure_falls_back_to_cpu(monkeypatch: pytest.MonkeyPatch, tmp_pat
         raise RuntimeError("Library cublas64_12.dll is not found")
 
     monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "")
     monkeypatch.setattr(WhisperSTT, "_load", fake_load)
     monkeypatch.setattr(WhisperSTT, "_warm_up", failing_warm_up)
-    WhisperSTT(SttConfig(), tmp_path).load()
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    stt.load()
     assert loaded == [("large-v3-turbo", "cuda", "float16"), ("small", "cpu", "int8")]
+    assert "Library cublas64_12.dll is not found" in stt.cuda_problem
+
+
+def test_without_cuda_libraries_gpu_model_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    loaded: list[tuple[str, str, str]] = []
+
+    def fake_load(self: WhisperSTT, model: str, device: str, compute: str) -> None:
+        loaded.append((model, device, compute))
+        self._model, self.device = object(), device
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "cublas64_12.dll")
+    monkeypatch.setattr(WhisperSTT, "_load", fake_load)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    stt.load()
+    # large-v3-turbo для видеокарты не скачивается и не загружается впустую.
+    assert loaded == [("small", "cpu", "int8")] and stt.device == "cpu"
+    assert "нет библиотек CUDA (cublas64_12.dll)" in stt.cuda_problem
+    assert "uv sync --extra cuda" in stt.cuda_problem and "«Процессор»" in stt.cuda_problem
+
+
+def test_cpu_choice_skips_gpu_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr(
+        "assistant.stt.whisper_stt.missing_cuda_library", lambda: pytest.fail("лишняя проверка")
+    )
+    monkeypatch.setattr(WhisperSTT, "_load", lambda self, *args: None)
+    stt = WhisperSTT(SttConfig(device="cpu"), tmp_path)
+    stt.load()
+    assert stt.cuda_problem == ""
+
+
+def test_missing_cuda_library_searches_like_ctranslate2(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ctypes
+
+    from assistant.stt import whisper_stt
+
+    searched: list[tuple[str, int]] = []
+
+    def fake_dll(name: str, winmode: int) -> object:
+        searched.append((name, winmode))
+        if name == "cudnn64_9.dll":
+            raise FileNotFoundError(name)
+        return object()
+
+    monkeypatch.setattr(whisper_stt.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", fake_dll, raising=False)
+    assert whisper_stt.missing_cuda_library() == "cudnn64_9.dll"
+    # winmode=0 — обычный поиск LoadLibrary с PATH, как в CTranslate2.
+    assert searched == [("cublas64_12.dll", 0), ("cudnn64_9.dll", 0)]
+
+
+def test_cuda_libraries_match_cuda_extra() -> None:
+    import tomllib
+
+    from assistant.stt.whisper_stt import CUDA_LIBRARIES
+
+    extra = " ".join(
+        tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+            "optional-dependencies"
+        ]["cuda"]
+    )
+    assert "nvidia-cublas-cu12" in extra and "cublas64_12.dll" in CUDA_LIBRARIES
+    assert "nvidia-cudnn-cu12>=9,<10" in extra and "cudnn64_9.dll" in CUDA_LIBRARIES
 
 
 # --- Загрузка моделей ----------------------------------------------------------------

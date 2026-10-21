@@ -213,6 +213,8 @@ def start_voice(
             raise VoiceSetupError(
                 f"не удалось загрузить Whisper ({exc}). Нужен интернет для первой загрузки"
             ) from exc
+        if stt.cuda_problem:
+            out.write(f"! {stt.cuda_problem}\n")
         where = "видеокарте" if stt.device == "cuda" else "процессоре"
         out.write(f"Распознавание речи: Whisper {stt.model_name} на {where}.\n")
 

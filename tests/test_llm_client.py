@@ -133,7 +133,7 @@ def test_cancel_works_while_model_is_silent() -> None:
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
-        (status_error(openai.AuthenticationError, 401, "Invalid key"), "ключ API не подошёл"),
+        (status_error(openai.AuthenticationError, 401, "Invalid key"), "api.deepseek.com не принял ключ API"),
         (
             status_error(openai.PermissionDeniedError, 403, "FreeTierError: only from within OpenCode"),
             "только в приложении OpenCode",

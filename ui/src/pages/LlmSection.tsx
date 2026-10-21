@@ -170,7 +170,9 @@ export function LlmSection({
                 )}
               />
               {item.key_set
-                ? 'ключ сохранён'
+                ? item.key_from_system
+                  ? 'ключ из Windows'
+                  : 'ключ сохранён'
                 : !item.key_env
                   ? 'без ключа'
                   : item.key_optional
@@ -219,13 +221,7 @@ export function LlmSection({
                   autoComplete="off"
                   spellCheck={false}
                   className="w-full pr-10 font-mono"
-                  placeholder={
-                    profile.key_set
-                      ? `Сохранён ${profile.key_hint} — вставьте новый, чтобы заменить`
-                      : profile.key_optional
-                        ? 'Ключ, если сервису он нужен'
-                        : 'Вставьте ключ'
-                  }
+                  placeholder={keyPlaceholder(profile)}
                   value={draft.key}
                   onChange={(event) => setDraft({ key: event.target.value })}
                 />
@@ -327,6 +323,17 @@ export function LlmSection({
       </div>
     </Card>
   )
+}
+
+/** Подсказка в поле ключа: какой ключ уже есть или как выглядит нужный. */
+export function keyPlaceholder(profile: LlmProfileInfo): string {
+  if (profile.key_set) {
+    return profile.key_from_system
+      ? `Из переменной Windows ${profile.key_hint} — вставьте ключ, чтобы сохранить свой`
+      : `Сохранён ${profile.key_hint} — вставьте новый, чтобы заменить`
+  }
+  if (profile.key_optional) return 'Ключ, если сервису он нужен'
+  return profile.key_example ? `Вставьте ключ: ${profile.key_example}` : 'Вставьте ключ'
 }
 
 /** Пояснение к провайдеру: названия моделей в `обратных кавычках` не переносятся по дефису. */

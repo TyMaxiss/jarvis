@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Literal
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -366,6 +367,19 @@ def format_validation_error(path: Path, error: ValidationError) -> str:
     return "\n".join(lines)
 
 
+def load_env(env_path: Path) -> None:
+    """Переменные из .env в окружение процесса.
+
+    Значения из .env важнее одноимённых переменных окружения Windows: ключ, сохранённый
+    в настройках, должен работать, даже если в системе задан другой (например, старый).
+    """
+    values = {name: value for name, value in dotenv_values(env_path).items() if value is not None}
+    for name, value in values.items():
+        if os.environ.get(name, value) != value:
+            log.info("%s берётся из %s, а не из переменных окружения", name, env_path.name)
+    os.environ.update(values)
+
+
 def load_config(path: Path) -> AppConfig:
     """Загружает config.yaml и переменные из .env рядом с ним.
 
@@ -378,7 +392,7 @@ def load_config(path: Path) -> AppConfig:
     base_dir = path.parent
     env_path = base_dir / ENV_FILE
     if env_path.exists():
-        load_dotenv(env_path, override=False)
+        load_env(env_path)
 
     if not path.exists():
         example = base_dir / EXAMPLE_FILE

@@ -6,7 +6,7 @@ import type { Settings } from '../lib/types'
 const { call } = vi.hoisted(() => ({ call: vi.fn() }))
 vi.mock('../lib/bridge', () => ({ call }))
 
-import { LlmSection, missingField } from './LlmSection'
+import { LlmSection, keyPlaceholder, missingField } from './LlmSection'
 
 let settings: Settings
 
@@ -98,5 +98,19 @@ describe('missingField', () => {
     const ollama = settings.llm.profiles.find((p) => p.name === 'ollama')!
     expect(missingField(ollama, { model: 'qwen3:8b', key: '', base_url: ollama.base_url, otherModel: false })).toBe('')
     expect(missingField(ollama, { model: '', key: '', base_url: ollama.base_url, otherModel: false })).toBe('Выберите модель')
+  })
+})
+
+describe('keyPlaceholder', () => {
+  it('подсказывает, как выглядит ключ, и откуда взят уже заданный', () => {
+    const claude = settings.llm.profiles.find((p) => p.name === 'anthropic')!
+    expect(keyPlaceholder(claude)).toBe('Вставьте ключ: sk-ant-api03-…')
+    expect(keyPlaceholder({ ...claude, key_set: true, key_hint: '••••Q2AA' })).toBe(
+      'Сохранён ••••Q2AA — вставьте новый, чтобы заменить',
+    )
+    expect(keyPlaceholder({ ...claude, key_set: true, key_hint: '••••Q2AA', key_from_system: true })).toBe(
+      'Из переменной Windows ••••Q2AA — вставьте ключ, чтобы сохранить свой',
+    )
+    expect(keyPlaceholder({ ...claude, key_example: '' })).toBe('Вставьте ключ')
   })
 })

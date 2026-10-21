@@ -79,8 +79,10 @@ export interface LlmProfileInfo {
   key_env: string // '' — ключ не нужен
   key_set: boolean
   key_hint: string // «••••3f2a»
+  key_from_system: boolean // ключ из переменной окружения Windows, а не из .env
   key_optional: boolean // ключ можно не указывать (свой сервис)
   key_url: string // где взять ключ; '' — нигде
+  key_example: string // как начинается ключ («sk-ant-api03-…»); '' — по-разному
   note: string
 }
 
