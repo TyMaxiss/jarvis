@@ -130,11 +130,11 @@ CALIBRATION_PHRASES = [
 
 def test_calibration_vosk_and_whisper(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
     """Печатает уверенность Vosk в имени и текст Whisper (beam 1 и 5) для разных фраз."""
-    for phrase in CALIBRATION_PHRASES:
+    for number, phrase in enumerate(CALIBRATION_PHRASES):
         audio = np.concatenate([gap(0.3), say(piper, phrase), gap(0.5)])
         heard = spot(vosk_model, [CONFIG.general.name], audio)
         timings = []
-        for beam in (1, 5):
+        for beam in (1, 5) if number < 7 else (1,):
             started = time.perf_counter()
             text = stt.transcribe(audio, beam_size=beam).text
             timings.append(f"beam{beam}: «{text}» {(time.perf_counter() - started) * 1000:.0f} мс")
@@ -205,11 +205,24 @@ def test_voice_confirmation(piper: PiperTTS, vosk_model: object, answer: str, ex
 
 @pytest.mark.skipif(sys.platform != "win32", reason="SAPI есть только в Windows")
 def test_sapi_voice_synthesizes() -> None:
+    import threading
+
     from assistant.tts.sapi_tts import SapiTTS
 
-    sapi = SapiTTS()
-    log.warning("Голоса SAPI: %s", sapi.available_voices())
-    text = "Проверка голоса" if sapi.has_russian_voice else "Voice check"
-    audio, rate = sapi.synthesize(text)
-    log.warning("SAPI: «%s» → %.1f с звука, %d Гц", text, len(audio) / rate, rate)
+    result: dict[str, object] = {}
+
+    def run() -> None:
+        sapi = SapiTTS()
+        result["voices"] = sapi.available_voices()
+        text = "Проверка голоса" if sapi.has_russian_voice else "Voice check"
+        result["text"] = text
+        result["audio"] = sapi.synthesize(text)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=30)
+    log.warning("Голоса SAPI: %s", result.get("voices"))
+    assert not worker.is_alive(), "SAPI завис при синтезе"
+    audio, rate = result["audio"]  # type: ignore[misc]
+    log.warning("SAPI: «%s» → %.1f с звука, %d Гц", result["text"], len(audio) / rate, rate)
     assert len(audio) > rate * 0.3

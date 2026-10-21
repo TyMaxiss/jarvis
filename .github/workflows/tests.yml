@@ -48,6 +48,7 @@ jobs:
           uv run python -m piper.download_voices ru_RU-irina-medium --download-dir models/piper
 
       - name: Голос на настоящих моделях (Piper → VAD → Vosk → Whisper)
+        timeout-minutes: 12
         env:
           JARVIS_E2E: "1"
-        run: uv run pytest -v -rs tests/test_voice_e2e.py --log-cli-level=WARNING
+        run: uv run pytest -v -rs tests/test_voice_e2e.py --log-cli-level=WARNING -o faulthandler_timeout=120
