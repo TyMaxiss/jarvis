@@ -184,6 +184,8 @@ def start_voice(
             raise VoiceSetupError(
                 f"не удалось загрузить Whisper ({exc}). Нужен интернет для первой загрузки"
             ) from exc
+        where = "видеокарте" if stt.device == "cuda" else "процессоре"
+        out.write(f"Распознавание речи: Whisper {stt.model_name} на {where}.\n")
 
         confirmer = None
         if vosk_model is not None and speech is not None:
