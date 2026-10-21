@@ -107,6 +107,16 @@ def test_only_name_then_command() -> None:
     assert h.stt.calls == [5002]  # для одного имени Whisper не нужен
 
 
+def test_command_said_during_chime_is_not_cut() -> None:
+    # Пауза после имени чуть дольше min_silence_ms (500 мс в Harness): имя — отдельная фраза,
+    # звучит сигнал, а команду начинают сразу, не дожидаясь его конца.
+    audio = np.concatenate([silence(300), speech(WAKE, 500), silence(550), speech(5002, 800), silence(1200)])
+    h = Harness(audio).run()
+    assert h.handled == ["Сделай громче."]
+    assert h.speech.sounds == 1
+    assert h.stt.speech_ms[-1] >= 790  # команда целиком, без потерянного начала
+
+
 def test_name_and_command_when_vosk_hears_only_name() -> None:
     # Vosk вернул только «джарвис» без [unk], но речь длинная — значит, была и команда.
     audio = np.concatenate([silence(300), speech(WAKE, 400), speech(5001, 900), silence(1200)])

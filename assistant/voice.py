@@ -9,7 +9,8 @@
 
 Время в цикле считается по полученному звуку (блоки по 32 мс), а не по часам —
 с живым микрофоном это одно и то же, а тесты на записях становятся детерминированными.
-Пока ассистент говорит, звук с микрофона выбрасывается (полудуплекс).
+Пока ассистент говорит, звук с микрофона выбрасывается (полудуплекс). Короткий сигнал
+«слушаю» — исключение: команду часто начинают говорить, не дождавшись его конца.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ log = logging.getLogger(__name__)
 
 # После окончания речи ассистента ещё немного не слушаем: эхо и реверберация.
 _ECHO_GUARD_MS = 300
+# Сколько после начала сигнала «слушаю» ещё может длиться его воспроизведение (задержка вывода).
+_CHIME_MARGIN_MS = 500
 _VOWELS = frozenset("аеёиоуыэюяaeiouy")
 
 
@@ -172,6 +175,7 @@ class VoiceLoop:
         self._deadline_ms = 0
         self._listen_window_ms = 0
         self._mute_until_ms = 0
+        self._chime_until_ms = 0
         self._was_speaking = False
         self._hold_buffer: list[np.ndarray] = []
 
@@ -230,7 +234,8 @@ class VoiceLoop:
     def feed(self, block: np.ndarray) -> None:
         """Обрабатывает один блок звука (32 мс)."""
         self._clock_ms += BLOCK_MS
-        if self._speech.speaking:
+        speaking = self._speech.speaking
+        if speaking and self._clock_ms > self._chime_until_ms:
             self._was_speaking = True
             return
         if self._was_speaking:
@@ -336,6 +341,9 @@ class VoiceLoop:
         if chime and self._chime is not None:
             audio, rate = self._chime
             self._speech.play_sound(audio, rate)
+            # Пока звучит сигнал, микрофон не выключаем: на короткий тон детектор речи
+            # не реагирует, а начало команды, сказанной сразу после имени, иначе пропадает.
+            self._chime_until_ms = self._clock_ms + len(audio) * 1000 // rate + _CHIME_MARGIN_MS
         self._deadline_ms = self._clock_ms + self._listen_window_ms
         self._set_state(VoiceState.LISTENING)
 

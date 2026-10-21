@@ -338,9 +338,12 @@ def test_wake_word_and_command_in_one_phrase(piper: PiperTTS, vosk_model: object
     assert len(handled) == 1 and chimes == 0, handled
 
 
-def test_name_then_pause_then_command(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
+@pytest.mark.parametrize("pause", [1.2, 0.8], ids=["пауза 1.2 с", "команда во время сигнала"])
+def test_name_then_pause_then_command(
+    piper: PiperTTS, vosk_model: object, stt: WhisperSTT, pause: float
+) -> None:
     audio = np.concatenate(
-        [gap(1.0), say(piper, "Джарвис."), gap(1.2), say(piper, "Сделай громче."), gap(1.5)]
+        [gap(1.0), say(piper, "Джарвис."), gap(pause), say(piper, "Сделай громче."), gap(1.5)]
     )
     handled, chimes = run_loop(audio, vosk_model, stt)
     assert len(handled) == 1 and chimes == 1, handled

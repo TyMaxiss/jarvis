@@ -40,13 +40,18 @@ class FakeVAD:
 
 
 class FakeSTT:
-    """Текст по самому частому ненулевому значению во фразе."""
+    """Текст по самому частому ненулевому значению во фразе.
+
+    speech_ms — сколько речи (ненулевого звука) было в каждой распознанной фразе.
+    """
 
     def __init__(self, script: dict[int, str]) -> None:
         self.script = script
         self.calls: list[int] = []
+        self.speech_ms: list[int] = []
 
     def transcribe(self, audio: np.ndarray) -> Transcript:
+        self.speech_ms.append(int(np.count_nonzero(audio)) * 1000 // SAMPLE_RATE)
         values = Counter(int(v) for v in audio[::BLOCK_SIZE] if v)
         if not values:
             return Transcript("", 1.0)
