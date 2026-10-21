@@ -10,7 +10,7 @@ import openai
 import pytest
 
 from assistant.config import LlmConfig
-from assistant.llm.client import LlmCancelled, LlmClient, LlmError
+from assistant.llm.client import IMAGE_NOTE, LlmCancelled, LlmClient, LlmError, public_messages
 from tests.conftest import wait_until
 from tests.llm_fakes import (
     FakeOpenAI,
@@ -205,3 +205,30 @@ def test_model_that_needs_responses_api_is_explained(monkeypatch: pytest.MonkeyP
 def test_claude_has_no_effort_none() -> None:
     with pytest.raises(ValueError, match="у Claude нет effort none"):
         LlmConfig.model_validate({"profile": "anthropic", "profiles": {"anthropic": {"effort": "none"}}})
+
+
+def test_screenshot_follows_tool_results_as_user_message() -> None:
+    # В Chat Completions картинку принимает только сообщение пользователя: оно идёт сразу после
+    # результатов инструментов этого хода, служебные поля провайдеру не уходят.
+    calls = [
+        {"id": f"c{i}", "type": "function", "function": {"name": "x", "arguments": "{}"}} for i in (1, 2)
+    ]
+    sent = public_messages(
+        [
+            {"role": "user", "content": "что на экране"},
+            {"role": "assistant", "content": None, "tool_calls": calls, "_native": object()},
+            {"role": "tool", "tool_call_id": "c1", "content": "Окно", "_image": "QUJD"},
+            {"role": "tool", "tool_call_id": "c2", "content": "Готово", "_is_error": True},
+            {"role": "assistant", "content": "Вижу Блокнот."},
+        ]
+    )
+    assert [m["role"] for m in sent] == ["user", "assistant", "tool", "tool", "user", "assistant"]
+    assert sent[2] == {"role": "tool", "tool_call_id": "c1", "content": "Окно"}
+    assert sent[4] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": IMAGE_NOTE},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}},
+        ],
+    }
+    assert "_native" not in sent[1] and "_is_error" not in sent[3]

@@ -76,6 +76,7 @@ def test_tree_starts_with_own_pack_and_marks_replaced_commands(editor: CommandEd
         "my.yaml",
         "browser.yaml",
         "media.yaml",
+        "screen.yaml",
         "timers.yaml",
         "windows.yaml",
     ]

@@ -20,9 +20,11 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from assistant.actions import apps, browser, files, media, power, shell, system, timers, volume, windows
 from assistant.actions import input as input_actions
+from assistant.actions import screen as screen_actions
 from assistant.actions.apps import AppIndex, looks_like_path
 from assistant.actions.executor import ActionExecutor
 from assistant.actions.registry import ActionRegistry
+from assistant.actions.screen import Screen
 from assistant.audio.sounds import SOUND_RATE, alarm_chime
 from assistant.commands.loader import CommandStore, LoadResult
 from assistant.commands.watcher import CommandWatcher
@@ -62,9 +64,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_registry(
-    config: AppConfig, index: AppIndex, speaker: Speaker, alarms: Alarms | None = None
+    config: AppConfig,
+    index: AppIndex,
+    speaker: Speaker,
+    alarms: Alarms | None = None,
+    screen: Screen | None = None,
 ) -> ActionRegistry:
-    """Создаёт реестр и регистрирует все действия (alarms — таймеры; None — только в памяти)."""
+    """Создаёт реестр и регистрирует все действия.
+
+    alarms — таймеры (None — только в памяти); screen — экран, общий с агентом (снимок для модели).
+    """
     registry = ActionRegistry()
     apps.register(registry, index, config.apps)
     windows.register(registry, config.apps.match_threshold)
@@ -77,6 +86,7 @@ def build_registry(
     files.register(registry)
     shell.register(registry)
     timers.register(registry, alarms or Alarms(None))
+    screen_actions.register(registry, screen or Screen())
     return registry
 
 
@@ -367,11 +377,17 @@ class Core:
     journal_file: Path
     log_file: Path
     alarms: Alarms
+    screen: Screen
 
 
-def make_agent(llm: LlmConfig, executor: ActionExecutor, speaker: Speaker, name: str) -> Agent:
-    """Агент нейросети с текущими настройками."""
-    return Agent(llm, executor, speaker, name=name, window_provider=windows.active_window)
+def make_agent(
+    llm: LlmConfig, executor: ActionExecutor, speaker: Speaker, name: str, screen: Screen | None = None
+) -> Agent:
+    """Агент нейросети с текущими настройками (screen — откуда брать снимок экрана для модели)."""
+    attachments = screen.take_image if screen is not None else None
+    return Agent(
+        llm, executor, speaker, name=name, window_provider=windows.active_window, attachments=attachments
+    )
 
 
 def build_core(
@@ -387,7 +403,8 @@ def build_core(
     index = AppIndex(config.apps)
     index.start()
     alarms = Alarms(config.resolve(TIMERS_FILE))
-    registry = build_registry(config, index, speaker, alarms)
+    screen = Screen()
+    registry = build_registry(config, index, speaker, alarms, screen)
     journal_file = log_dir / config.logging.journal
     executor = ActionExecutor(
         registry, SafetyPolicy(), confirmer, ActionJournal(journal_file, masker), dry_run=dry_run
@@ -397,10 +414,12 @@ def build_core(
     store = CommandStore(config.resolve(config.commands.dir), config.commands.user_file, registry)
     loaded = store.reload()
     matcher.set_commands(store.commands)
-    agent = make_agent(config.llm, executor, speaker, config.general.name) if config.llm.enabled else None
+    agent = (
+        make_agent(config.llm, executor, speaker, config.general.name, screen) if config.llm.enabled else None
+    )
     pipeline = Pipeline(matcher, executor, speaker, windows.active_window, agent=agent)
     return Core(index, registry, executor, normalizer, matcher, store, loaded, pipeline, journal_file,
-                log_dir / config.logging.file, alarms)  # fmt: skip
+                log_dir / config.logging.file, alarms, screen)  # fmt: skip
 
 
 def ui_problem() -> str:
@@ -591,7 +610,7 @@ def run_ui(
         pipeline=core.pipeline,
         executor=core.executor,
         commands=core.store,
-        make_agent=lambda llm: make_agent(llm, core.executor, speaker, config.general.name),
+        make_agent=lambda llm: make_agent(llm, core.executor, speaker, config.general.name, core.screen),
         speech=speech,
         volume=VolumeController(),
         bus=bus,

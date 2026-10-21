@@ -2,11 +2,12 @@
 
 Включается переменной JARVIS_LIVE_LLM=1. Профиль — JARVIS_LIVE_PROFILE, а без неё —
 llm.profile из config.yaml. Ключ берётся из .env или из переменной окружения.
-Каждый запуск — два-три коротких запроса: платный провайдер возьмёт за них немного денег.
+Каждый запуск — несколько коротких запросов: платный провайдер возьмёт за них немного денег.
 """
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 from pathlib import Path
@@ -60,3 +61,29 @@ def test_provider_calls_tool_and_answers(tmp_path: Path) -> None:
     assert result.status is AgentStatus.DONE, result.error
     assert "get_time" in calls
     assert result.text and speaker.said
+
+
+def test_model_sees_screenshot(tmp_path: Path) -> None:
+    """Снимок экрана доходит до модели в формате её API (если в профиле vision: true)."""
+    from PIL import Image
+
+    settings = live_settings()
+    if not settings.active.vision:
+        pytest.skip(f"профиль {settings.profile} не принимает картинки (vision: false)")
+    registry = ActionRegistry()
+
+    @registry.action("describe_screen", "Посмотреть, что на экране")
+    def describe_screen() -> str:
+        return "Окно «Проверка». На снимке экрана — один цветной квадрат."
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (320, 240), (220, 20, 20)).save(buffer, "JPEG", quality=90)
+    shots = [buffer.getvalue()]
+    journal = ActionJournal(tmp_path / "journal.jsonl", SecretMasker.from_environ())
+    executor = ActionExecutor(registry, SafetyPolicy(), StaticConfirmer(False), journal)
+    agent = Agent(settings, executor, RecordingSpeaker(), attachments=lambda: shots.pop() if shots else None)
+    result = agent.run("Посмотри на экран через describe_screen и ответь одним словом: какого цвета квадрат?")
+    log.warning("Нейросеть %s, снимок: %s, ответ «%s»", settings.profile, result.status, result.text)
+    assert result.status is AgentStatus.DONE, result.error
+    assert not shots, "describe_screen не вызван"
+    assert "красн" in result.text.lower()

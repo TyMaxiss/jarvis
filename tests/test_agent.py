@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -45,6 +47,7 @@ class World:
         *,
         confirm: bool = True,
         dry_run: bool = False,
+        attachments: Callable[[], bytes | None] | None = None,
         **settings: Any,
     ) -> None:
         self.calls: list[str] = []
@@ -80,6 +83,10 @@ class World:
         def say(text: str) -> str:
             return text
 
+        @registry.action("describe_screen", "Посмотреть, что на экране")
+        def describe_screen() -> str:
+            return "Окно «Блокнот»"
+
         self.journal_path = tmp_path / "journal.jsonl"
         self.confirmer = StaticConfirmer(confirm)
         executor = ActionExecutor(
@@ -100,6 +107,7 @@ class World:
             window_provider=lambda: WindowInfo(1, "Без имени — Блокнот", "Notepad", 2, "notepad.exe"),
             clock=self.clock,
             now=lambda: datetime(2026, 10, 21, 18, 30),
+            attachments=attachments,
         )
 
     def request(self, index: int) -> list[dict[str, Any]]:
@@ -161,7 +169,7 @@ def test_tools_come_from_registry_without_say_and_forbidden(tmp_path: Path) -> N
     w = World(tmp_path, [text_reply("Ок.")])
     w.agent.run("привет")
     names = [tool["function"]["name"] for tool in w.fake.requests[0]["tools"]]
-    assert names == ["open_app", "volume_set", "shutdown", "slow"]
+    assert names == ["open_app", "volume_set", "shutdown", "slow", "describe_screen"]
 
 
 def test_forbidden_action_is_refused_to_model(tmp_path: Path) -> None:
@@ -270,6 +278,49 @@ def test_dry_run_does_not_execute(tmp_path: Path) -> None:
     w.agent.run("открой телегу")
     assert w.calls == []
     assert w.request(1)[-1]["content"].startswith("[dry-run]")
+
+
+class Shots:
+    """Снимок, который оставляет describe_screen: отдаётся один раз."""
+
+    def __init__(self) -> None:
+        self.pending: bytes | None = None
+        self.taken = 0
+
+    def take(self) -> bytes | None:
+        image, self.pending = self.pending, None
+        self.taken += 1
+        return image
+
+
+def screen_world(tmp_path: Path, vision: bool) -> tuple[World, Shots]:
+    shots = Shots()
+    replies = [tool_reply(("describe_screen", {})), text_reply("Открыт Блокнот."), text_reply("Да.")]
+    world = World(tmp_path, replies, attachments=shots.take, profiles={"ollama": {"vision": vision}})
+    shots.pending = b"\xff\xd8jpeg"
+    return world, shots
+
+
+def test_screenshot_goes_to_model_that_sees_images(tmp_path: Path) -> None:
+    w, shots = screen_world(tmp_path, vision=True)
+    w.agent.run("что на экране")
+    second = w.request(1)
+    assert second[-2] == {"role": "tool", "tool_call_id": "call_0", "content": "Окно «Блокнот»"}
+    image = second[-1]
+    assert image["role"] == "user" and image["content"][0]["type"] == "text"
+    url = f"data:image/jpeg;base64,{base64.b64encode(b'\xff\xd8jpeg').decode()}"
+    assert image["content"][1] == {"type": "image_url", "image_url": {"url": url}}
+    w.agent.run("а сейчас?")
+    # В истории снимка нет: он не пересылается с каждой следующей просьбой.
+    assert not any(isinstance(m["content"], list) for m in w.request(2))
+    assert w.contents(2)[-2:] == ["Открыт Блокнот.", "а сейчас?"]
+
+
+def test_text_only_model_gets_description_without_image(tmp_path: Path) -> None:
+    w, shots = screen_world(tmp_path, vision=False)
+    w.agent.run("что на экране")
+    assert w.request(1)[-1] == {"role": "tool", "tool_call_id": "call_0", "content": "Окно «Блокнот»"}
+    assert shots.taken == 1 and shots.pending is None  # снимок забран и выброшен
 
 
 def test_history_is_kept_and_limited(tmp_path: Path) -> None:

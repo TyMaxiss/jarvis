@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from ctypes import wintypes
+from typing import Any
 
 import pytest
 
@@ -29,6 +31,7 @@ if sys.platform == "win32":
     from assistant.actions.apps import AppIndex, scan_installed_apps
     from assistant.actions.input import press_hotkey, text_events, type_unicode
     from assistant.actions.registry import ActionError, ActionRegistry
+    from assistant.actions.screen import Screen, WindowsDesktop
     from assistant.actions.volume import VolumeController
     from assistant.config import AppsConfig
 
@@ -54,9 +57,37 @@ if sys.platform == "win32":
     user32.TranslateMessage.argtypes = (ctypes.POINTER(wintypes.MSG),)
     user32.DispatchMessageW.argtypes = (ctypes.POINTER(wintypes.MSG),)
 
+    LRESULT = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = (
+            ("style", wintypes.UINT),
+            ("lpfnWndProc", WNDPROC),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", wintypes.HINSTANCE),
+            ("hIcon", wintypes.HICON),
+            ("hCursor", wintypes.HANDLE),
+            ("hbrBackground", wintypes.HBRUSH),
+            ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR),
+        )
+
+    user32.DefWindowProcW.restype = LRESULT
+    user32.DefWindowProcW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    user32.RegisterClassW.restype = wintypes.ATOM
+    user32.RegisterClassW.argtypes = (ctypes.POINTER(WNDCLASSW),)
+    user32.SendMessageW.restype = LRESULT
+    user32.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
 WS_OVERLAPPEDWINDOW = 0x00CF0000
 WS_VISIBLE = 0x10000000
+WS_CHILD = 0x40000000
 ES_AUTOHSCROLL = 0x0080
+BS_AUTOCHECKBOX = 0x0003
+BM_GETCHECK = 0x00F0
+WM_COMMAND = 0x0111
 PM_REMOVE = 0x0001
 
 
@@ -303,3 +334,116 @@ class TestDesktop:
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=10)
+
+
+class Form:
+    """Окно с настоящими кнопками Windows; нажатия (WM_COMMAND от кнопок) записываются."""
+
+    CLASS = "JarvisScreenTest"
+    SAVE, CANCEL, REMEMBER = 101, 102, 103
+
+    def __init__(self) -> None:
+        self.clicked: list[int] = []
+        # Ссылка на процедуру окна держится, пока окно живо: иначе её соберёт сборщик мусора.
+        self._proc = WNDPROC(self._window_proc)
+        instance = ctypes.WinDLL("kernel32").GetModuleHandleW(None)
+        window_class = WNDCLASSW(lpfnWndProc=self._proc, hInstance=instance, lpszClassName=self.CLASS)
+        window_class.hbrBackground = 6  # COLOR_WINDOW + 1
+        user32.RegisterClassW(ctypes.byref(window_class))  # повторная регистрация — не ошибка для теста
+        self.hwnd = user32.CreateWindowExW(
+            0, self.CLASS, "Проверка экрана", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 200, 200, 640, 260,
+            None, None, None, None,
+        )  # fmt: skip
+        assert self.hwnd, f"CreateWindowExW: ошибка {ctypes.get_last_error()}"
+        self.save = self._control("BUTTON", "Сохранить", 0, 20, 20, self.SAVE)
+        self.cancel = self._control("BUTTON", "Отмена", 0, 160, 20, self.CANCEL)
+        self.remember = self._control("BUTTON", "Запомнить меня", BS_AUTOCHECKBOX, 20, 80, self.REMEMBER)
+        pump(0.2)
+
+    def _control(self, kind: str, text: str, style: int, x: int, y: int, control_id: int) -> int:
+        hwnd = user32.CreateWindowExW(
+            0, kind, text, WS_CHILD | WS_VISIBLE | style, x, y, 130, 32, self.hwnd, control_id, None, None
+        )
+        assert hwnd, f"CreateWindowExW({text}): ошибка {ctypes.get_last_error()}"
+        return hwnd
+
+    def _window_proc(self, hwnd: int, message: int, wparam: int, lparam: int) -> int:
+        if message == WM_COMMAND and lparam:
+            self.clicked.append(wparam & 0xFFFF)
+        return user32.DefWindowProcW(hwnd, message, wparam, lparam)
+
+    def checked(self) -> bool:
+        return user32.SendMessageW(self.remember, BM_GETCHECK, 0, 0) == 1
+
+
+def while_pumping[T](work: Callable[[], T], timeout: float = 30) -> T:
+    """Выполняет work в другом потоке, а этот обрабатывает сообщения окон.
+
+    UI Automation спрашивает окна теста сообщениями: если поток окна ждёт, ответ не придёт.
+    """
+    box: dict[str, Any] = {}
+
+    def target() -> None:
+        try:
+            box["value"] = work()
+        except BaseException as exc:
+            box["error"] = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + timeout
+    while thread.is_alive() and time.monotonic() < deadline:
+        pump(0.05)
+    assert not thread.is_alive(), "действие не закончилось"
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+@pytest.fixture
+def form() -> Iterator[Form]:
+    window = Form()
+    try:
+        activate_or_skip(window.hwnd)
+        yield window
+    finally:
+        user32.DestroyWindow(window.hwnd)
+        pump(0.1)
+
+
+@pytest.mark.skipif(
+    os.environ.get("JARVIS_DESKTOP_TESTS") != "1", reason="включаются через JARVIS_DESKTOP_TESTS=1"
+)
+class TestScreen:
+    """describe_screen, click_ui_element и click_screen на окне с настоящими кнопками."""
+
+    def test_describe_lists_controls_and_makes_shot(self, form: Form) -> None:
+        screen = Screen(WindowsDesktop(skip_own=False))
+        text = while_pumping(screen.describe)
+        assert text.startswith("Окно «Проверка экрана»"), text
+        assert re.search(r"- Button «Сохранить» \(\d+, \d+\) \d+×\d+", text), text
+        assert "CheckBox «Запомнить меня»" in text
+        image = screen.take_image()
+        assert image is not None and image[:2] == b"\xff\xd8"
+
+    def test_click_element_presses_button_and_toggles_checkbox(self, form: Form) -> None:
+        screen = Screen(WindowsDesktop(skip_own=False))
+        assert while_pumping(lambda: screen.click_element("сохранить")) == "Нажал кнопку «Сохранить»"
+        pump(0.3)
+        assert form.clicked == [Form.SAVE]
+        result = while_pumping(lambda: screen.click_element("флажок запомнить"))
+        assert result == "Переключил флажок «Запомнить меня»"
+        pump(0.3)
+        assert form.checked()
+        with pytest.raises(ActionError, match="Не нашёл «Печать»"):
+            while_pumping(lambda: screen.click_element("Печать"))
+
+    def test_click_screen_hits_button_from_description(self, form: Form) -> None:
+        # Координаты из описания (на снимке) пересчитываются обратно в экранные.
+        screen = Screen(WindowsDesktop(skip_own=False))
+        text = while_pumping(screen.describe)
+        found = re.search(r"- Button «Отмена» \((\d+), (\d+)\)", text)
+        assert found, text
+        while_pumping(lambda: screen.click_point(int(found[1]), int(found[2])))
+        pump(0.3)
+        assert form.clicked == [Form.CANCEL]

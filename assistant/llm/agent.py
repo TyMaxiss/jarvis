@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -132,6 +133,8 @@ class Agent:
         window_provider: активное окно (для контекста в сообщении пользователя).
         clock: монотонные часы (подменяются в тестах).
         now: текущие дата и время (для промпта).
+        attachments: снимок экрана (JPEG), который оставил последний инструмент (describe_screen);
+            модели, которые принимают картинки (vision в профиле), получают его вместе с результатом.
     """
 
     def __init__(
@@ -145,6 +148,7 @@ class Agent:
         window_provider: Callable[[], WindowInfo] | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = datetime.now,
+        attachments: Callable[[], bytes | None] | None = None,
     ) -> None:
         self._settings = settings
         self._executor = executor
@@ -155,6 +159,7 @@ class Agent:
         self._window_provider = window_provider
         self._clock = clock
         self._now = now
+        self._attachments = attachments
         self._history: list[list[dict[str, Any]]] = []
         self._last_activity: float | None = None
 
@@ -263,8 +268,11 @@ class Agent:
                 if on_step is not None:
                     on_step(step)
                 message = {"role": "tool", "tool_call_id": call.id, "content": step.text}
+                image = self._attachments() if self._attachments is not None else None
                 if step.status in _FAILED_STEPS:
                     message["_is_error"] = True
+                elif image and self._settings.active.vision:
+                    message["_image"] = base64.b64encode(image).decode("ascii")
                 exchange.append(message)
         else:
             self._finish(result, AgentStatus.STEP_LIMIT, _STEP_LIMIT_REPLY, exchange)
@@ -297,9 +305,12 @@ class Agent:
         return [message for exchange in self._history for message in exchange]
 
     def _remember(self, exchange: list[dict[str, Any]]) -> None:
-        """Сохраняет обмен, если нейросеть успела ответить."""
+        """Сохраняет обмен, если нейросеть успела ответить.
+
+        Снимки экрана нужны только в своей задаче: в истории они не пересылаются с каждой просьбой.
+        """
         if len(exchange) > 1 and self._settings.history > 0:
-            self._history.append(exchange)
+            self._history.append([{k: v for k, v in m.items() if k != "_image"} for m in exchange])
             del self._history[: -self._settings.history]
         self._last_activity = self._clock()
 

@@ -17,7 +17,7 @@ from assistant.actions.registry import ActionRegistry
 from assistant.config import LlmConfig
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent, AgentStatus
-from assistant.llm.anthropic_client import BETA_BINDING, BETA_FALLBACK, AnthropicClient
+from assistant.llm.anthropic_client import BETA_BINDING, BETA_FALLBACK, AnthropicClient, to_anthropic_messages
 from assistant.llm.client import LlmCancelled, LlmError, LlmRefused, create_client
 from assistant.logging_setup import SecretMasker
 from assistant.safety.confirm import StaticConfirmer
@@ -255,3 +255,33 @@ def test_stream_is_closed_when_reading_stops() -> None:
     with pytest.raises(LlmCancelled):
         client.complete([{"role": "user", "content": "?"}], on_text=lambda piece: cancel.set(), cancel=cancel)
     assert wait_until(lambda: stream.closed)
+
+
+def test_screenshot_goes_inside_tool_result() -> None:
+    # Снимок — в результате инструмента: сообщение пользователя посреди задачи сдвинуло бы её
+    # начало, и Claude потерял бы свои рассуждения.
+    _, messages = to_anthropic_messages(
+        [
+            {"role": "user", "content": "что на экране"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "t1", "type": "function", "function": {"name": "describe_screen", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "t1", "content": "Окно «Блокнот»", "_image": "/9j/AA=="},
+        ]
+    )  # fmt: skip
+    assert messages[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "t1",
+                "content": [
+                    {"type": "text", "text": "Окно «Блокнот»"},
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/AA=="},
+                    },
+                ],
+            }
+        ],
+    }

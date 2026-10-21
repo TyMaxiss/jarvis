@@ -183,9 +183,36 @@ def resolve_api_key(profile_name: str, profile: LlmProfile) -> str:
     return key
 
 
+IMAGE_NOTE = "Снимок экрана к результату инструмента выше."
+
+
 def public_messages(messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Сообщения без служебных полей (ключи с «_»): их видит только наш код."""
-    return [{key: value for key, value in m.items() if not key.startswith("_")} for m in messages]
+    """Сообщения без служебных полей (ключи с «_»): их видит только наш код.
+
+    Снимок экрана из результата инструмента (_image, JPEG в base64) идёт отдельным сообщением
+    пользователя после результатов этого хода: в Chat Completions картинки принимает только оно.
+    """
+    result: list[dict[str, Any]] = []
+    images: list[str] = []
+    for message in messages:
+        if message["role"] != "tool" and images:
+            result.append(image_message(images))
+            images = []
+        if message["role"] == "tool" and message.get("_image"):
+            images.append(message["_image"])
+        result.append({key: value for key, value in message.items() if not key.startswith("_")})
+    if images:
+        result.append(image_message(images))
+    return result
+
+
+def image_message(images: Sequence[str]) -> dict[str, Any]:
+    """Сообщение пользователя со снимками (JPEG в base64)."""
+    parts: list[dict[str, Any]] = [{"type": "text", "text": IMAGE_NOTE}]
+    parts += [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}} for data in images
+    ]
+    return {"role": "user", "content": parts}
 
 
 @dataclass(frozen=True)

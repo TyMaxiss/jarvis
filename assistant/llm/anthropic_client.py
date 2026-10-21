@@ -108,10 +108,15 @@ def to_anthropic_messages(messages: Sequence[dict[str, Any]]) -> tuple[str, list
             if content:
                 result.append({"role": "assistant", "content": content})
         elif role == "tool":
+            text = str(message.get("content") or "")
+            content: str | list[dict[str, Any]] = text
+            if message.get("_image"):  # снимок экрана — прямо в результате инструмента
+                source = {"type": "base64", "media_type": "image/jpeg", "data": message["_image"]}
+                content = [{"type": "text", "text": text}, {"type": "image", "source": source}]
             block: dict[str, Any] = {
                 "type": "tool_result",
                 "tool_use_id": message["tool_call_id"],
-                "content": str(message.get("content") or ""),
+                "content": content,
             }
             if message.get("_is_error"):
                 block["is_error"] = True
