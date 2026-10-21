@@ -166,10 +166,16 @@ export function LlmSection({
               <span
                 className={cx(
                   'h-1.5 w-1.5 rounded-full',
-                  !item.key_env ? 'bg-faint' : item.key_set ? 'bg-ok' : 'bg-warn',
+                  item.key_set ? 'bg-ok' : !item.key_env || item.key_optional ? 'bg-faint' : 'bg-warn',
                 )}
               />
-              {!item.key_env ? 'без ключа' : item.key_set ? 'ключ сохранён' : 'нужен ключ'}
+              {item.key_set
+                ? 'ключ сохранён'
+                : !item.key_env
+                  ? 'без ключа'
+                  : item.key_optional
+                    ? 'ключ — если нужен'
+                    : 'нужен ключ'}
             </span>
           </button>
         ))}
