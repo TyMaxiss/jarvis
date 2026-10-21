@@ -35,8 +35,11 @@ from assistant.nlu.normalize import Normalizer
 
 log = logging.getLogger(__name__)
 
-_SLOT_PATTERNS = {"int": r"\d+", "float": r"\d+(?:\.\d+)?", "str": r".+?"}
-_SLOT_CONVERTERS: dict[str, Callable[[str], Any]] = {"int": int, "float": float, "str": str}
+_SLOT_PATTERNS = {"int": r"\d+", "float": r"\d+(?:\.\d+)?", "str": r".+?", "text": r".+?"}
+_SLOT_CONVERTERS: dict[str, Callable[[str], Any]] = {"int": int, "float": float, "str": str, "text": str}
+_TEXT_SLOTS = ("str", "text")
+# Знаки, которые Whisper ставит в конце фразы: в названии программы или запросе они лишние.
+_TRAILING_PUNCTUATION = ".,;:!?…"
 _LEADING_SEPARATORS = " \t,.:;—–-"
 
 Status = Literal["matched", "ambiguous", "not_found", "empty"]
@@ -156,7 +159,7 @@ def _align_template(
             rest = align(i + 1, j + 1) if score >= _MIN_WORD_SCORE else None
             return None if rest is None else (rest[0] + score, rest[1])
         best: tuple[float, tuple[tuple[str, str], ...]] | None = None
-        numeric = slot_types.get(value, "str") != "str"
+        numeric = slot_types.get(value, "str") not in _TEXT_SLOTS
         for end in range(j + 1, (j + 2 if numeric else len(words) + 1)):
             if end > len(words):
                 break
@@ -262,7 +265,7 @@ class Matcher:
                 regex_parts.append(f"(?P<{part}>{_SLOT_PATTERNS[slot_type]})")
                 display.append(f"{{{part}}}")
                 elements.append(("slot", part))
-                tail_slot = part if slot_type == "str" else None
+                tail_slot = part if slot_type in _TEXT_SLOTS else None
         text = " ".join(display)
         return _Phrase(
             command=command,
@@ -428,7 +431,11 @@ class Matcher:
         return _SegmentResult(best, "matched", [best, *(c for c in candidates if c is not best)])
 
     def _extract_slots(self, phrase: _Phrase, found: re.Match[str], original: str | None) -> dict[str, Any]:
-        """Значения слотов с приведением типов; хвостовой текст берётся из исходной фразы."""
+        """Значения слотов с приведением типов; хвостовой текст берётся из исходной фразы.
+
+        Из исходной фразы берётся регистр («Firefox»). Пунктуация остаётся только в слотах
+        типа text (диктовка), в остальных знаки в конце убираются: «Открой Firefox.» → «Firefox».
+        """
         slots = {
             name: _SLOT_CONVERTERS[phrase.command.slot_type(name)](value)
             for name, value in found.groupdict().items()
@@ -438,6 +445,8 @@ class Matcher:
             # Исходный текст берётся, только если в нём нет лишних слов (паразитов и т.п.).
             value = str(slots[phrase.tail_slot])
             if raw and self._bare.normalize(raw) == self._bare.normalize(value):
+                if phrase.command.slot_type(phrase.tail_slot) != "text":
+                    raw = raw.rstrip(_TRAILING_PUNCTUATION).rstrip() or raw
                 slots[phrase.tail_slot] = raw
         return slots
 

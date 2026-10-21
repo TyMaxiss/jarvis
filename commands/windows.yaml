@@ -6,6 +6,12 @@
   steps:
     - hotkey: {keys: "win+d"}
 
+# Win+D — переключатель: повторное нажатие возвращает окна, свёрнутые командой выше.
+- id: restore_all
+  phrases: ["разверни все окна", "верни все окна", "разверни обратно"]
+  steps:
+    - hotkey: {keys: "win+d"}
+
 - id: window_minimize
   phrases: ["сверни окно", "сверни это окно", "сверни"]
   steps:
@@ -69,6 +75,7 @@
 
 - id: type_text
   phrases: ["напечатай {text}", "введи текст {text}"]
+  slots: {text: text}  # с пунктуацией, как сказано
   steps:
     - type_text: {text: "{text}"}
 

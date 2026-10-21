@@ -42,10 +42,11 @@ from assistant.actions.winapi import WindowInfo
 
 log = logging.getLogger(__name__)
 
-SlotType = Literal["int", "float", "str"]
+# text — как str, но с пунктуацией исходной фразы (для диктовки: «напечатай Привет, мир!»).
+SlotType = Literal["int", "float", "str", "text"]
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 # Значения-образцы для проверки шагов со слотами при загрузке.
-_SAMPLE_VALUES: dict[str, Any] = {"int": 1, "float": 1.0, "str": "текст"}
+_SAMPLE_VALUES: dict[str, Any] = {"int": 1, "float": 1.0, "str": "текст", "text": "текст"}
 
 
 def _as_list(value: Any) -> Any:

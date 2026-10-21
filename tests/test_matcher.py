@@ -90,6 +90,25 @@ def test_raw_text_is_kept_for_trailing_text_slot(matcher: Matcher) -> None:
     assert result.matches[0].slots == {"text": "Привет, мир!"}
 
 
+@pytest.mark.parametrize(
+    ("phrase", "slots"),
+    [
+        ("Открой Firefox.", {"name": "Firefox"}),  # точку в конце ставит Whisper
+        ("Переключись на Яндекс.Музыка.", {"title": "Яндекс.Музыка"}),  # точка внутри остаётся
+        ("Найди рецепт борща?", {"query": "рецепт борща"}),
+    ],
+)
+def test_trailing_punctuation_is_dropped_outside_dictation(
+    matcher: Matcher, phrase: str, slots: dict[str, str]
+) -> None:
+    assert matcher.match(phrase, NO_WINDOW).matches[0].slots == slots
+
+
+def test_restore_all_windows(matcher: Matcher) -> None:
+    assert ids(matcher.match("Разверни все окна.", NO_WINDOW)) == ["restore_all"]
+    assert ids(matcher.match("разверни окно", NO_WINDOW)) == ["window_maximize"]
+
+
 def test_raw_text_is_not_used_when_it_has_extra_words(matcher: Matcher) -> None:
     result = matcher.match("напечатай привет пожалуйста", NO_WINDOW)
     assert result.matches[0].slots == {"text": "привет"}
