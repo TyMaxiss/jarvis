@@ -140,7 +140,7 @@ def start_voice(
     from assistant.audio.capture import CaptureError, MicrophoneCapture
     from assistant.audio.sounds import SOUND_RATE, listen_chime
     from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
-    from assistant.audio.wakeword import GrammarSpotter, VoskModelError, load_vosk_model, wake_spotter
+    from assistant.audio.wakeword import VoskModelError, load_vosk_model, phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
     from assistant.stt.whisper_stt import WhisperSTT
     from assistant.voice import VoiceLoop, VoiceSettings
@@ -191,7 +191,7 @@ def start_voice(
             confirmer = VoiceConfirmer(
                 speech,
                 capture,
-                lambda: GrammarSpotter(model, YES_PHRASES + NO_PHRASES),
+                lambda: phrase_spotter(model, YES_PHRASES + NO_PHRASES),
                 voice.confirm_timeout,
                 voice.confirm_confidence,
             )

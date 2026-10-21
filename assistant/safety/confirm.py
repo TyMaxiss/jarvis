@@ -58,6 +58,7 @@ class StaticConfirmer:
 # «Давай» в голосовых ответах нет: Vosk слышал его в «Сделай громче» — ложное «да» опаснее «нет».
 YES_PHRASES = ("да", "подтверждаю", "конечно", "выполняй")
 NO_PHRASES = ("нет", "отмена", "не надо", "стоп", "отменить")
+_YES_WORDS = frozenset(word for phrase in YES_PHRASES for word in phrase.split())
 
 
 class VoiceConfirmer:
@@ -68,7 +69,7 @@ class VoiceConfirmer:
     Args:
         speech: озвучка (say, wait_idle).
         source: микрофон.
-        spotter_factory: создаёт распознаватель с грамматикой YES_PHRASES + NO_PHRASES.
+        spotter_factory: создаёт распознаватель YES_PHRASES + NO_PHRASES (со словами-приманками).
         timeout: сколько секунд ждать ответа.
         min_confidence: минимальная уверенность Vosk в ответе; неуверенное «да» — не согласие.
     """
@@ -113,12 +114,13 @@ class VoiceConfirmer:
     def _answer(self, result: Any) -> str | None:
         """«Нет» важнее «да»: если прозвучало и то и другое, действие не выполняется.
 
-        «Да» засчитывается, только если в ответе нет посторонних слов ([unk]): Vosk
-        с маленькой грамматикой может найти «да» и в «хорошая погода». Тогда ответа
-        нет, и подтверждение слушает дальше.
+        «Да» засчитывается, только если ответ состоит из одних слов согласия — без
+        слов-приманок и [unk]: Vosk с маленькой грамматикой находил «да» в «хорошая
+        погода» (уверенность 0.62 при пороге 0.7). Тогда ответа нет, и подтверждение
+        слушает дальше.
         """
         log.debug("Ответ Vosk: %s", result.describe())
         no = result.find(NO_PHRASES, self._min_confidence)
-        if no or result.has_unknown:
+        if no or any(word not in _YES_WORDS for word, _ in result.words):
             return no
         return result.find(YES_PHRASES, self._min_confidence)

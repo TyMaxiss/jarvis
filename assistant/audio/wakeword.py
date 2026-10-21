@@ -170,9 +170,14 @@ class GrammarSpotter:
         self._recognizer.Reset()
 
 
-def wake_spotter(model: Any, name: str) -> GrammarSpotter:
-    """Распознаватель имени ассистента: имя и слова-приманки (DECOY_WORDS).
+def phrase_spotter(model: Any, phrases: Iterable[str]) -> GrammarSpotter:
+    """Распознаватель заданных фраз среди слов-приманок (DECOY_WORDS).
 
-    Если имя совпадает со словом из приманок («компьютер»), это слово остаётся только именем.
+    Если искомое слово совпадает с приманкой («компьютер», «нет»), оно остаётся только искомым.
     """
-    return GrammarSpotter(model, [name], decoys=DECOY_WORDS)
+    return GrammarSpotter(model, phrases, decoys=DECOY_WORDS)
+
+
+def wake_spotter(model: Any, name: str) -> GrammarSpotter:
+    """Распознаватель имени ассистента."""
+    return phrase_spotter(model, [name])
