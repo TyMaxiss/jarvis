@@ -144,7 +144,7 @@ class VoiceConfig(_Section):
     confirm_timeout: float = Field(5, ge=1, le=30, description="Сколько ждать «да» или «нет»")
     confirm_confidence: float = Field(0.7, ge=0, le=1, description="Уверенность Vosk в «да/нет»")
     stop_confidence: float = Field(
-        0.7, ge=0, le=1, description="Уверенность Vosk в «стоп» / «отмена» во время задачи и речи"
+        0.8, ge=0, le=1, description="Уверенность Vosk в «стоп» / «отмена» во время задачи и речи"
     )
     vosk_model: Path = Path("models/vosk-model-small-ru-0.22")
 

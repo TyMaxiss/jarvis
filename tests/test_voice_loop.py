@@ -460,3 +460,10 @@ def test_is_stop(words: list[tuple[str, float]], expected: bool) -> None:
     loop = Harness(silence(100)).loop
     heard = SpotResult(" ".join(w for w, _ in words), tuple(words))
     assert loop.is_stop(heard) is expected
+
+
+def test_stop_threshold_is_separate_from_name() -> None:
+    settings = VoiceSettings(wake_confidence=0.95, stop_confidence=0.7)
+    loop = Harness(silence(100), settings=settings).loop
+    assert loop.is_stop(SpotResult("стоп", (("стоп", 0.75),)))
+    assert not loop.is_stop(SpotResult("стоп", (("стоп", 0.65),)))

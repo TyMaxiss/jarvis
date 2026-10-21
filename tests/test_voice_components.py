@@ -15,7 +15,7 @@ import pytest
 from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, ArraySource, resample, to_int16
 from assistant.audio.sounds import SOUND_RATE, listen_chime
 from assistant.audio.vad import SegmenterSettings, SegmentEvent, SileroVAD, SpeechSegmenter
-from assistant.audio.wakeword import SpotResult, parse_result, wake_spotter
+from assistant.audio.wakeword import SpotResult, parse_result, phrase_spotter, wake_spotter
 from assistant.config import AppConfig, SttConfig
 from assistant.models import _safe_extract, download_all
 from assistant.safety.confirm import VoiceConfirmer
@@ -295,6 +295,26 @@ def test_wake_spotter_grammar_has_decoys(monkeypatch: pytest.MonkeyPatch) -> Non
     assert grammars[-1] == ["джарвис", "который", "час", "компьютер", "[unk]"]
     renamed = wake_spotter(model, "Компьютер")  # имя совпало с приманкой — остаётся только именем
     assert renamed.phrases == ["компьютер"] and "компьютер" not in renamed.decoys
+
+
+def test_stop_spotter_has_no_soundalike_decoys(monkeypatch: pytest.MonkeyPatch) -> None:
+    # «стоп» Vosk принимал за похожие приманки «тот» и «сам» — в грамматике стоп-слов их нет.
+    import vosk
+
+    from assistant.voice import STOP_PHRASES, STOP_SOUNDALIKES
+
+    class FakeRecognizer:
+        def __init__(self, model: object, rate: int, grammar: str) -> None:
+            pass
+
+        def SetWords(self, enabled: bool) -> None:
+            pass
+
+    monkeypatch.setattr(vosk, "KaldiRecognizer", FakeRecognizer)
+    model = FakeVoskModel({*STOP_PHRASES, "тот", "сам", "час", "погода"})
+    spotter = phrase_spotter(model, STOP_PHRASES, exclude_decoys=STOP_SOUNDALIKES)
+    assert spotter.phrases == list(STOP_PHRASES)
+    assert spotter.decoys == ["час", "погода"]
 
 
 def test_spot_result_find() -> None:
