@@ -168,6 +168,24 @@ class TestComposite:
         result = matcher.match("сделай громче и расскажи анекдот", NO_WINDOW)
         assert not result.matched
 
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "открой блокнот и напиши список покупок",
+            "запусти телеграм и напиши маме привет",
+            "открой ютуб потом расскажи анекдот",
+        ],
+    )
+    def test_second_request_inside_slot_goes_to_llm(self, matcher: Matcher, phrase: str) -> None:
+        # Иначе «открой {name}» запустил бы программу «блокнот и напиши список покупок».
+        result = matcher.match(phrase, NO_WINDOW)
+        assert not result.matched and "не все части" in result.reason
+
+    def test_dictation_may_contain_requests(self, matcher: Matcher) -> None:
+        result = matcher.match("напечатай купи хлеб и позвони маме", NO_WINDOW)
+        assert ids(result) == ["type_text"]
+        assert result.matches[0].slots == {"text": "купи хлеб и позвони маме"}
+
     def test_exact_phrase_with_conjunction_is_not_split(self, normalizer: Normalizer) -> None:
         matcher = build_matcher(
             normalizer,

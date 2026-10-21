@@ -13,7 +13,11 @@
   постоянные слова шаблона сравниваются нечётко, чтобы ошибка распознавания
   («ломкость на 50») не мешала найти «громкость на {percent}»;
 * составная фраза («открой ютуб и сделай громче») делится по союзам; если каждая часть
-  нашлась локально, выполняются все части по очереди, иначе фраза пробуется целиком.
+  нашлась локально, выполняются все части по очереди, иначе фраза пробуется целиком:
+  «найди на ютубе кошки и собаки» — один запрос. Но если в строковый слот попала вторая
+  просьба («открой {name}» на «открой блокнот и напиши привет»: после союза — глагол
+  просьбы), фраза считается ненайденной и уходит в нейросеть. Диктовка (слот text)
+  может содержать что угодно.
 """
 
 from __future__ import annotations
@@ -41,6 +45,17 @@ _TEXT_SLOTS = ("str", "text")
 # Знаки, которые Whisper ставит в конце фразы: в названии программы или запросе они лишние.
 _TRAILING_PUNCTUATION = ".,;:!?…"
 _LEADING_SEPARATORS = " \t,.:;—–-"
+# Глаголы, которыми обычно начинается просьба (кроме первых слов фраз команд — они
+# добавляются сами): если такой глагол идёт после союза, это уже вторая просьба.
+_REQUEST_VERBS = frozenset(
+    {
+        "напиши", "скажи", "расскажи", "покажи", "создай", "удали", "скопируй", "вставь", "отправь",
+        "позвони", "напомни", "добавь", "сохрани", "перейди", "нажми", "прокрути", "переведи",
+        "посчитай", "проверь", "узнай", "запиши", "поищи", "открой", "закрой", "запусти", "найди",
+        "включи", "выключи", "поставь", "сделай", "убери", "верни", "сверни", "разверни",
+        "переключись", "напечатай", "прочитай", "подожди", "ответь", "объясни", "придумай", "перескажи",
+    }
+)  # fmt: skip
 
 Status = Literal["matched", "ambiguous", "not_found", "empty"]
 
@@ -218,6 +233,7 @@ class Matcher:
         self._config = config
         self._debug = debug
         self._phrases: list[_Phrase] = []
+        self._request_starts: frozenset[str] = _REQUEST_VERBS
         self._split_words = sorted(
             (tuple(normalizer.tokens(word)) for word in config.split_words if normalizer.tokens(word)),
             key=len,
@@ -233,6 +249,9 @@ class Matcher:
                 if phrase is not None:
                     phrases.append(phrase)
         self._phrases = phrases
+        self._request_starts = _REQUEST_VERBS | {
+            first for phrase in phrases if (first := phrase.text.split()[0]) and "{" not in first
+        }
 
     def _compile(self, command: Command, source: str) -> _Phrase | None:
         """Нормализует фразу; шаблон со слотами превращает в регулярное выражение."""
@@ -294,6 +313,7 @@ class Matcher:
             return MatchResult("empty", normalized, reason="пустая фраза")
 
         whole = self._match_segment(normalized, window, original=text)
+        parts: list[str] = []
         # Точное совпадение всей фразы важнее деления: команда «свет и звук» не делится.
         if not (whole.chosen and whole.chosen.kind == "exact"):
             parts = self._split(tokens)
@@ -311,7 +331,16 @@ class Matcher:
                     self._log(text, result)
                     return result
 
-        if whole.chosen:
+        if whole.chosen and len(parts) > 1 and self._slot_swallows_split(whole.chosen):
+            # Иначе «открой блокнот и напиши привет» запустило бы программу «блокнот и напиши
+            # привет», а вторая просьба потерялась бы.
+            result = MatchResult(
+                "not_found",
+                normalized,
+                candidates=whole.candidates,
+                reason="составная фраза: не все части нашлись локально",
+            )
+        elif whole.chosen:
             result = MatchResult(
                 "matched",
                 normalized,
@@ -322,6 +351,16 @@ class Matcher:
             result = MatchResult(whole.status, normalized, candidates=whole.candidates, reason=whole.reason)
         self._log(text, result)
         return result
+
+    def _slot_swallows_split(self, candidate: Candidate) -> bool:
+        """В строковый слот (не text) после союза попала вторая просьба: «блокнот и напиши привет»."""
+        for name, value in candidate.slots.items():
+            if candidate.command.slots.get(name, "str") != "str" or not isinstance(value, str):
+                continue
+            later = self._split(self._normalizer.tokens(value))[1:]
+            if any(part.split()[0] in self._request_starts for part in later):
+                return True
+        return False
 
     def _split(self, tokens: list[str]) -> list[str]:
         """Делит фразу по союзам; пустые части отбрасываются."""
