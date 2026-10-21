@@ -101,6 +101,12 @@ class TestWhenPriority:
         assert ids(matcher.match("стоп", YOUTUBE_WINDOW)) == ["youtube_pause"]
         assert ids(matcher.match("полный экран", YOUTUBE_WINDOW)) == ["youtube_fullscreen"]
 
+    def test_when_command_does_not_hijack_fuzzy_phrases(self, matcher: Matcher) -> None:
+        # Команды YouTube проходят условие, но не похожи на фразу — побеждает обычная команда.
+        assert ids(matcher.match("сделай погромче", YOUTUBE_WINDOW)) == ["volume_up"]
+        assert ids(matcher.match("закрой вкладки", YOUTUBE_WINDOW)) == ["close_tab"]
+        assert ids(matcher.match("громкость на 30", YOUTUBE_WINDOW)) == ["volume_set"]
+
     def test_generic_command_in_other_windows(self, matcher: Matcher) -> None:
         assert ids(matcher.match("пауза", NOTEPAD_WINDOW)) == ["media_play_pause"]
         assert ids(matcher.match("стоп", NOTEPAD_WINDOW)) == ["media_stop"]

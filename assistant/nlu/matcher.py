@@ -105,6 +105,22 @@ class _SegmentResult:
     reason: str = ""
 
 
+_TIE = 0.0001  # «разрыв» для точных совпадений и шаблонов: различаться должны хоть чем-то
+
+
+def _by_score(candidate: Candidate) -> float:
+    return candidate.score
+
+
+def _by_specificity(candidate: Candidate) -> float:
+    return candidate.specificity
+
+
+def _prefer_when(group: list[Candidate]) -> list[Candidate]:
+    """Команды с выполненным условием when вытесняют остальные."""
+    return [c for c in group if c.command.when is not None] or group
+
+
 def _fuzzy_score(text: str, text_skeleton: str, phrase: _Phrase) -> float:
     """Нечёткая оценка 0–100: посимвольно, без учёта порядка слов и по «скелету»."""
     return max(
@@ -297,14 +313,16 @@ class Matcher:
 
         exact = [c for c in ranked if c.kind == "exact"]
         if exact:
-            return self._decide(exact, candidates, lambda c: c.score, gap=0.0001)
+            return self._decide(_prefer_when(exact), candidates, _by_score, gap=_TIE)
         if ranked and ranked[0].score >= self._config.threshold:
-            viable = [c for c in ranked if c.score >= self._config.threshold]
-            prioritized = [c for c in viable if c.command.when is not None]
-            group = prioritized or ranked
-            return self._decide(group, candidates, lambda c: c.score, gap=self._config.ambiguity_gap)
+            # Приоритет when — только среди прошедших порог; иначе сравниваем со всеми,
+            # чтобы правило разрыва учитывало и кандидатов ниже порога.
+            viable_when = [
+                c for c in ranked if c.score >= self._config.threshold and c.command.when is not None
+            ]
+            return self._decide(viable_when or ranked, candidates, _by_score, gap=self._config.ambiguity_gap)
         if templates:
-            return self._decide(templates, candidates, lambda c: c.specificity, gap=0.0001)
+            return self._decide(_prefer_when(templates), candidates, _by_specificity, gap=_TIE)
         return _SegmentResult(None, "not_found", candidates, "нет подходящей команды")
 
     @staticmethod
@@ -314,12 +332,8 @@ class Matcher:
         key: Callable[[Candidate], float],
         gap: float,
     ) -> _SegmentResult:
-        """Выбирает лучшего кандидата группы или признаёт фразу неоднозначной.
-
-        Команды с выполненным условием when вытесняют остальные.
-        """
-        prioritized = [c for c in group if c.command.when is not None]
-        ordered = sorted(prioritized or group, key=key, reverse=True)
+        """Выбирает лучшего кандидата группы или признаёт фразу неоднозначной."""
+        ordered = sorted(group, key=key, reverse=True)
         best = ordered[0]
         rivals = [c for c in ordered[1:] if c.command.id != best.command.id]
         if rivals and key(best) - key(rivals[0]) < gap:

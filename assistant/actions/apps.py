@@ -7,6 +7,7 @@ explorer shell:AppsFolder\\<AppID>). Поверх индекса работаю�
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -87,10 +88,12 @@ def _fallback_folders() -> list[Path]:
 
 def _query_powershell(timeout: float = 30.0) -> tuple[list[Path], list[AppEntry]]:
     """Папки ярлыков и приложения меню «Пуск» через PowerShell."""
+    # -EncodedCommand (UTF-16LE в base64) избавляет от проблем с кавычками и переводами строк.
+    encoded = base64.b64encode(_POWERSHELL_SCRIPT.encode("utf-16-le")).decode("ascii")
     try:
         completed = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-Command", _POWERSHELL_SCRIPT],
+             "-EncodedCommand", encoded],
             capture_output=True, timeout=timeout, creationflags=_CREATE_NO_WINDOW, check=False,
         )  # fmt: skip
         data = json.loads(completed.stdout.decode("utf-8-sig", errors="replace") or "{}")
