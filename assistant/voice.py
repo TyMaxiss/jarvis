@@ -381,17 +381,24 @@ class VoiceLoop:
     # --- Обработка фразы ------------------------------------------------------------
 
     def _process(self, audio: np.ndarray, origin: str) -> None:
-        """Распознаёт фразу, выполняет её и решает, что слушать дальше."""
+        """Распознаёт фразу, выполняет её и решает, что слушать дальше.
+
+        Задержка считается от конца речи: фраза закончена, когда VAD услышал паузу
+        (voice.min_silence_ms), поэтому пауза входит в задержку. В режиме удержания
+        клавиш конец фразы — отпускание клавиш, паузы нет.
+        """
         self._set_state(VoiceState.PROCESSING)
         self._report("recognizing")
         self._hold_buffer = []
         if len(audio) < BLOCK_SIZE * 4:  # меньше ~130 мс — не фраза
             self._enter_idle()
             return
+        pause_ms = 0 if origin == "hold" else self._segmenter.settings.min_silence_ms
         transcript = self._stt.transcribe(audio)
         log.info(
-            "Конец речи → текст: %.0f мс (звук %.1f с): «%s»",
-            transcript.duration_ms, len(audio) / 16_000, transcript.text,
+            "Конец речи → текст: %.0f мс (пауза %d мс + распознавание %.0f мс, звук %.1f с): «%s»",
+            pause_ms + transcript.duration_ms, pause_ms, transcript.duration_ms, len(audio) / 16_000,
+            transcript.text,
         )  # fmt: skip
         if not transcript.text:
             self._enter_idle()
@@ -408,7 +415,14 @@ class VoiceLoop:
         self._report("recognized", transcript.text)
         started = time.perf_counter()
         result = self._handle_text(transcript.text, self._confirmer)
-        log.info("Текст → результат: %.0f мс", (time.perf_counter() - started) * 1000)
+        action_ms = (time.perf_counter() - started) * 1000
+        total_ms = pause_ms + transcript.duration_ms + action_ms
+        log.info("Текст → результат: %.0f мс; конец речи → результат: %.0f мс", action_ms, total_ms)
+        self._report(
+            "latency",
+            f"{total_ms:.0f} мс от конца речи: пауза {pause_ms} + распознавание "
+            f"{transcript.duration_ms:.0f} + выполнение {action_ms:.0f}",
+        )
         if self._status is not None and result is not None:
             self._status.voice_result(result)
         self._after_response(followup=getattr(result, "handled", True))

@@ -291,7 +291,10 @@ def test_status_events() -> None:
     audio = np.concatenate([speech(WAKE, 300), speech(5001, 700), silence(1500)])
     h = Harness(audio).run()
     kinds = [kind for kind, _ in h.status.events]
-    assert kinds.index("recognizing") < kinds.index("recognized") < kinds.index("listening")
+    assert kinds.index("recognizing") < kinds.index("recognized") < kinds.index("latency")
+    assert kinds.index("latency") < kinds.index("listening")
+    latency = dict(h.status.events)["latency"]
+    assert "мс от конца речи: пауза 500 + распознавание" in latency  # min_silence_ms в Harness — 500
     assert h.status.results == ["Джарвис, открой ютуб."]
 
 

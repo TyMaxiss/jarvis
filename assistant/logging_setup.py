@@ -83,5 +83,5 @@ def setup_logging(log_file: Path, level: str, masker: SecretMasker, console_leve
     root.addHandler(file_handler)
     root.addHandler(console_handler)
     # Сторонние библиотеки слишком многословны на уровне DEBUG.
-    for noisy in ("comtypes", "urllib3", "httpx", "httpcore", "asyncio"):
+    for noisy in ("comtypes", "urllib3", "httpx", "httpcore", "asyncio", "faster_whisper"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

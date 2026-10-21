@@ -15,10 +15,12 @@ def test_voice_states_are_shown() -> None:
     console = ConsoleApp(unused, unused, unused, unused, unused, lambda: NO_WINDOW, out=out)
     console.voice_status("listening")
     console.voice_status("recognized", "Сделай громче.")
+    console.voice_status("latency", "950 мс от конца речи")
     console.voice_status("processing")  # служебное состояние не печатается
     console.voice_status("idle")
     assert out.getvalue().splitlines() == [
         "  [голос] Слушаю…",
         "  [голос] Распознано: «Сделай громче.»",
+        "  [голос] 950 мс от конца речи",
         "  [голос] Жду обращения",
     ]

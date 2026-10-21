@@ -191,6 +191,8 @@ class ConsoleApp:
         """Показывает состояние голоса: «Слушаю…», распознанный текст."""
         if state == "recognized":
             self._write(f"  [голос] Распознано: «{detail}»")
+        elif state == "latency":
+            self._write(f"  [голос] {detail}")
         elif state in _VOICE_MESSAGES:
             self._write(f"  [голос] {_VOICE_MESSAGES[state]}")
 
