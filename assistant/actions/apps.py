@@ -143,7 +143,7 @@ def filter_entries(entries: list[AppEntry], exclude: list[str]) -> list[AppEntry
     return result
 
 
-def _looks_like_path(target: str) -> bool:
+def looks_like_path(target: str) -> bool:
     """Алиас указывает на файл, команду или URI, а не на название приложения."""
     lowered = target.lower()
     return any(ch in target for ch in "\\/:") or lowered.endswith(_PATH_SUFFIXES)
@@ -219,7 +219,7 @@ class AppIndex:
         if target is None:
             return self.search(query)
         entry = self.search(target)
-        if entry is None and _looks_like_path(target):
+        if entry is None and looks_like_path(target):
             entry = AppEntry(query, "path", target)
         return entry
 
@@ -228,7 +228,7 @@ class AppIndex:
         terms = [query]
         target = self.alias(query)
         if target:
-            terms.append(Path(target).stem if _looks_like_path(target) else target)
+            terms.append(Path(target).stem if looks_like_path(target) else target)
         return terms
 
 

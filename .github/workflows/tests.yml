@@ -13,7 +13,7 @@ jobs:
   windows:
     name: Windows / Python 3.12
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PYTHONUTF8: "1"
       # Тесты, которые создают окна и печатают в них через SendInput.
@@ -25,13 +25,27 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Установка зависимостей (только колёса)
-        run: uv sync --locked --no-build
+      - name: Установка зависимостей
+        run: uv sync --locked
 
       - name: Тесты
         run: uv run pytest -v -rs
 
-      - name: Запуск консольного режима (dry-run)
+      - name: Запуск консольного режима (dry-run, без голоса)
         shell: pwsh
         run: |
-          "сделай громче`nкоторый час`n:apps power`n:q" | uv run python -m assistant --dry-run
+          "сделай громче`nкоторый час`n:apps power`n:q" | uv run python -m assistant --text --dry-run
+
+      - name: Кэш моделей
+        uses: actions/cache@v5
+        with:
+          path: models
+          key: models-v1-vosk-small-ru-0.22-piper-dmitri-medium-whisper-small
+
+      - name: Скачивание моделей
+        run: uv run python -m assistant --download-models
+
+      - name: Голос на настоящих моделях (Piper → VAD → Vosk → Whisper)
+        env:
+          JARVIS_E2E: "1"
+        run: uv run pytest -v -rs tests/test_voice_e2e.py --log-cli-level=WARNING

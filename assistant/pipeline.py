@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from assistant.actions.registry import ArgsError, UnknownActionError
 from assistant.actions.winapi import WindowInfo
 from assistant.commands.loader import render_reply, substitute
 from assistant.nlu.matcher import MatchedCommand, Matcher, MatchResult
+from assistant.safety.confirm import Confirmer
 from assistant.tts.base import Speaker
 
 log = logging.getLogger(__name__)
@@ -67,9 +69,23 @@ class Pipeline:
         self._executor = executor
         self._speaker = speaker
         self._window_provider = window_provider
+        # Голос и консоль могут прислать фразы одновременно — выполняем по одной.
+        self._lock = threading.Lock()
 
-    def handle_text(self, text: str, source: str = "local") -> PipelineResult:
-        """Обрабатывает фразу: ищет команду, выполняет, произносит ответ."""
+    def handle_text(
+        self, text: str, source: str = "local", confirmer: Confirmer | None = None
+    ) -> PipelineResult:
+        """Обрабатывает фразу: ищет команду, выполняет, произносит ответ.
+
+        Args:
+            text: фраза пользователя.
+            source: откуда пришла: local (текст), voice (голос).
+            confirmer: как подтверждать рискованные действия для этой фразы.
+        """
+        with self._lock:
+            return self._handle(text, source, confirmer)
+
+    def _handle(self, text: str, source: str, confirmer: Confirmer | None) -> PipelineResult:
         started = time.perf_counter()
         match = self._matcher.match(text, self._window_provider())
         match_ms = (time.perf_counter() - started) * 1000
@@ -85,7 +101,7 @@ class Pipeline:
 
         outcomes: list[CommandOutcome] = []
         for matched in match.matches:
-            outcome = self._run_command(matched, text, source)
+            outcome = self._run_command(matched, text, source, confirmer)
             outcomes.append(outcome)
             if not outcome.run.ok:
                 break
@@ -96,7 +112,9 @@ class Pipeline:
             self._speaker.say(reply)
         return PipelineResult(text, "local", match, outcomes, reply, match_ms, total_ms)
 
-    def _run_command(self, matched: MatchedCommand, phrase: str, source: str) -> CommandOutcome:
+    def _run_command(
+        self, matched: MatchedCommand, phrase: str, source: str, confirmer: Confirmer | None
+    ) -> CommandOutcome:
         """Подставляет слоты в шаги команды и выполняет их."""
         command = matched.command
         try:
@@ -114,6 +132,7 @@ class Pipeline:
             phrase=phrase,
             require_confirm=command.confirm,
             question=f"Выполнить «{matched.text}»?",
+            confirmer=confirmer,
         )
         if run.status is StepStatus.CANCELLED:
             reply: str | None = "Отменено"

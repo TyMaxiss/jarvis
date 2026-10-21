@@ -1,14 +1,14 @@
 """Подтверждение рискованных действий.
 
-На этапе 1 подтверждение вводится в консоли. Голосовое подтверждение (Vosk с грамматикой
-«да/нет») и кнопки в оверлее появятся на следующих этапах и реализуют тот же протокол.
+Фразы, введённые текстом, подтверждаются в консоли, голосовые — голосом (Vosk с
+грамматикой «да/нет», молчание — отмена). Кнопки в оверлее появятся на этапе 4.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 log = logging.getLogger(__name__)
 
@@ -53,3 +53,54 @@ class StaticConfirmer:
     def confirm(self, question: str) -> bool:
         self.questions.append(question)
         return self.answer
+
+
+YES_PHRASES = ("да", "подтверждаю", "конечно", "давай", "выполняй")
+NO_PHRASES = ("нет", "отмена", "не надо", "стоп", "отменить")
+
+
+class VoiceConfirmer:
+    """Подтверждение голосом: ассистент задаёт вопрос и слушает «да» или «нет» (Vosk).
+
+    Молчание в течение timeout секунд означает отмену.
+
+    Args:
+        speech: озвучка (say, wait_idle).
+        source: микрофон.
+        spotter_factory: создаёт распознаватель с грамматикой YES_PHRASES + NO_PHRASES.
+        timeout: сколько секунд ждать ответа.
+    """
+
+    def __init__(
+        self,
+        speech: Any,
+        source: Any,
+        spotter_factory: Callable[[], Any],
+        timeout: float = 5.0,
+        block_ms: int = 32,
+    ) -> None:
+        self._speech = speech
+        self._source = source
+        self._spotter_factory = spotter_factory
+        self._timeout_ms = int(timeout * 1000)
+        self._block_ms = block_ms
+
+    def confirm(self, question: str) -> bool:
+        self._speech.say(question)
+        self._speech.wait_idle(timeout=30)
+        self._source.flush()
+        spotter = self._spotter_factory()
+        heard_ms = 0
+        answer = None
+        while heard_ms < self._timeout_ms and answer is None:
+            block = self._source.read(timeout=0.2)
+            if block is None:
+                heard_ms += 200
+                continue
+            heard_ms += self._block_ms
+            answer = spotter.accept(block)
+        if answer is None:
+            answer = spotter.finish()
+        accepted = answer in YES_PHRASES
+        log.info("Голосовое подтверждение «%s»: %s", question, answer or "тишина")
+        return accepted

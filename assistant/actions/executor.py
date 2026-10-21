@@ -128,6 +128,7 @@ class ActionExecutor:
         phrase: str | None = None,
         require_confirm: bool = False,
         question: str | None = None,
+        confirmer: Confirmer | None = None,
     ) -> RunResult:
         """Выполняет шаги по порядку; при первой ошибке останавливается.
 
@@ -142,6 +143,8 @@ class ActionExecutor:
             phrase: исходная фраза пользователя (для журнала).
             require_confirm: команда сама требует подтверждения (confirm: true в YAML).
             question: текст вопроса; по умолчанию собирается из описаний шагов.
+            confirmer: как спросить подтверждение (голосом или в консоли); по умолчанию —
+                способ, заданный при создании исполнителя.
         """
         context = {"source": source, "command_id": command_id, "phrase": phrase}
         decisions = [self.policy.evaluate(step.action, step.args) for step in planned]
@@ -161,7 +164,7 @@ class ActionExecutor:
             text = question or "Выполнить: " + "; ".join(s.action.description for s in planned)
             if reasons:
                 text += f" ({', '.join(sorted(reasons))})"
-            if not self.confirmer.confirm(text):
+            if not (confirmer or self.confirmer).confirm(text):
                 log.info("Пользователь не подтвердил: %s", text)
                 for step in planned:
                     self._journal(step, StepStatus.CANCELLED, "не подтверждено", 0.0, context)

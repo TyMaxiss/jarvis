@@ -12,6 +12,14 @@ dependencies = [
     "psutil>=7.2",
     "comtypes>=1.4.17; sys_platform == 'win32'",
     "pycaw>=20260927; sys_platform == 'win32'",
+    "numpy>=2.0",
+    "sounddevice>=0.5.6",
+    "onnxruntime>=1.20",
+    "vosk>=0.3.45",
+    "faster-whisper>=1.2.1",
+    "piper-tts>=1.8.0",
+    "pyttsx3>=2.99 ; sys_platform == 'win32'",
+    "keyboard>=0.13.5 ; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

@@ -49,6 +49,39 @@ browser:
   search_url: "https://www.google.com/search?q={query}"
   youtube_search_url: "https://www.youtube.com/results?search_query={query}"
 
+voice:
+  enabled: true                  # false — только ввод текстом в консоли
+  wake_word: true                # активация по имени ассистента (general.name)
+  push_to_talk: true             # активация горячей клавишей
+  push_to_talk_key: ctrl+alt+space
+  push_to_talk_mode: press       # press — нажать и говорить (конец по паузе), hold — говорить, удерживая клавиши
+  stop_key: ctrl+alt+q           # прервать речь ассистента
+  followup_seconds: 5            # сколько секунд после ответа слушать продолжение без имени
+  listen_timeout: 6              # сколько секунд ждать начала фразы после активации
+  min_silence_ms: 700            # пауза, после которой фраза считается законченной
+  max_phrase_seconds: 15
+  vad_threshold: 0.5             # чувствительность детектора речи: меньше — чувствительнее
+  input_device: null             # номер или часть названия микрофона (список: --list-devices)
+  sounds: true                   # короткий сигнал «слушаю»
+  confirm_timeout: 5             # сколько секунд ждать «да» или «нет» при подтверждении
+  vosk_model: models/vosk-model-small-ru-0.22
+
+stt:
+  model: auto                    # auto: large-v3-turbo на видеокарте NVIDIA, small на процессоре;
+                                 # или tiny, base, small, medium, large-v3, large-v3-turbo
+  device: auto                   # auto, cuda или cpu
+  compute_type: auto             # auto: float16 на видеокарте, int8 на процессоре
+  beam_size: 1                   # 1 — быстрее, 5 — точнее
+  download_dir: models/whisper
+  prompt_app_names: 30           # сколько названий программ подсказывать распознавателю
+
+tts:
+  engine: piper                  # piper (офлайн, по умолчанию) или sapi (голоса Windows)
+  piper_voice: models/piper/ru_RU-dmitri-medium.onnx  # ещё есть irina, denis, ruslan
+  sapi_voice: ""                 # часть названия голоса Windows; пусто — первый русский
+  rate: 1.0                      # скорость речи
+  volume: 1.0
+
 logging:
   level: INFO                    # DEBUG, INFO, WARNING или ERROR
   dir: logs

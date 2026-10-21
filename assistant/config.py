@@ -113,6 +113,49 @@ class BrowserConfig(_Section):
     youtube_search_url: str = "https://www.youtube.com/results?search_query={query}"
 
 
+class VoiceConfig(_Section):
+    """Голосовой ввод: микрофон, активация, определение конца фразы."""
+
+    enabled: bool = Field(True, description="false — только ввод текстом в консоли")
+    wake_word: bool = Field(True, description="Активация по имени ассистента (Vosk)")
+    push_to_talk: bool = Field(True, description="Активация горячей клавишей")
+    push_to_talk_key: str = "ctrl+alt+space"
+    push_to_talk_mode: Literal["press", "hold"] = Field(
+        "press", description="press — нажать и говорить (конец по паузе), hold — говорить, удерживая"
+    )
+    stop_key: str = Field("ctrl+alt+q", description="Прервать речь ассистента")
+    followup_seconds: float = Field(5, ge=0, le=60, description="Сколько слушать продолжение без имени")
+    listen_timeout: float = Field(6, ge=1, le=60, description="Сколько ждать начала речи после активации")
+    min_silence_ms: int = Field(700, ge=200, le=3000, description="Пауза, после которой фраза закончена")
+    max_phrase_seconds: float = Field(15, ge=2, le=60)
+    vad_threshold: float = Field(0.5, gt=0, lt=1)
+    input_device: int | str | None = Field(None, description="Номер или часть названия микрофона")
+    sounds: bool = Field(True, description="Короткий сигнал «слушаю»")
+    confirm_timeout: float = Field(5, ge=1, le=30, description="Сколько ждать «да» или «нет»")
+    vosk_model: Path = Path("models/vosk-model-small-ru-0.22")
+
+
+class SttConfig(_Section):
+    """Распознавание речи (faster-whisper)."""
+
+    model: str = Field("auto", description="auto: large-v3-turbo на видеокарте, small на процессоре")
+    device: Literal["auto", "cuda", "cpu"] = "auto"
+    compute_type: str = Field("auto", description="auto: float16 на видеокарте, int8 на процессоре")
+    beam_size: int = Field(1, ge=1, le=10, description="1 — быстрее, 5 — точнее")
+    download_dir: Path = Path("models/whisper")
+    prompt_app_names: int = Field(30, ge=0, le=200, description="Сколько названий программ подсказывать")
+
+
+class TtsConfig(_Section):
+    """Озвучка ответов."""
+
+    engine: Literal["piper", "sapi"] = "piper"
+    piper_voice: Path = Path("models/piper/ru_RU-dmitri-medium.onnx")
+    sapi_voice: str = Field("", description="Часть названия голоса SAPI; пусто — первый русский")
+    rate: float = Field(1.0, ge=0.5, le=2.0, description="Скорость речи")
+    volume: float = Field(1.0, ge=0.1, le=2.0)
+
+
 class LoggingConfig(_Section):
     """Логи и журнал действий."""
 
@@ -130,6 +173,9 @@ class AppConfig(_Section):
     commands: CommandsConfig = Field(default_factory=CommandsConfig)
     apps: AppsConfig = Field(default_factory=AppsConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    stt: SttConfig = Field(default_factory=SttConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     _base_dir: Path = PrivateAttr(default_factory=Path.cwd)

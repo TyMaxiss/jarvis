@@ -12,6 +12,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from ctypes import wintypes
@@ -202,6 +203,26 @@ class TestDesktop:
             user32.DestroyWindow(alpha)
             user32.DestroyWindow(bravo)
             pump(0.1)
+
+    def test_global_hotkeys(self) -> None:
+        from assistant.actions.input import parse_hotkey
+        from assistant.hotkeys import HotkeyManager
+
+        manager = HotkeyManager()
+        pressed, down, up = threading.Event(), threading.Event(), threading.Event()
+        try:
+            manager.add_press("ctrl+alt+f9", pressed.set)
+            manager.add_hold("ctrl+alt+f10", down.set, up.set)
+            press_hotkey("ctrl+alt+f9")
+            assert pressed.wait(3), "нажатие ctrl+alt+f9 не дошло"
+            codes = parse_hotkey("ctrl+alt+f10")
+            winapi.send_inputs([winapi.key_event(vk, up=False) for vk in codes])
+            assert down.wait(3), "удержание ctrl+alt+f10 не началось"
+            assert not up.is_set()
+            winapi.send_inputs([winapi.key_event(vk, up=True) for vk in reversed(codes)])
+            assert up.wait(3), "отпускание ctrl+alt+f10 не дошло"
+        finally:
+            manager.close()
 
     def test_close_app_closes_notepad(self, registry: ActionRegistry) -> None:
         process = subprocess.Popen(["notepad.exe"])

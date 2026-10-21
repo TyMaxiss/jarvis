@@ -1,13 +1,14 @@
-"""Консольный режим для отладки: фразы вводятся текстом вместо голоса."""
+"""Консоль: ввод фраз текстом (для отладки) и вывод того, что происходит с голосом."""
 
 from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TextIO
+from typing import Any, TextIO
 
 from assistant.actions import winapi
 from assistant.actions.apps import AppIndex
@@ -26,26 +27,35 @@ HELP = """\
   :commands       список команд
   :apps [текст]   найденные приложения (можно с фильтром)
   :windows        открытые окна
+  :listen         начать слушать голосовую команду (как горячая клавиша)
   :help           эта справка
   :q              выход"""
 
+_VOICE_MESSAGES = {
+    "listening": "Слушаю…",
+    "holding": "Слушаю, пока клавиши зажаты…",
+    "recognizing": "Распознаю…",
+}
+
 
 class ConsoleSpeaker:
-    """Выводит ответы ассистента в консоль (озвучка появится на этапе 2).
+    """Выводит ответы ассистента в консоль.
 
-    Во время обработки фразы ответы можно придержать (deferred), чтобы напечатать их
-    после подробностей о выполненных шагах.
+    Во время обработки введённой фразы ответы можно придержать (deferred), чтобы
+    напечатать их после подробностей о шагах. Придерживаются только ответы того потока,
+    который вызвал deferred(): голосовой поток печатает сразу.
     """
 
     def __init__(self, name: str, out: TextIO = sys.stdout) -> None:
         self._name = name.capitalize()
         self._out = out
-        self._held: list[str] | None = None
+        self._local = threading.local()
 
     def say(self, text: str) -> None:
         line = f"  {self._name}: {text}"
-        if self._held is not None:
-            self._held.append(line)
+        held: list[str] | None = getattr(self._local, "held", None)
+        if held is not None:
+            held.append(line)
             return
         self._out.write(line + "\n")
         self._out.flush()
@@ -53,11 +63,11 @@ class ConsoleSpeaker:
     @contextmanager
     def deferred(self) -> Iterator[None]:
         """Копит ответы внутри блока и печатает их при выходе."""
-        self._held = []
+        self._local.held = []
         try:
             yield
         finally:
-            held, self._held = self._held, None
+            held, self._local.held = self._local.held, None
             for line in held:
                 self._out.write(line + "\n")
             self._out.flush()
@@ -75,6 +85,7 @@ class ConsoleApp:
         window_provider: активное окно (для :check).
         ask: функция чтения строки (по умолчанию input).
         out: куда писать.
+        on_listen: что сделать по команде :listen (запустить прослушивание), если голос включён.
     """
 
     def __init__(
@@ -87,6 +98,7 @@ class ConsoleApp:
         window_provider: Callable[[], winapi.WindowInfo],
         ask: Callable[[str], str] = input,
         out: TextIO = sys.stdout,
+        on_listen: Callable[[], None] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._speaker = speaker
@@ -96,6 +108,7 @@ class ConsoleApp:
         self._window_provider = window_provider
         self._ask = ask
         self._out = out
+        self.on_listen = on_listen
         self._delay = 0.0
 
     def run(self) -> None:
@@ -156,6 +169,11 @@ class ConsoleApp:
             for entry in entries[:100]:
                 self._write(f"  {entry.name}  [{entry.kind}]")
             self._write(f"  Всего: {len(entries)}")
+        elif name == "listen":
+            if self.on_listen is None:
+                self._write("  Голос выключен (запуск с --text или нет моделей)")
+            else:
+                self.on_listen()
         elif name == "windows":
             if not winapi.IS_WINDOWS:
                 self._write("  Доступно только в Windows")
@@ -165,6 +183,19 @@ class ConsoleApp:
         else:
             self._write(f"  Неизвестная служебная команда :{name}. Список — :help")
         return True
+
+    # --- Сообщения голосового цикла ---------------------------------------------------
+
+    def voice_status(self, state: str, detail: str = "") -> None:
+        """Показывает состояние голоса: «Слушаю…», распознанный текст."""
+        if state == "recognized":
+            self._write(f"  [голос] Распознано: «{detail}»")
+        elif state in _VOICE_MESSAGES:
+            self._write(f"  [голос] {_VOICE_MESSAGES[state]}")
+
+    def voice_result(self, result: Any) -> None:
+        """Показывает, что выполнено по голосовой команде."""
+        self._print_result(result)
 
     def _print_match(self, match: MatchResult) -> None:
         self._write(f"  Нормализовано: «{match.normalized}»")
