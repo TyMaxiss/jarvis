@@ -5,10 +5,18 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
@@ -162,6 +170,76 @@ class TtsConfig(_Section):
     volume: float = Field(1.0, ge=0.1, le=2.0)
 
 
+class LlmProfile(_Section):
+    """Провайдер нейросети с OpenAI-совместимым API."""
+
+    base_url: str
+    model: str
+    api_key_env: str = Field("", description="Переменная в .env с ключом API; пусто — ключ не нужен")
+    vision: bool = Field(False, description="Модель принимает картинки (снимок экрана — этап 5)")
+    extra_body: dict[str, Any] = Field(
+        default_factory=dict, description="Дополнительные поля запроса, например отключение рассуждений"
+    )
+
+
+# Профили из ТЗ. Пользовательские настройки профиля дополняют эти, а не заменяют целиком.
+DEFAULT_LLM_PROFILES: dict[str, dict[str, Any]] = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "vision": True,
+        # Для команд нужен быстрый режим без рассуждений (api-docs.deepseek.com, Thinking Mode).
+        "extra_body": {"thinking": {"type": "disabled"}},
+    },
+    "opencode_zen": {
+        "base_url": "https://opencode.ai/zen/v1",
+        "model": "deepseek-v4-flash-free",
+        "api_key_env": "OPENCODE_API_KEY",
+    },
+    "ollama": {"base_url": "http://localhost:11434/v1", "model": "qwen3:8b"},
+}
+
+
+class LlmConfig(_Section):
+    """Нейросеть: профиль провайдера и лимиты агента."""
+
+    enabled: bool = Field(True, description="false — фразы, которых нет в командах, не обрабатываются")
+    profile: str = Field("opencode_zen", description="Какой профиль из profiles использовать")
+    profiles: dict[str, LlmProfile] = Field(
+        default_factory=lambda: {name: LlmProfile(**data) for name, data in DEFAULT_LLM_PROFILES.items()}
+    )
+    max_steps: int = Field(15, ge=1, le=50, description="Сколько раз агент может обратиться к нейросети")
+    timeout: float = Field(120, ge=10, le=600, description="Общий лимит на одну задачу, секунды")
+    request_timeout: float = Field(30, ge=5, le=300, description="Лимит на один запрос, секунды")
+    retries: int = Field(2, ge=0, le=5, description="Повторы при ошибках сети, таймаутах и 429")
+    history: int = Field(10, ge=0, le=50, description="Сколько последних обменов помнить")
+    reset_after: float = Field(300, ge=0, description="Через сколько секунд тишины забыть разговор")
+    temperature: float = Field(0.3, ge=0, le=2)
+
+    @field_validator("profiles", mode="before")
+    @classmethod
+    def _merge_default_profiles(cls, value: Any) -> Any:
+        """Встроенные профили + настройки пользователя поверх них."""
+        if value is not None and not isinstance(value, dict):
+            return value
+        merged = {name: dict(data) for name, data in DEFAULT_LLM_PROFILES.items()}
+        for name, data in (value or {}).items():
+            merged[name] = {**merged.get(name, {}), **(data or {})}
+        return merged
+
+    @model_validator(mode="after")
+    def _profile_exists(self) -> LlmConfig:
+        if self.profile not in self.profiles:
+            raise ValueError(f"профиль «{self.profile}» не найден; есть: {', '.join(self.profiles)}")
+        return self
+
+    @property
+    def active(self) -> LlmProfile:
+        """Выбранный профиль."""
+        return self.profiles[self.profile]
+
+
 class LoggingConfig(_Section):
     """Логи и журнал действий."""
 
@@ -182,6 +260,7 @@ class AppConfig(_Section):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     stt: SttConfig = Field(default_factory=SttConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
+    llm: LlmConfig = Field(default_factory=LlmConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     _base_dir: Path = PrivateAttr(default_factory=Path.cwd)
