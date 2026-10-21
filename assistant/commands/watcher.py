@@ -66,6 +66,10 @@ class CommandWatcher:
             log.exception("Не удалось перечитать команды")
         return True
 
+    def acknowledge(self) -> None:
+        """Файлы изменила сама программа (редактор команд) и уже перечитала — не реагировать."""
+        self._known, self._pending = snapshot(self._directory), None
+
     def start(self) -> None:
         """Запускает наблюдение в фоновом потоке."""
         self._thread = threading.Thread(target=self._run, name="commands-watch", daemon=True)

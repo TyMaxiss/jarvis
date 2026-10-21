@@ -240,6 +240,12 @@ class Matcher:
             reverse=True,
         )
 
+    def with_commands(self, commands: Iterable[Command]) -> Matcher:
+        """Такой же матчер, но с другим набором команд (проверка фразы в редакторе)."""
+        other = Matcher(self._normalizer, self._config, self._debug)
+        other.set_commands(commands)
+        return other
+
     def set_commands(self, commands: Iterable[Command]) -> None:
         """Подготавливает фразы команд (вызывается при загрузке и перезагрузке)."""
         phrases = []

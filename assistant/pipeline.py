@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from assistant.actions.executor import ActionExecutor, RunResult, StepResult, StepStatus
 from assistant.actions.registry import ArgsError, UnknownActionError
@@ -119,6 +119,11 @@ class Pipeline:
         self.on_command_step: Callable[[int, int, StepResult], None] | None = None
 
     @property
+    def matcher(self) -> Matcher:
+        """Матчер команд (редактор проверяет на его копии, как сработает фраза)."""
+        return self._matcher
+
+    @property
     def agent(self) -> Agent | None:
         """Агент нейросети; None — нейросеть выключена."""
         return self._agent
@@ -160,14 +165,21 @@ class Pipeline:
         return result
 
     def run_command(
-        self, command: Command, source: str = "local", confirmer: Confirmer | None = None
+        self,
+        command: Command,
+        source: str = "local",
+        confirmer: Confirmer | None = None,
+        slots: dict[str, Any] | None = None,
+        phrase: str | None = None,
     ) -> PipelineResult:
-        """Выполняет команду напрямую, без поиска по фразе: сценарий из интерфейса или по горячей клавише.
+        """Выполняет команду напрямую, без поиска по фразе: сценарий, горячая клавиша, редактор.
 
-        Слотов у такой команды нет: значения взять неоткуда.
+        Args:
+            slots: значения слотов (редактор берёт их из проверочной фразы).
+            phrase: что записать фразой; по умолчанию — первая фраза команды.
         """
-        phrase = command.phrases[0] if command.phrases else command.id
-        matched = MatchedCommand(command, {}, 100.0, phrase, phrase)
+        phrase = phrase or (command.phrases[0] if command.phrases else command.id)
+        matched = MatchedCommand(command, dict(slots or {}), 100.0, phrase, phrase)
         request = new_request()
         with self._lock:
             started = time.perf_counter()

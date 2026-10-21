@@ -79,6 +79,20 @@ class WhenCondition(BaseModel):
         return True
 
 
+def parse_steps(value: Any) -> Any:
+    """Шаги из YAML: `- hotkey: {keys: "win+d"}` → {"action": "hotkey", "args": {...}}."""
+    if not isinstance(value, list):
+        return value
+    steps = []
+    for item in value:
+        if isinstance(item, Mapping) and len(item) == 1 and "action" not in item:
+            [(name, args)] = item.items()
+            steps.append({"action": name, "args": {} if args is None else args})
+        else:
+            steps.append(item)
+    return steps
+
+
 class Step(BaseModel):
     """Шаг команды: имя действия и аргументы (могут содержать {слоты})."""
 
@@ -106,17 +120,7 @@ class Command(BaseModel):
     @field_validator("steps", mode="before")
     @classmethod
     def _parse_steps(cls, value: Any) -> Any:
-        """Превращает `- hotkey: {keys: "win+d"}` в Step(action="hotkey", args={...})."""
-        if not isinstance(value, list):
-            return value
-        steps = []
-        for item in value:
-            if isinstance(item, Mapping) and len(item) == 1 and "action" not in item:
-                [(name, args)] = item.items()
-                steps.append({"action": name, "args": {} if args is None else args})
-            else:
-                steps.append(item)
-        return steps
+        return parse_steps(value)
 
     @property
     def source(self) -> str:
@@ -181,12 +185,12 @@ class LoadResult:
     issues: list[LoadIssue] = field(default_factory=list)
 
 
-def _to_plain(node: Any) -> Any:
+def to_plain(node: Any) -> Any:
     """Превращает узлы ruamel (CommentedMap, ScalarString…) в обычные dict/list/str."""
     if isinstance(node, Mapping):
-        return {str(key): _to_plain(value) for key, value in node.items()}
+        return {str(key): to_plain(value) for key, value in node.items()}
     if isinstance(node, list):
-        return [_to_plain(item) for item in node]
+        return [to_plain(item) for item in node]
     if isinstance(node, str):
         return str(node)
     if isinstance(node, bool):
@@ -198,7 +202,7 @@ def _to_plain(node: Any) -> Any:
     return node
 
 
-def _check_command(command: Command, registry: ActionRegistry) -> list[str]:
+def check_command(command: Command, registry: ActionRegistry) -> list[str]:
     """Проверяет шаги команды по реестру. Возвращает список ошибок."""
     errors = []
     used = command.placeholders()
@@ -241,7 +245,7 @@ def load_file(path: Path, registry: ActionRegistry) -> LoadResult:
         line = data.lc.item(index)[0] + 1 if hasattr(data, "lc") else 0
         location = f"{path.name}:{line}"
         try:
-            command = Command.model_validate(_to_plain(item))
+            command = Command.model_validate(to_plain(item))
         except ValidationError as exc:
             details = "; ".join(
                 f"{'.'.join(str(p) for p in err['loc']) or 'команда'}: {err['msg']}" for err in exc.errors()
@@ -249,7 +253,7 @@ def load_file(path: Path, registry: ActionRegistry) -> LoadResult:
             result.issues.append(LoadIssue(location, details))
             continue
         command._source, command._line = path.name, line
-        errors = _check_command(command, registry)
+        errors = check_command(command, registry)
         if errors:
             result.issues.append(LoadIssue(f"{location} ({command.id})", "; ".join(errors)))
             continue

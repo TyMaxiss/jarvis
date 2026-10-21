@@ -132,6 +132,34 @@ class Api:
         self._controller.open_path(str(kind))
 
     @_logged
+    def commands_tree(self) -> dict[str, Any]:
+        return self._controller.commands_tree()
+
+    @_logged
+    def actions(self) -> list[dict[str, Any]]:
+        return self._controller.actions()
+
+    @_logged
+    def command_get(self, file: str, command_id: str) -> dict[str, Any]:
+        return self._controller.command_get(str(file), str(command_id))
+
+    @_logged
+    def command_save(self, file: str, original_id: str, form: dict[str, Any]) -> dict[str, Any]:
+        return self._controller.command_save(str(file), str(original_id), form)
+
+    @_logged
+    def command_delete(self, file: str, command_id: str) -> dict[str, Any]:
+        return self._controller.command_delete(str(file), str(command_id))
+
+    @_logged
+    def command_test(self, text: str, form: dict[str, Any] | None, original_id: str) -> dict[str, Any]:
+        return self._controller.command_test(str(text), form, str(original_id))
+
+    @_logged
+    def command_run(self, form: dict[str, Any], phrase: str) -> dict[str, Any]:
+        return self._controller.command_run(form, str(phrase))
+
+    @_logged
     def history(self, query: dict[str, Any]) -> dict[str, Any]:
         return self._controller.history(query)
 

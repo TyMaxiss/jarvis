@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from assistant import __version__
 from assistant.actions.registry import ActionError
+from assistant.commands.editor import CommandEditor, EditorError, action_catalog
 from assistant.commands.loader import Command, CommandStore
 from assistant.config import AppConfig, LlmConfig, LlmProfile
 from assistant.history import FILTERS, PAGE, History
@@ -175,6 +176,8 @@ class UiController:
         self.on_state: Callable[[dict[str, Any]], None] | None = None
         self.on_chat_key: Callable[[str], None] | None = None
         self.on_commands: Callable[[], None] | None = None
+        self.on_commands_written: Callable[[], None] | None = None  # редактор сам записал паки
+        self.editor = CommandEditor(commands, executor.registry, lambda: pipeline.matcher)
         self.overlay = OverlayController(
             show=lambda: self._host_call("show", "overlay"),
             hide=lambda: self._host_call("hide", "overlay"),
@@ -360,16 +363,86 @@ class UiController:
     def confirm_answer(self, question_id: str, yes: bool) -> None:
         self.confirmer.answer(question_id, yes)
 
-    def reload_commands(self) -> dict[str, Any]:
-        """Перечитывает команды (кнопка, трей или изменение файлов)."""
+    def reload_commands(self, announce: bool = True) -> dict[str, Any]:
+        """Перечитывает команды (кнопка, трей или изменение файлов).
+
+        announce=False — после сохранения в редакторе: он сам показывает итог.
+        """
         result = self.commands.reload()
         self.pipeline.reload_commands(self.commands.commands)
         issues = [str(issue) for issue in result.issues]
         if self.on_commands is not None:
             self.on_commands()
-        self.bus.emit("commands", {"count": len(result.commands), "issues": issues})
+        if announce:
+            self.bus.emit("commands", {"count": len(result.commands), "issues": issues})
         self.push_state()
         return {"count": len(result.commands), "issues": issues}
+
+    # --- Редактор команд -------------------------------------------------------------
+
+    def commands_tree(self) -> dict[str, Any]:
+        """Раздел «Команды»: паки с командами и какой из них свой."""
+        return {"packs": self.editor.tree(), "user_file": self.editor.user_file}
+
+    def actions(self) -> list[dict[str, Any]]:
+        """Действия для шагов команды: описание, группа и JSON-схема параметров."""
+        return action_catalog(self.executor.registry)
+
+    def command_get(self, file: str, command_id: str) -> dict[str, Any]:
+        """Команда для формы редактора."""
+        try:
+            return {"ok": True, "errors": [], **self.editor.command(file, command_id)}
+        except EditorError as exc:
+            return {"ok": False, "errors": exc.errors}
+
+    def command_save(self, file: str, original_id: str, form: Any) -> dict[str, Any]:
+        """Сохраняет команду (своя — на месте, встроенная — копией в свой пак)."""
+        try:
+            command_id = self.editor.save(file, original_id, form if isinstance(form, Mapping) else {})
+        except EditorError as exc:
+            return {"ok": False, "errors": exc.errors, "id": original_id, **self.commands_tree()}
+        self._commands_written()
+        return {"ok": True, "errors": [], "id": command_id, **self.commands_tree()}
+
+    def command_delete(self, file: str, command_id: str) -> dict[str, Any]:
+        """Удаляет свою команду."""
+        try:
+            self.editor.delete(file, command_id)
+        except EditorError as exc:
+            return {"ok": False, "errors": exc.errors, **self.commands_tree()}
+        self._commands_written()
+        return {"ok": True, "errors": [], **self.commands_tree()}
+
+    def command_test(self, text: str, form: Any, original_id: str) -> dict[str, Any]:
+        """«Проверить фразу»: какая команда сработает, с какой оценкой и слотами."""
+        draft = form if isinstance(form, Mapping) else None
+        return self.editor.test_phrase(" ".join(text.split())[:500], draft, original_id)
+
+    def command_run(self, form: Any, phrase: str) -> dict[str, Any]:
+        """«Выполнить»: черновик команды выполняется сразу, ход — как у обычной команды."""
+        try:
+            command, slots, text = self.editor.prepare_run(form if isinstance(form, Mapping) else {}, phrase)
+        except EditorError as exc:
+            return {"ok": False, "errors": exc.errors}
+        self._background(self._run_draft, command, slots, text, name="ui-draft")
+        return {"ok": True, "errors": []}
+
+    def _run_draft(self, command: Command, slots: dict[str, Any], phrase: str) -> None:
+        self.activity.begin(phrase, "text")
+        try:
+            result = self.pipeline.run_command(
+                command, "text", self.confirmer.for_source("text"), slots, phrase
+            )
+        except Exception:
+            log.exception("Ошибка в черновике команды %s", command.id)
+            self.activity.failed(phrase, "text", "Ошибка — подробности в логе")
+            return
+        self.activity.finish(result, "text")
+
+    def _commands_written(self) -> None:
+        if self.on_commands_written is not None:
+            self.on_commands_written()
+        self.reload_commands(announce=False)
 
     # --- История ---------------------------------------------------------------------
 

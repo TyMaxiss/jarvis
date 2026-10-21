@@ -94,6 +94,7 @@ class UiApp:
         self._bind_chat_key(config.ui.quick_chat_key)
         self._bind_command_keys()
         self._watcher = CommandWatcher(controller.commands.directory, controller.reload_commands)
+        controller.on_commands_written = self._watcher.acknowledge
         self._watcher.start()
         threading.Thread(target=controller.pump_levels, name="mic-level", daemon=True).start()
         try:

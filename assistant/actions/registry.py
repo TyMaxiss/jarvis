@@ -158,16 +158,18 @@ class Action:
         kwargs = {field: getattr(args, field) for field in type(args).model_fields}
         return str(self.func(**kwargs))
 
+    def parameters_schema(self) -> dict[str, Any]:
+        """JSON-схема параметров без лишнего (для нейросети и для формы шага в редакторе)."""
+        return _clean_schema(self.params.model_json_schema())
+
     def tool_schema(self) -> dict[str, Any]:
         """Описание действия в формате tools для OpenAI-совместимого API."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": _clean_schema(self.params.model_json_schema()),
-            },
+        function = {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters_schema(),
         }
+        return {"type": "function", "function": function}
 
 
 class ActionRegistry:

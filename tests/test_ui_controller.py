@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 from pathlib import Path
@@ -371,3 +372,40 @@ def test_new_key_for_same_profile_recreates_client(world: SimpleNamespace) -> No
     assert len(agent.reconfigured) == 1
     world.controller.llm_save({**request, "key": ""})
     assert len(agent.reconfigured) == 1  # без нового ключа пересоздавать нечего
+
+
+def test_editor_save_reloads_quietly_and_tells_watcher(world: SimpleNamespace) -> None:
+    written: list[bool] = []
+    world.controller.on_commands_written = lambda: written.append(True)
+    steps = [{"action": "get_time", "args": {}}]
+    form = {"id": "tea", "phrases": ["завари чай"], "reply": "Ставлю", "hotkey": "", "steps": steps}
+    result = world.controller.command_save("", "", form)
+    assert result["ok"] and result["id"] == "tea" and written == [True]
+    mine = next(pack for pack in result["packs"] if pack["user"])
+    assert [c["id"] for c in mine["commands"]] == ["tea"]
+    assert world.pipeline.handle_text("завари чай").reply == "Ставлю"  # матчер уже знает команду
+    assert not world.bus.of("commands")  # без всплывающего «Команды обновлены»
+    assert world.controller.command_delete("my.yaml", "tea")["ok"]
+    assert world.controller.command_get("my.yaml", "tea") == {
+        "ok": False,
+        "errors": ["В my.yaml нет команды «tea»"],
+    }
+
+
+def test_editor_reports_errors_and_runs_draft_with_slots(world: SimpleNamespace) -> None:
+    bad = world.controller.command_save("", "", {"id": "x", "phrases": ["икс"], "steps": []})
+    assert not bad["ok"] and bad["errors"] == ["Добавьте хотя бы одно действие"]
+    draft = {"id": "loud", "phrases": ["уровень звука {percent}"], "slots": {"percent": "int"},
+             "steps": [{"action": "volume_set", "args": {"percent": "{percent}"}}]}  # fmt: skip
+    test = world.controller.command_test("уровень звука сорок", draft, "")
+    assert test["matches"][0]["slots"] == {"percent": 40} and test["matches"][0]["draft"]
+    assert world.controller.command_run(draft, "уровень звука сорок") == {"ok": True, "errors": []}
+    assert wait_until(lambda: world.controller.activity.recent)
+    assert world.controller.activity.recent[0]["phrase"] == "уровень звука сорок"
+    entries = [
+        json.loads(line) for line in world.executor.journal.path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[0]["action"] == "volume_set" and entries[0]["args"] == {"percent": 40}
+    assert not world.controller.command_run(draft, "")["ok"]  # слотам неоткуда взять значения
+    names = [action["name"] for action in world.controller.actions()]
+    assert "open_app" in names and "volume_set" in names
