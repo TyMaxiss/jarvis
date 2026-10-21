@@ -8,5 +8,3 @@
 #     - open_app: {name: "Telegram"}
 #     - open_app: {name: "Visual Studio Code"}
 #     - volume_set: {percent: 30}
-
-[]

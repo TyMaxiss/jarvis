@@ -30,6 +30,17 @@ def test_builtin_packs_load_without_issues(registry: ActionRegistry) -> None:
     assert {"minimize_all", "volume_set", "open_youtube", "youtube_pause"} <= ids
 
 
+def test_user_pack_example_turns_on_by_removing_hashes(tmp_path: Path, registry: ActionRegistry) -> None:
+    # В my.yaml сказано «уберите # чтобы включить» — после этого файл должен читаться.
+    text = (ROOT / "commands" / "my.yaml").read_text(encoding="utf-8")
+    uncommented = "\n".join(
+        line[2:] if line.startswith(("# -", "#  ")) else line for line in text.splitlines()
+    )
+    result = load_file(write(tmp_path / "my.yaml", uncommented), registry)
+    assert result.issues == []
+    assert [c.id for c in result.commands] == ["work_mode"]
+
+
 def test_spec_example_commands(tmp_path: Path, registry: ActionRegistry) -> None:
     pack = write(
         tmp_path / "spec.yaml",
