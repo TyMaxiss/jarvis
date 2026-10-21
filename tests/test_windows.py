@@ -235,8 +235,16 @@ class TestDesktop:
             manager.add_press("ctrl+alt+f9", pressed.set)
             manager.add_hold("ctrl+alt+f10", down.set, up.set)
             wait_for_keyboard_hook()
-            press_hotkey("ctrl+alt+f9")
-            assert pressed.wait(3), "нажатие ctrl+alt+f9 не дошло"
+            # Клавиши держим, пока библиотека не увидит нажатие. Её поток обработки сверяет
+            # сочетание с клавишами, нажатыми в момент обработки (keyboard/__init__.py,
+            # pre_process_event), а SendInput отпускает их раньше, чем он успевает. Человек
+            # держит клавиши десятки миллисекунд, поэтому в программе этой гонки нет.
+            codes = parse_hotkey("ctrl+alt+f9")
+            winapi.send_inputs([winapi.key_event(vk, up=False) for vk in codes])
+            try:
+                assert pressed.wait(3), "нажатие ctrl+alt+f9 не дошло"
+            finally:
+                winapi.send_inputs([winapi.key_event(vk, up=True) for vk in reversed(codes)])
             codes = parse_hotkey("ctrl+alt+f10")
             winapi.send_inputs([winapi.key_event(vk, up=False) for vk in codes])
             assert down.wait(3), "удержание ctrl+alt+f10 не началось"
