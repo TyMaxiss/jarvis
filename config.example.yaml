@@ -105,7 +105,7 @@ llm:
       base_url: https://api.deepseek.com
       model: deepseek-flash
       api_key_env: DEEPSEEK_API_KEY        # в какой переменной .env лежит ключ
-      vision: true
+      vision: true                         # понимает картинки: describe_screen прикладывает снимок экрана
       temperature: 0.3
       extra_body: {thinking: {type: disabled}}   # быстрый режим без рассуждений
     openai:
@@ -126,7 +126,7 @@ llm:
     ollama:                                # локально, без интернета и без ключа
       title: Ollama (без интернета)
       base_url: http://localhost:11434/v1
-      model: qwen3:8b
+      model: qwen3:8b                      # с картинками — например qwen2.5vl, и тогда vision: true
       temperature: 0.3
       extra_body: {reasoning_effort: none}  # без «размышлений» — быстрее
     opencode_zen:
