@@ -32,6 +32,7 @@ _KNOWN_FOLDER_IDS = {
     "pictures": "33E28130-4E1E-4676-835A-98395C3BC3BB",
     "music": "4BD8D571-6D19-48D3-BE97-422220080E43",
     "videos": "18989B1D-99B5-455B-841C-AB7C74E4DDFC",
+    "startup": "B97D20BB-F46A-4C97-BA10-5E3608430854",  # «Автозагрузка» (shell:startup)
 }
 _FALLBACK_NAMES = {
     "desktop": "Desktop",
@@ -40,6 +41,7 @@ _FALLBACK_NAMES = {
     "pictures": "Pictures",
     "music": "Music",
     "videos": "Videos",
+    "startup": "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
 }
 FOLDER_ALIASES = {
     "рабочий стол": "desktop", "desktop": "desktop",
@@ -63,7 +65,7 @@ class _GUID(ctypes.Structure):
 
 
 def known_folder(key: str) -> Path:
-    """Путь известной папки: desktop, documents, downloads, pictures, music, videos или home."""
+    """Путь известной папки: desktop, documents, downloads, pictures, music, videos, startup или home."""
     home = Path.home()
     if key == "home":
         return home

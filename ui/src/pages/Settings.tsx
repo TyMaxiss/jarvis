@@ -317,6 +317,15 @@ export function SettingsPage() {
         <Field label="Оверлей" hint="Плашка внизу экрана: что услышал и что делает">
           <Toggle label="Оверлей" checked={ui.overlay} onChange={(overlay) => update('ui', { overlay })} />
         </Field>
+        {general.autostart !== null && (
+          <Field label="Запускать вместе с Windows" hint="Сразу в трей; ярлык — в папке «Автозагрузка»">
+            <Toggle
+              label="Запускать вместе с Windows"
+              checked={general.autostart}
+              onChange={(autostart) => update('general', { autostart })}
+            />
+          </Field>
+        )}
       </Card>
 
       <Card>

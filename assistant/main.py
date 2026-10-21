@@ -26,10 +26,12 @@ from assistant.actions.executor import ActionExecutor
 from assistant.actions.registry import ActionRegistry
 from assistant.actions.screen import Screen
 from assistant.audio.sounds import SOUND_RATE, alarm_chime
+from assistant.autostart import AUTOSTART_ARG, Autostart
 from assistant.commands.loader import CommandStore, LoadResult
 from assistant.commands.watcher import CommandWatcher
 from assistant.config import ENV_FILE, TIMERS_FILE, AppConfig, ConfigError, LlmConfig, load_config
 from assistant.console import ConsoleApp, ConsoleSpeaker
+from assistant.instance import RESTART_ENV, RESTART_WAIT, SingleInstance
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent
 from assistant.llm.client import LlmError, resolve_api_key
@@ -60,6 +62,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--console", action="store_true", help="консольный режим вместо окон")
     parser.add_argument("--download-models", action="store_true", help="скачать модели Vosk, Piper, Whisper")
     parser.add_argument("--list-devices", action="store_true", help="показать микрофоны и выйти")
+    parser.add_argument(
+        AUTOSTART_ARG, action="store_true", help="запуск вместе с Windows: сразу свернуться в трей"
+    )
     return parser.parse_args(argv)
 
 
@@ -447,10 +452,13 @@ def ui_problem() -> str:
 
 
 def relaunch(argv: list[str] | None) -> None:
-    """Запускает ассистента заново с теми же аргументами (кнопка «Перезапустить»)."""
+    """Запускает ассистента заново с теми же аргументами (кнопка «Перезапустить»).
+
+    Новый экземпляр ждёт, пока этот закроется (RESTART_ENV), а не уходит как второй.
+    """
     args = sys.argv[1:] if argv is None else argv
     log.info("Перезапуск")
-    subprocess.Popen([sys.executable, "-m", "assistant", *args])
+    subprocess.Popen([sys.executable, "-m", "assistant", *args], env={**os.environ, RESTART_ENV: "1"})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -495,17 +503,27 @@ def main(argv: list[str] | None = None) -> int:
 
         return 0 if download_all(config, out) else 1
 
-    if config.ui.enabled and not args.console and sys.platform == "win32":
-        problem = ui_problem()
-        if not problem:
-            return run_ui(config, args, argv, masker, dry_run, debug, started)
-        out.write(f"! Окна недоступны: {problem}. Работаю в консоли.\n")
-    return run_console(config, args, out, masker, dry_run, debug, started)
+    instance = SingleInstance()
+    if not instance.acquire(RESTART_WAIT if os.environ.pop(RESTART_ENV, "") else 0.0):
+        # Два экземпляра слушали бы один микрофон и отвечали бы хором.
+        shown = instance.notify()
+        log.warning("Ассистент уже запущен — второй экземпляр не запускается")
+        out.write(f"Ассистент уже запущен{': показываю его окно' if shown else ''}. Второй не запускаю.\n")
+        return 0
+    try:
+        if config.ui.enabled and not args.console and sys.platform == "win32":
+            problem = ui_problem()
+            if not problem:
+                return run_ui(config, args, argv, masker, dry_run, debug, started, instance)
+            out.write(f"! Окна недоступны: {problem}. Работаю в консоли.\n")
+        return run_console(config, args, out, masker, dry_run, debug, started, instance)
+    finally:
+        instance.release()
 
 
 def run_console(
     config: AppConfig, args: argparse.Namespace, out: Any, masker: SecretMasker, dry_run: bool, debug: bool,
-    started: float,
+    started: float, instance: SingleInstance | None = None,
 ) -> int:  # fmt: skip
     """Консольный режим: фразы вводятся текстом, голос — как в окнах."""
     voice_wanted = config.voice.enabled and not args.text
@@ -559,6 +577,8 @@ def run_console(
 
     core.alarms.on_fire = alarm
     core.alarms.start()
+    if instance is not None:
+        instance.listen(lambda: out.write("! Ассистент уже работает здесь, в консоли.\n"))
     watcher = CommandWatcher(core.store.directory, reload_commands)
     watcher.start()
     try:
@@ -576,7 +596,7 @@ def run_console(
 
 def run_ui(
     config: AppConfig, args: argparse.Namespace, argv: list[str] | None, masker: SecretMasker, dry_run: bool,
-    debug: bool, started: float,
+    debug: bool, started: float, instance: SingleInstance | None = None,
 ) -> int:  # fmt: skip
     """Режим с окнами: главное окно, оверлей, быстрый чат и значок в трее."""
     from assistant.actions.volume import VolumeController
@@ -603,7 +623,8 @@ def run_ui(
         number, total, step.action, step.text, step.ok
     )
     hotkeys_paused = threading.Event()
-    store = SettingsStore(config.resolve(args.config.name), config.resolve(ENV_FILE), on_key=masker.add)
+    config_path = config.resolve(args.config.name)
+    store = SettingsStore(config_path, config.resolve(ENV_FILE), on_key=masker.add)
     controller = UiController(
         config=config,
         store=store,
@@ -621,6 +642,7 @@ def run_ui(
         force_dry_run=args.dry_run,
         hotkeys_paused=hotkeys_paused,
         alarms=core.alarms,
+        autostart=Autostart(config_path),
     )
     controller.startup_issues = [str(issue) for issue in core.loaded.issues]
     confirmer.on_change = controller.overlay.confirming
@@ -647,7 +669,10 @@ def run_ui(
         voice_problem=problem,
         debug=debug,
         dev_url=os.environ.get("JARVIS_UI_URL"),
+        start_hidden=config.ui.start_minimized or args.autostart,
     )
+    if instance is not None:
+        instance.listen(controller.show_main)
     log.info(
         "Окна готовы к запуску за %.1f с: действий %d, команд %d",
         time.perf_counter() - started, len(core.registry), len(core.store.commands),

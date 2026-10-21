@@ -49,6 +49,7 @@ class UiApp:
         voice_problem: почему голоса нет, если voice_starter не задан.
         debug: инструменты разработчика в окнах (F12).
         dev_url: адрес сервера разработки Vite вместо собранного ui/dist.
+        start_hidden: сразу в трей, без главного окна (автозапуск или ui.start_minimized).
     """
 
     def __init__(
@@ -59,12 +60,14 @@ class UiApp:
         voice_problem: str = "",
         debug: bool = False,
         dev_url: str | None = None,
+        start_hidden: bool = False,
     ) -> None:
         self._controller = controller
         self._voice_starter = voice_starter
         self._voice_problem = voice_problem
         self._debug = debug
         self._dev_url = dev_url
+        self._start_hidden = start_hidden
         self._tray: Tray | None = None
         self._chat_key: Any = None
         self._command_keys: Any = None
@@ -82,7 +85,7 @@ class UiApp:
         webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
         apis = {name: Api(controller, name) for name in WINDOWS}
         urls = ui_urls(config.ui.theme, config.ui.accent, self._dev_url)
-        windows = Windows(webview, urls, apis, config.ui.theme, config.ui.start_minimized)
+        windows = Windows(webview, urls, apis, config.ui.theme, self._start_hidden)
         controller.host = windows
         controller.voice_problem = self._voice_problem
         controller.voice_loading = self._voice_starter is not None

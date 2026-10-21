@@ -258,7 +258,7 @@ function makeState(): AppState {
 
 function makeSettings(state: AppState): Settings {
   return {
-    general: { name: 'джарвис', dry_run: state.dry_run },
+    general: { name: 'джарвис', dry_run: state.dry_run, autostart: false },
     voice: {
       enabled: true,
       wake_word: true,

@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from assistant import __version__
 from assistant.actions.registry import ActionError
 from assistant.audio.sounds import SOUND_RATE, alarm_chime
+from assistant.autostart import Autostart
 from assistant.commands.editor import CommandEditor, EditorError, action_catalog
 from assistant.commands.loader import Command, CommandStore
 from assistant.config import AppConfig, LlmConfig, LlmProfile
@@ -125,6 +126,7 @@ class UiController:
         force_dry_run: dry-run включён аргументом --dry-run и из настроек не выключается.
         hotkeys_paused: пока установлено, глобальные сочетания не срабатывают.
         alarms: таймеры и напоминания (их запускает start_alarms, когда окна готовы).
+        autostart: ярлык автозапуска (переключатель в настройках); None — переключателя нет.
     """
 
     def __init__(
@@ -146,6 +148,7 @@ class UiController:
         force_dry_run: bool = False,
         hotkeys_paused: threading.Event | None = None,
         alarms: Alarms | None = None,
+        autostart: Autostart | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -164,6 +167,7 @@ class UiController:
         self._force_dry_run = force_dry_run
         self.hotkeys_paused = hotkeys_paused or threading.Event()
         self.alarms = alarms
+        self.autostart = autostart
         self.host: WindowHost | None = None
         self.voice: VoiceHandle | None = None
         self.voice_loading = False  # голос ещё загружается (Whisper — несколько секунд)
@@ -534,10 +538,13 @@ class UiController:
 
     def settings(self) -> dict[str, Any]:
         """Настройки для страницы «Настройки»."""
-        return {
+        view = {
             **settings_view(self.config, self.store, self._choices()),
             "restart_pending": self.restart_pending,
         }
+        # Автозапуск — ярлык в «Автозагрузке», а не поле config.yaml; None — переключателя нет.
+        view["general"]["autostart"] = self.autostart.enabled() if self.autostart is not None else None
+        return view
 
     def _choices(self) -> Choices:
         choices = Choices()
@@ -559,6 +566,18 @@ class UiController:
         """Сохраняет изменения со страницы настроек."""
         if not isinstance(patch, Mapping) or not all(isinstance(v, Mapping) for v in patch.values()):
             return self._save_result(False, ["Неверный формат настроек"])
+        patch = {section: dict(values) for section, values in patch.items()}
+        autostart = patch.get("general", {}).pop("autostart", None)
+        if autostart is not None:
+            if self.autostart is None:
+                return self._save_result(False, ["Автозапуск здесь недоступен"])
+            try:
+                self.autostart.set(bool(autostart))
+            except OSError as exc:
+                return self._save_result(False, [f"Автозапуск: {exc}"])
+        patch = {section: values for section, values in patch.items() if values}
+        if not patch:
+            return self._save_result(True, [])
         try:
             config = self.store.update(patch)
         except SettingsError as exc:

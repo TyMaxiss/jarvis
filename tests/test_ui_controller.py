@@ -173,6 +173,37 @@ def test_alarms_reach_window_and_tray(world: SimpleNamespace, tmp_path: Path) ->
         controller.stop()
 
 
+class FakeAutostart:
+    def __init__(self, fail: bool = False) -> None:
+        self.on = False
+        self.fail = fail
+
+    def enabled(self) -> bool:
+        return self.on
+
+    def set(self, enabled: bool) -> None:
+        if self.fail:
+            raise OSError("нет доступа к папке")
+        self.on = enabled
+
+
+def test_autostart_toggle_is_not_in_config(world: SimpleNamespace) -> None:
+    controller = world.controller
+    assert controller.settings()["general"]["autostart"] is None  # переключателя нет
+    controller.autostart = FakeAutostart()
+    assert controller.settings()["general"]["autostart"] is False
+    before = world.config_path.read_text(encoding="utf-8")
+    result = controller.save_settings({"general": {"autostart": True}})
+    assert result["ok"] and not result["restart"] and result["settings"]["general"]["autostart"] is True
+    assert world.config_path.read_text(encoding="utf-8") == before  # config.yaml не тронут
+    result = controller.save_settings({"general": {"autostart": False, "dry_run": False}})
+    assert result["ok"] and controller.autostart.on is False and not controller.executor.dry_run
+    controller.autostart = FakeAutostart(fail=True)
+    assert controller.save_settings({"general": {"autostart": True}})["errors"] == [
+        "Автозапуск: нет доступа к папке"
+    ]
+
+
 def test_live_settings_apply_without_restart(world: SimpleNamespace) -> None:
     result = world.controller.save_settings({"general": {"dry_run": False}, "ui": {"theme": "light"}})
     assert result["ok"] and not result["restart"] and result["settings"]["ui"]["theme"] == "light"

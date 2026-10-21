@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from ctypes import wintypes
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -191,6 +192,54 @@ def test_known_folders_exist() -> None:
 
     for key in ("desktop", "documents", "downloads"):
         assert known_folder(key).is_dir(), key
+
+
+def test_single_instance_and_show_request() -> None:
+    from assistant.instance import SingleInstance
+
+    name = f"JarvisTest-{os.getpid()}"  # не мешает запущенному ассистенту
+    first = SingleInstance(name)
+    shown = threading.Event()
+    assert first.acquire()
+    first.listen(shown.set)
+    results: dict[str, bool] = {}
+
+    def second_launch() -> None:
+        # Мьютекс принадлежит потоку: другой поток — как другой процесс.
+        second = SingleInstance(name)
+        results["acquired"] = second.acquire()
+        results["notified"] = second.notify()
+
+    thread = threading.Thread(target=second_launch)
+    thread.start()
+    thread.join(5)
+    assert results == {"acquired": False, "notified": True}
+    assert shown.wait(3), "первый экземпляр не получил просьбу показать окно"
+    first.release()
+
+    def after_restart() -> None:
+        later = SingleInstance(name)
+        results["after"] = later.acquire(wait=1.0)
+        later.release()
+
+    thread = threading.Thread(target=after_restart)
+    thread.start()
+    thread.join(5)
+    assert results["after"]
+
+
+def test_autostart_shortcut_round_trip(tmp_path: Path) -> None:
+    from assistant.autostart import Autostart, in_com_thread, launch_command, read_shortcut
+
+    config = tmp_path / "config.yaml"
+    autostart = Autostart(config, folder=tmp_path / "Startup")
+    autostart.set(True)
+    assert autostart.enabled()
+    program, arguments, workdir = in_com_thread(lambda: read_shortcut(autostart.path))
+    expected = launch_command(config)
+    assert (Path(program), arguments, Path(workdir)) == expected
+    autostart.set(False)
+    assert not autostart.enabled()
 
 
 def test_installed_apps_are_found() -> None:

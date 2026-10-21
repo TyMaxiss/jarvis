@@ -235,7 +235,7 @@ export interface Choice {
 }
 
 export interface Settings {
-  general: { name: string; dry_run: boolean }
+  general: { name: string; dry_run: boolean; autostart: boolean | null } // null — автозапуск недоступен
   voice: {
     enabled: boolean
     wake_word: boolean
