@@ -75,6 +75,7 @@ stt:
   device: auto                   # auto, cuda или cpu
   compute_type: auto             # auto: float16 на видеокарте, int8 на процессоре
   beam_size: 1                   # 1 — быстрее, 5 — точнее
+  cpu_threads: 0                 # потоков для распознавания на процессоре; 0 — по числу ядер
   download_dir: models/whisper
   prompt_app_names: 30           # сколько названий программ подсказывать распознавателю
 

@@ -88,6 +88,13 @@ def register_cuda_dlls() -> None:
             log.debug("DLL CUDA: %s", bin_dir)
 
 
+def physical_cores() -> int:
+    """Число физических ядер процессора (по ним лучше всего масштабируется Whisper)."""
+    import psutil
+
+    return psutil.cpu_count(logical=False) or 4
+
+
 def cuda_available() -> bool:
     """Есть ли видеокарта, которую видит CTranslate2."""
     try:
@@ -152,7 +159,13 @@ class WhisperSTT:
 
         started = time.perf_counter()
         self._download_dir.mkdir(parents=True, exist_ok=True)
-        options = {"device": device, "compute_type": compute, "download_root": str(self._download_dir)}
+        options: dict[str, Any] = {
+            "device": device,
+            "compute_type": compute,
+            "download_root": str(self._download_dir),
+        }
+        if device == "cpu":
+            options["cpu_threads"] = self._config.cpu_threads or physical_cores()
         try:
             # Сначала только локальный кэш: так работает без интернета и не ждёт сеть.
             self._model = WhisperModel(model, local_files_only=True, **options)
