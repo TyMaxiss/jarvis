@@ -74,6 +74,26 @@ def test_no_titles_in_schema(reg: ActionRegistry) -> None:
     assert "title" not in repr(reg.tools())
 
 
+def test_parameter_named_title_is_kept() -> None:
+    # title — и ключевое слово схемы, и имя параметра focus_window: удаляться должно только первое.
+    reg = ActionRegistry()
+
+    @reg.action("focus", "Переключиться на окно")
+    def focus(title: Annotated[str, Field(description="Часть заголовка")]) -> str:
+        return title
+
+    params = reg.get("focus").tool_schema()["function"]["parameters"]
+    assert params["properties"] == {"title": {"type": "string", "description": "Часть заголовка"}}
+    assert params["required"] == ["title"]
+
+
+def test_every_required_parameter_is_described(registry: ActionRegistry) -> None:
+    """Во всех настоящих действиях обязательные параметры описаны в properties."""
+    for tool in registry.tools():
+        params = tool["function"]["parameters"]
+        assert set(params.get("required", [])) <= set(params["properties"]), tool["function"]["name"]
+
+
 def test_tools_hide_forbidden_actions(reg: ActionRegistry) -> None:
     names = [tool["function"]["name"] for tool in reg.tools()]
     assert "format_disk" not in names

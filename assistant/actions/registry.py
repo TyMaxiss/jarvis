@@ -79,20 +79,38 @@ def _format_args_error(action: str, error: ValidationError) -> str:
     return f"{action}: " + "; ".join(parts)
 
 
+# Ключи схемы, в которых лежат данные, а не схемы: их содержимое не меняется.
+_SCHEMA_DATA_KEYS = frozenset({"default", "enum", "const", "examples"})
+
+
 def _clean_schema(node: Any) -> Any:
-    """Упрощает JSON-схему pydantic для LLM: убирает title и «| None» из anyOf."""
-    if isinstance(node, dict):
-        any_of = node.get("anyOf")
-        if isinstance(any_of, list):
-            non_null = [item for item in any_of if item != {"type": "null"}]
-            if len(non_null) == 1:
-                merged = {k: v for k, v in node.items() if k != "anyOf"}
-                merged.update(non_null[0])
-                node = merged
-        return {k: _clean_schema(v) for k, v in node.items() if k != "title"}
+    """Упрощает JSON-схему pydantic для LLM: убирает title и «| None» из anyOf.
+
+    title — ключевое слово, которое pydantic пишет в каждый узел схемы. Параметр с именем
+    title (ключ внутри properties) остаётся: иначе у focus_window пропадал бы параметр.
+    """
     if isinstance(node, list):
         return [_clean_schema(item) for item in node]
-    return node
+    if not isinstance(node, dict):
+        return node
+    any_of = node.get("anyOf")
+    if isinstance(any_of, list):
+        non_null = [item for item in any_of if item != {"type": "null"}]
+        if len(non_null) == 1:
+            merged = {k: v for k, v in node.items() if k != "anyOf"}
+            merged.update(non_null[0])
+            node = merged
+    cleaned: dict[str, Any] = {}
+    for key, value in node.items():
+        if key == "title":
+            continue
+        if key in ("properties", "$defs") and isinstance(value, dict):
+            cleaned[key] = {name: _clean_schema(schema) for name, schema in value.items()}
+        elif key in _SCHEMA_DATA_KEYS:
+            cleaned[key] = value
+        else:
+            cleaned[key] = _clean_schema(value)
+    return cleaned
 
 
 def build_params_model(func: Callable[..., Any], name: str) -> type[BaseModel]:
