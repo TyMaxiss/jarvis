@@ -34,8 +34,10 @@ HALLUCINATION_MARKERS = (
 )
 _MAX_PROMPT_CHARS = 600
 # Без этих DLL CTranslate2 не запустит Whisper на видеокарте. Версии CUDA и cuDNN — те же,
-# что у пакетов nvidia-*-cu12 в pyproject.toml (uv sync --extra cuda).
-CUDA_LIBRARIES = ("cublas64_12.dll", "cudnn64_9.dll")
+# что у пакетов nvidia-*-cu12 в pyproject.toml (uv sync --extra cuda). cudnn64_9.dll не годится
+# для проверки: свой маленький загрузчик с этим именем лежит в самом пакете ctranslate2 и
+# загружается при его импорте; cudnn_ops64_9.dll есть только в настоящем cuDNN 9.
+CUDA_LIBRARIES = ("cublas64_12.dll", "cudnn_ops64_9.dll")
 # Тишина по краям фразы: без неё Whisper иногда «съедает» первый звук («Делай» вместо «Сделай»).
 _PAD_SECONDS = 0.3
 

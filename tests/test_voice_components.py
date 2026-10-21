@@ -429,15 +429,15 @@ def test_missing_cuda_library_searches_like_ctranslate2(monkeypatch: pytest.Monk
 
     def fake_dll(name: str, winmode: int) -> object:
         searched.append((name, winmode))
-        if name == "cudnn64_9.dll":
+        if name == "cudnn_ops64_9.dll":
             raise FileNotFoundError(name)
         return object()
 
     monkeypatch.setattr(whisper_stt.sys, "platform", "win32")
     monkeypatch.setattr(ctypes, "WinDLL", fake_dll, raising=False)
-    assert whisper_stt.missing_cuda_library() == "cudnn64_9.dll"
+    assert whisper_stt.missing_cuda_library() == "cudnn_ops64_9.dll"
     # winmode=0 — обычный поиск LoadLibrary с PATH, как в CTranslate2.
-    assert searched == [("cublas64_12.dll", 0), ("cudnn64_9.dll", 0)]
+    assert searched == [("cublas64_12.dll", 0), ("cudnn_ops64_9.dll", 0)]
 
 
 def test_cuda_libraries_match_cuda_extra() -> None:
@@ -451,7 +451,7 @@ def test_cuda_libraries_match_cuda_extra() -> None:
         ]["cuda"]
     )
     assert "nvidia-cublas-cu12" in extra and "cublas64_12.dll" in CUDA_LIBRARIES
-    assert "nvidia-cudnn-cu12>=9,<10" in extra and "cudnn64_9.dll" in CUDA_LIBRARIES
+    assert "nvidia-cudnn-cu12>=9,<10" in extra and "cudnn_ops64_9.dll" in CUDA_LIBRARIES
 
 
 # --- Загрузка моделей ----------------------------------------------------------------
