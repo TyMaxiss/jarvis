@@ -61,6 +61,101 @@ export interface HistoryPage {
   more: boolean
 }
 
+// --- Редактор команд -------------------------------------------------------------
+
+export type SlotType = 'int' | 'float' | 'str' | 'text'
+
+export interface CommandStep {
+  action: string
+  args: Record<string, unknown> // значения или слоты «{percent}»
+}
+
+/** Команда в форме редактора (assistant/commands/editor.py, form_data). */
+export interface CommandForm {
+  id: string
+  phrases: string[]
+  slots: Record<string, SlotType>
+  when: { active_window_contains: string[]; active_process: string[] }
+  confirm: boolean
+  reply: string
+  hotkey: string
+  steps: CommandStep[]
+}
+
+export interface CommandSummary {
+  id: string
+  title: string // первая фраза
+  phrases: number
+  steps: number
+  hotkey: string
+  line: number
+  active: boolean // работает именно эта команда
+  replaced_by: string // её заменяет одноимённая команда из этого пака
+  problem: string // почему не загрузилась
+}
+
+export interface CommandPack {
+  file: string
+  user: boolean // свой пак: правится на месте
+  error: string // файл не читается
+  commands: CommandSummary[]
+}
+
+export interface CommandsTree {
+  packs: CommandPack[]
+  user_file: string
+}
+
+export interface CommandDetails {
+  ok: boolean
+  errors: string[]
+  file?: string
+  user?: boolean
+  command?: CommandForm
+  problems?: string[]
+  also_in?: string[] // паки, где есть команда с тем же id
+}
+
+export interface CommandSaveResult extends CommandsTree {
+  ok: boolean
+  errors: string[]
+  id?: string
+}
+
+export interface PhraseTest {
+  status: 'matched' | 'ambiguous' | 'not_found' | 'empty'
+  reason: string
+  normalized: string
+  matches: Array<{ id: string; score: number; phrase: string; text: string; slots: Record<string, unknown>; draft: boolean }>
+  candidates: Array<{ id: string; score: number; phrase: string }>
+  errors: string[] // в черновике ошибки — проверено без него
+}
+
+/** JSON-схема параметра действия (то, что встречается в реестре). */
+export interface JsonSchema {
+  type?: string
+  enum?: unknown[]
+  description?: string
+  default?: unknown
+  minimum?: number
+  maximum?: number
+  exclusiveMinimum?: number
+  minLength?: number
+  maxLength?: number
+  items?: JsonSchema
+  properties?: Record<string, JsonSchema>
+  required?: string[]
+  additionalProperties?: boolean
+}
+
+export interface ActionInfo {
+  name: string
+  description: string
+  risk: 'safe' | 'confirm'
+  group: string
+  schema: JsonSchema
+}
+
 export interface Scenario {
   id: string
   title: string
@@ -231,6 +326,13 @@ export interface AssistantApi {
   window_resize(width: number, height: number, seq: number): Promise<void> // главное окно без рамки
   open_path(kind: 'config' | 'log' | 'journal' | 'commands'): Promise<void>
   history(query: HistoryQuery): Promise<HistoryPage>
+  commands_tree(): Promise<CommandsTree>
+  actions(): Promise<ActionInfo[]>
+  command_get(file: string, id: string): Promise<CommandDetails>
+  command_save(file: string, originalId: string, form: CommandForm): Promise<CommandSaveResult>
+  command_delete(file: string, id: string): Promise<CommandSaveResult>
+  command_test(text: string, form: CommandForm | null, originalId: string): Promise<PhraseTest>
+  command_run(form: CommandForm, phrase: string): Promise<{ ok: boolean; errors: string[] }>
   reload_commands(): Promise<{ count: number; issues: string[] }>
   restart(): Promise<void>
 }

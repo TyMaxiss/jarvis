@@ -71,6 +71,24 @@ try {
   results.historyAction = await main.getByText(/^volume_change\(/).textContent()
   await main.waitForTimeout(300) // подробности появляются плавно
   await main.screenshot({ path: `${shots}/e2e-history.png` })
+
+  // Команды: новая команда в редакторе — проверка фразы настоящим матчером и сохранение в my.yaml.
+  await main.getByRole('button', { name: 'Команды' }).click()
+  await main.getByRole('button', { name: 'Новая команда' }).first().click()
+  const phrase = main.getByLabel('Новая фраза')
+  await phrase.fill('проверка редактора')
+  await phrase.press('Enter')
+  await main.getByRole('button', { name: 'Действие', exact: true }).click()
+  await main.getByLabel('Действие', { exact: true }).selectOption('say')
+  await main.getByLabel('text', { exact: true }).fill('Редактор работает')
+  await main.getByLabel('Проверочная фраза').fill('проверка редактора')
+  await main.getByRole('button', { name: 'Проверить' }).click()
+  results.commandTest = await main.getByLabel('Результат проверки').textContent()
+  await main.getByRole('button', { name: 'Сохранить' }).click()
+  const saved = main.getByRole('navigation', { name: 'Паки команд' }).getByRole('button', { name: /проверка редактора/ })
+  await saved.waitFor({ timeout: 5000 })
+  results.commandId = await main.locator('h1 + div code').first().textContent()
+  await main.screenshot({ path: `${shots}/e2e-commands.png` })
 } catch (error) {
   errors.push(String(error))
   for (const [index, page] of browser.contexts().flatMap((context) => context.pages()).entries()) {

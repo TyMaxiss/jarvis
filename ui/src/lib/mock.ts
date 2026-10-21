@@ -13,6 +13,7 @@ import type {
   Settings,
   SettingsPatch,
 } from './types'
+import { createMockCommands } from './mockCommands'
 
 const profiles: LlmProfileInfo[] = [
   {
@@ -432,6 +433,7 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
     async window_resize() {},
     async pause_hotkeys() {},
     async open_path() {},
+    ...createMockCommands((phrase) => void simulate(phrase)),
     async history(query: HistoryQuery) {
       let items = history
       const index = query.before ? items.findIndex((item) => item.id === query.before) : -1

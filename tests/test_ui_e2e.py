@@ -176,7 +176,6 @@ def fake_openai() -> Iterator[FakeOpenAI]:
 def test_interface_with_real_python(
     tmp_path: Path,
     registry: ActionRegistry,
-    store: CommandStore,
     matcher: Matcher,
     fake_openai: FakeOpenAI,
     monkeypatch: pytest.MonkeyPatch,
@@ -187,6 +186,11 @@ def test_interface_with_real_python(
     if node is None:
         pytest.skip("нет Node.js")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    commands = tmp_path / "commands"  # редактор пишет в my.yaml — не в папку репозитория
+    shutil.copytree(ROOT / "commands", commands)
+    store = CommandStore(commands, "my.yaml", registry)
+    store.reload()
+    matcher.set_commands(store.commands)
     config_path = tmp_path / "config.yaml"
     config_text = (ROOT / "config.example.yaml").read_text(encoding="utf-8")
     # ChatGPT отвечает с локального сервера, а не с api.openai.com.
@@ -256,4 +260,11 @@ def test_interface_with_real_python(
     # История: фраза из журнала (не из памяти окна) вместе с действием команды.
     assert results["historyDay"] == "Сегодня"
     assert results["historyAction"] == "volume_change(delta=10)"
+    # Редактор команд: новая команда проверена настоящим матчером, сохранена в my.yaml и загружена.
+    assert results["commandTest"].startswith("Сработает эта команда (оценка 100")
+    assert results["commandId"] == "proverka_redaktora"
+    saved = '- id: proverka_redaktora\n  phrases: ["проверка редактора"]\n  steps:\n'
+    saved += '    - say: {text: "Редактор работает"}\n'
+    assert (commands / "my.yaml").read_text(encoding="utf-8").endswith(saved)
+    assert any(command.id == "proverka_redaktora" for command in store.commands)
     assert KEY not in json.dumps(controller.settings())

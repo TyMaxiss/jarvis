@@ -13,11 +13,13 @@ export function HotkeyInput({
   onChange,
   label,
   disabled,
+  placeholder = '',
 }: {
   value: string
   onChange: (combo: string) => void
   label: string
   disabled?: boolean
+  placeholder?: string // что показать, если сочетания нет
 }) {
   const [recording, setRecording] = useState(false)
   const [held, setHeld] = useState<string[]>([])
@@ -73,7 +75,7 @@ export function HotkeyInput({
     <div className="flex flex-col items-end gap-1">
       <button
         type="button"
-        aria-label={`${label}: ${recording ? 'нажмите новое сочетание' : value}`}
+        aria-label={`${label}: ${recording ? 'нажмите новое сочетание' : value || placeholder}`}
         disabled={disabled}
         onClick={() => {
           setError('')
@@ -91,8 +93,10 @@ export function HotkeyInput({
           ) : (
             <span className="text-muted">Нажмите сочетание…</span>
           )
-        ) : (
+        ) : value ? (
           <Keys value={value} />
+        ) : (
+          <span className="text-muted">{placeholder}</span>
         )}
         <Keyboard size={15} className={recording ? 'text-accent' : 'text-faint'} />
       </button>

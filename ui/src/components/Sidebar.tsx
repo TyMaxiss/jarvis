@@ -6,9 +6,9 @@ import { cx } from './ui'
 
 export type Page = 'home' | 'commands' | 'history' | 'settings'
 
-const items: Array<{ page: Page; title: string; icon: ReactNode; soon?: boolean }> = [
+const items: Array<{ page: Page; title: string; icon: ReactNode }> = [
   { page: 'home', title: 'Главная', icon: <House size={17} /> },
-  { page: 'commands', title: 'Команды', icon: <ListChecks size={17} />, soon: true },
+  { page: 'commands', title: 'Команды', icon: <ListChecks size={17} /> },
   { page: 'history', title: 'История', icon: <History size={17} /> },
   { page: 'settings', title: 'Настройки', icon: <Settings2 size={17} /> },
 ]
@@ -33,7 +33,6 @@ export function Sidebar({ page, onPage, state }: { page: Page; onPage: (page: Pa
               {page === item.page && <span className="absolute top-2 bottom-2 left-0 w-[3px] rounded-full bg-accent" />}
               {item.icon}
               <span className="flex-1 text-left">{item.title}</span>
-              {item.soon && <span className="text-[10.5px] text-faint">скоро</span>}
             </button>
           </li>
         ))}

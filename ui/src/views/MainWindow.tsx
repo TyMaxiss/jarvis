@@ -1,20 +1,24 @@
 // Главное окно: своя шапка, боковое меню и разделы.
 
 import { CircleAlert, Info, ShieldQuestion, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Sidebar, type Page } from '../components/Sidebar'
 import { ResizeGrip, TitleBar } from '../components/TitleBar'
 import { Button, IconButton } from '../components/ui'
 import { call } from '../lib/bridge'
+import { draftFromHistory } from '../lib/commands'
 import { useAppState, useAssistantEvent } from '../lib/store'
+import type { CommandForm } from '../lib/types'
+import { CommandsPage } from '../pages/Commands'
 import { HistoryPage } from '../pages/History'
 import { Home } from '../pages/Home'
 import { SettingsPage } from '../pages/Settings'
-import { Soon } from '../pages/Soon'
 
 export function MainWindow() {
   const state = useAppState()
   const [page, setPage] = useState<Page>('home')
+  const [draft, setDraft] = useState<CommandForm | null>(null)
+  const draftUsed = useCallback(() => setDraft(null), [])
 
   return (
     <div className="flex h-full flex-col bg-bg">
@@ -28,9 +32,14 @@ export function MainWindow() {
           ) : page === 'settings' ? (
             <SettingsPage />
           ) : page === 'history' ? (
-            <HistoryPage />
+            <HistoryPage
+              onSaveAsCommand={(item) => {
+                setDraft(draftFromHistory(item))
+                setPage('commands')
+              }}
+            />
           ) : (
-            <Soon page={page} />
+            <CommandsPage draft={draft} onDraftUsed={draftUsed} />
           )}
         </main>
       </div>
