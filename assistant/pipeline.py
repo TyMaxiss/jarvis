@@ -92,9 +92,11 @@ class Pipeline:
         return self._agent
 
     def set_agent(self, agent: Agent | None) -> None:
-        """Включает или выключает нейросеть без перезапуска (настройки в интерфейсе)."""
-        with self._lock:
-            self._agent = agent
+        """Включает или выключает нейросеть без перезапуска (настройки в интерфейсе).
+
+        Выполняющаяся задача доделывается прежним агентом: фраза читает агента один раз.
+        """
+        self._agent = agent
 
     def reload_commands(self, commands: list[Command]) -> None:
         """Подменяет команды матчера, когда фраза не выполняется (файлы команд изменились)."""
@@ -150,15 +152,14 @@ class Pipeline:
             log.info("«%s» не найдена локально (%s) — маршрут LLM", text, match.reason or match.status)
             if match.status == "empty":
                 return PipelineResult(text, "llm", match, match_ms=match_ms)
-            if self._agent is None:
+            llm_agent = self._agent
+            if llm_agent is None:
                 reply = "Не знаю такой команды"
                 self._speaker.say(reply)
                 return PipelineResult(text, "llm", match, reply=reply, match_ms=match_ms,
                                       total_ms=(time.perf_counter() - started) * 1000)  # fmt: skip
             self._cancel.clear()
-            agent = self._agent.run(
-                text, confirmer=confirmer, cancel=self._cancel, on_step=self.on_agent_step
-            )
+            agent = llm_agent.run(text, confirmer=confirmer, cancel=self._cancel, on_step=self.on_agent_step)
             return PipelineResult(text, "llm", match, reply=agent.text, match_ms=match_ms,
                                   total_ms=(time.perf_counter() - started) * 1000, agent=agent)  # fmt: skip
 

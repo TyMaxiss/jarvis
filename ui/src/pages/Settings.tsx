@@ -29,7 +29,9 @@ function useSettings() {
 
   useEffect(() => {
     void call('get_settings').then((loaded) => {
-      if (loaded) setSettings(loaded)
+      if (!loaded) return
+      setSettings(loaded)
+      if (loaded.restart_pending) setRestart(true)
     })
   }, [])
 

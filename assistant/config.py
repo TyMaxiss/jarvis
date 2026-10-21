@@ -301,6 +301,17 @@ class LlmConfig(_Section):
         return self.profiles[self.profile]
 
 
+class UiConfig(_Section):
+    """Интерфейс: окна, тема, оверлей, быстрый чат."""
+
+    enabled: bool = Field(True, description="false — консольный режим без окон")
+    theme: Literal["dark", "light"] = "dark"
+    accent: str = Field("#7c6cff", pattern=r"^#[0-9a-fA-F]{6}$", description="Акцентный цвет, #rrggbb")
+    overlay: bool = Field(True, description="Плашка внизу экрана: что услышал и что делает")
+    quick_chat_key: str = Field("ctrl+alt+enter", description="Окно для команды текстом")
+    start_minimized: bool = Field(False, description="При запуске сразу свернуться в трей")
+
+
 class LoggingConfig(_Section):
     """Логи и журнал действий."""
 
@@ -322,6 +333,7 @@ class AppConfig(_Section):
     stt: SttConfig = Field(default_factory=SttConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
+    ui: UiConfig = Field(default_factory=UiConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     _base_dir: Path = PrivateAttr(default_factory=Path.cwd)
@@ -342,7 +354,7 @@ class AppConfig(_Section):
         return [self.general.name, *self.general.name_variants]
 
 
-def _format_validation_error(path: Path, error: ValidationError) -> str:
+def format_validation_error(path: Path, error: ValidationError) -> str:
     """Делает понятный текст из ошибки pydantic."""
     lines = [f"Ошибки в {path.name}:"]
     for item in error.errors():
@@ -389,6 +401,6 @@ def load_config(path: Path) -> AppConfig:
     try:
         config = AppConfig.model_validate(data)
     except ValidationError as exc:
-        raise ConfigError(_format_validation_error(path, exc)) from exc
+        raise ConfigError(format_validation_error(path, exc)) from exc
     config._base_dir = base_dir
     return config

@@ -13,8 +13,10 @@ SpVoice и SpFileStream, только без цикла событий pyttsx3.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import logging
 import math
+import sys
 import tempfile
 import threading
 import wave
@@ -58,6 +60,37 @@ def token_languages(token: Any) -> list[str]:
 def sapi_rate(rate: float) -> int:
     """Скорость 0.5–2.0 → шкала SAPI −10…10 (логарифмическая, ±10 ≈ в 3 раза)."""
     return max(-10, min(10, round(10 * math.log(rate) / math.log(3))))
+
+
+def voice_names() -> list[str]:
+    """Названия установленных голосов SAPI (из реестра — без COM, из любого потока).
+
+    SpVoice берёт голоса из ключа Speech/Voices/Tokens в HKLM; имя голоса — значение
+    по умолчанию ключа токена, то же, что возвращает GetDescription().
+    """
+    if sys.platform != "win32":
+        return []
+    import winreg
+
+    names: list[str] = []
+    try:
+        tokens = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Speech\Voices\Tokens")
+    except OSError:
+        return names
+    with tokens:
+        for index in itertools.count():
+            try:
+                token_name = winreg.EnumKey(tokens, index)
+            except OSError:
+                break
+            try:
+                with winreg.OpenKey(tokens, token_name) as token:
+                    name, _ = winreg.QueryValueEx(token, "")
+            except OSError:
+                continue
+            if name and str(name) not in names:
+                names.append(str(name))
+    return names
 
 
 class SapiTTS:

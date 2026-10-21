@@ -136,6 +136,14 @@ llm:
       api_key_env: OPENCODE_API_KEY
       temperature: 0.3
 
+ui:
+  enabled: true                  # false — консольный режим без окон (как на этапах 1–3)
+  theme: dark                    # dark или light
+  accent: "#7c6cff"              # акцентный цвет
+  overlay: true                  # плашка внизу экрана: что услышал и что делает
+  quick_chat_key: ctrl+alt+enter # окно для команды текстом
+  start_minimized: false         # true — при запуске сразу свернуться в трей
+
 logging:
   level: INFO                    # DEBUG, INFO, WARNING или ERROR
   dir: logs

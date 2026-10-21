@@ -31,7 +31,7 @@ function initialDraft(profile: LlmProfileInfo): Draft {
 export function missingField(profile: LlmProfileInfo, draft: Draft): string {
   if (profile.base_url_editable && !draft.base_url.trim()) return 'Укажите адрес API'
   if (!draft.model.trim()) return 'Выберите модель'
-  if (profile.key_env && !profile.key_set && !draft.key.trim()) return 'Вставьте ключ API'
+  if (profile.key_env && !profile.key_optional && !profile.key_set && !draft.key.trim()) return 'Вставьте ключ API'
   return ''
 }
 
@@ -213,7 +213,13 @@ export function LlmSection({
                   autoComplete="off"
                   spellCheck={false}
                   className="w-full pr-10 font-mono"
-                  placeholder={profile.key_set ? `Сохранён ${profile.key_hint} — вставьте новый, чтобы заменить` : 'Вставьте ключ'}
+                  placeholder={
+                    profile.key_set
+                      ? `Сохранён ${profile.key_hint} — вставьте новый, чтобы заменить`
+                      : profile.key_optional
+                        ? 'Ключ, если сервису он нужен'
+                        : 'Вставьте ключ'
+                  }
                   value={draft.key}
                   onChange={(event) => setDraft({ key: event.target.value })}
                 />

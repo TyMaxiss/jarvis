@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -123,7 +124,11 @@ class VoiceConfirmer:
     def _ask(self, question: str, cancel: threading.Event) -> str | None:
         """Задаёт вопрос и ждёт ответа; None — ответа не было."""
         self._speech.say(question)
-        self._speech.wait_idle(timeout=30)
+        spoken_by = time.monotonic() + 30
+        while not self._speech.wait_idle(timeout=0.1) and time.monotonic() < spoken_by:
+            if cancel.is_set():  # ответили кнопкой, пока звучал вопрос
+                self._speech.stop()
+                return None
         self._source.flush()
         spotter = self._spotter_factory()
         heard_ms = 0

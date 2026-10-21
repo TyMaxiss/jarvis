@@ -93,9 +93,12 @@ select {
   background: transparent;
 }
 
-:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: 2px;
+/* В слое base, чтобы классы Tailwind (outline-none у поля чата) могли его переопределить. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+    outline-offset: 2px;
+  }
 }
 
 @keyframes fade-up {

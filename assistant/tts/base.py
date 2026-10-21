@@ -93,7 +93,7 @@ class SpeechQueue:
         self.engine = engine
         self._player = player
         self._fallback = fallback
-        self._volume = volume
+        self.volume = volume  # множитель громкости; меняется на лету из настроек
         self._queue: queue.Queue[_Item | None] = queue.Queue()
         self._cond = threading.Condition()
         self._pending = 0
@@ -156,7 +156,7 @@ class SpeechQueue:
                 else:
                     audio, rate = self._synthesize(item.text)
                 if self._is_current(item) and len(audio):
-                    self._player.play(np.clip(audio * self._volume, -1.0, 1.0), rate)
+                    self._player.play(np.clip(audio * self.volume, -1.0, 1.0), rate)
             except Exception:
                 log.exception("Ошибка озвучки")
             finally:

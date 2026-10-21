@@ -2,7 +2,7 @@ import { CircleAlert, History, Mic, MicOff, Pause, Play, Sparkles, Volume2, Volu
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Button, Card, CardTitle, IconButton, Keys, Slider, cx } from '../components/ui'
 import { call } from '../lib/bridge'
-import { formatMs, isListening, voiceLabel } from '../lib/format'
+import { formatMs, isListening, plural, voiceLabel } from '../lib/format'
 import type { AppState, RecentItem } from '../lib/types'
 
 export function Home({ state, onOpenSettings }: { state: AppState; onOpenSettings: () => void }) {
@@ -44,8 +44,11 @@ function Hero({ state }: { state: AppState }) {
         <h1 className="font-display text-[22px] font-semibold tracking-tight">{voiceLabel(state)}</h1>
         {voice.enabled ? (
           <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
-            {voice.wake_word ? `Скажите «${state.name}, …» или нажмите ` : 'Нажмите '}
-            <Keys value={voice.push_to_talk_key} />. Остановить — <Keys value={voice.stop_key} /> или «стоп».
+            {voice.wake_word && `Скажите «${state.name}, …»`}
+            {voice.wake_word && voice.push_to_talk_key && ' или нажмите '}
+            {!voice.wake_word && voice.push_to_talk_key && 'Нажмите '}
+            {voice.push_to_talk_key && <Keys value={voice.push_to_talk_key} />}. Остановить —{' '}
+            <Keys value={voice.stop_key} /> или «стоп».
           </p>
         ) : (
           <p className="mt-1.5 flex items-center gap-2 text-[13px] text-warn">
@@ -145,7 +148,11 @@ function ScenariosCard({ state }: { state: AppState }) {
               >
                 <Play size={13} className="shrink-0 text-accent" />
                 <span className="flex-1 truncate">{scenario.title}</span>
-                {scenario.steps > 1 && <span className="text-[11.5px] text-faint">{scenario.steps} шага</span>}
+                {scenario.steps > 1 && (
+                  <span className="text-[11.5px] text-faint">
+                    {scenario.steps} {plural(scenario.steps, ['шаг', 'шага', 'шагов'])}
+                  </span>
+                )}
               </button>
             </li>
           ))}

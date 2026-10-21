@@ -86,7 +86,10 @@ describe('LlmSection', () => {
     expect(screen.getByText('Укажите адрес API')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Адрес API'), { target: { value: 'http://localhost:1234/v1' } })
     fireEvent.change(screen.getByLabelText('Модель'), { target: { value: 'local-model' } })
-    expect(screen.getByText('Вставьте ключ API')).toBeTruthy()
+    // Ключ своему сервису не обязателен (например, LM Studio без ключа).
+    expect(screen.queryByText('Вставьте ключ API')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Использовать Другой сервис' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByLabelText('Ключ API') as HTMLInputElement).placeholder).toBe('Ключ, если сервису он нужен')
   })
 })
 

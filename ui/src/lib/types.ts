@@ -78,6 +78,7 @@ export interface LlmProfileInfo {
   key_env: string // '' — ключ не нужен
   key_set: boolean
   key_hint: string // «••••3f2a»
+  key_optional: boolean // ключ можно не указывать (свой сервис)
   key_url: string // где взять ключ; '' — нигде
   note: string
 }
@@ -107,6 +108,7 @@ export interface Settings {
   llm: { enabled: boolean; profile: string; profiles: LlmProfileInfo[] }
   ui: UiSettings
   choices: { microphones: Choice[]; piper_voices: Choice[]; sapi_voices: Choice[]; stt_models: Choice[] }
+  restart_pending: boolean // есть изменения, которые применятся после перезапуска
 }
 
 export type SettingsPatch = {
@@ -152,7 +154,7 @@ export type AssistantEvent =
   | { type: 'state'; payload: AppState }
   | { type: 'voice'; payload: { state: VoiceState; detail: string } }
   | { type: 'level'; payload: { value: number } }
-  | { type: 'recognized'; payload: { text: string } }
+  | { type: 'recognized'; payload: { text: string; source?: 'voice' | 'text' | 'hotkey' } }
   | { type: 'step'; payload: Step }
   | { type: 'reply'; payload: { text: string } }
   | { type: 'result'; payload: RecentItem }

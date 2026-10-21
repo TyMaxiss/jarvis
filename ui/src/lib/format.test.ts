@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { keyLabel } from '../components/ui'
-import { formatMs, isListening, voiceLabel } from './format'
+import { formatMs, isListening, plural, voiceLabel } from './format'
 import { createMockApi } from './mock'
 
 describe('formatMs', () => {
@@ -18,6 +18,15 @@ describe('voiceLabel', () => {
     expect(voiceLabel({ ...state, voice: { ...state.voice, enabled: false, problem: 'нет микрофона' } })).toBe('Голос недоступен')
     expect(isListening('holding')).toBe(true)
     expect(isListening('processing')).toBe(false)
+  })
+})
+
+describe('plural', () => {
+  it('русские формы слова для чисел', () => {
+    const forms: [string, string, string] = ['шаг', 'шага', 'шагов']
+    expect([1, 2, 4, 5, 11, 12, 21, 22, 25, 111].map((n) => plural(n, forms))).toEqual([
+      'шаг', 'шага', 'шага', 'шагов', 'шагов', 'шагов', 'шаг', 'шага', 'шагов', 'шагов',
+    ])
   })
 })
 

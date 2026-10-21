@@ -25,6 +25,7 @@ const profiles: LlmProfileInfo[] = [
     key_env: 'DEEPSEEK_API_KEY',
     key_set: true,
     key_hint: '••••3f2a',
+    key_optional: false,
     key_url: 'https://platform.deepseek.com/api_keys',
     note: 'Быстрая и недорогая. Ключ работает, только если на счёте есть деньги.',
   },
@@ -40,6 +41,7 @@ const profiles: LlmProfileInfo[] = [
     key_env: 'OPENAI_API_KEY',
     key_set: false,
     key_hint: '',
+    key_optional: false,
     key_url: 'https://platform.openai.com/settings/organization/api-keys',
     note: 'Модели OpenAI. В списке те, что умеют вызывать действия; быстрее всех — `gpt-6-luna`.',
   },
@@ -55,6 +57,7 @@ const profiles: LlmProfileInfo[] = [
     key_env: 'ANTHROPIC_API_KEY',
     key_set: false,
     key_hint: '',
+    key_optional: false,
     key_url: 'https://platform.claude.com/settings/keys',
     note: 'Модели Anthropic. Сложные задачи лучше всех решает `claude-opus-5-5`, быстрее всех отвечает `claude-haiku-5-5`.',
   },
@@ -70,6 +73,7 @@ const profiles: LlmProfileInfo[] = [
     key_env: '',
     key_set: false,
     key_hint: '',
+    key_optional: false,
     key_url: '',
     note: 'Работает без интернета на этом компьютере. Нужна установленная Ollama и скачанная модель.',
   },
@@ -85,6 +89,7 @@ const profiles: LlmProfileInfo[] = [
     key_env: 'CUSTOM_LLM_API_KEY',
     key_set: false,
     key_hint: '',
+    key_optional: true,
     key_url: '',
     note: 'Любой сервис с OpenAI-совместимым API: укажите адрес, модель и ключ.',
   },
@@ -161,6 +166,7 @@ function makeSettings(state: AppState): Settings {
         { value: 'large-v3-turbo', title: 'large-v3-turbo — для видеокарты' },
       ],
     },
+    restart_pending: false,
   }
 }
 
