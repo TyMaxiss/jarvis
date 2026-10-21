@@ -40,12 +40,13 @@ jobs:
         uses: actions/cache@v5
         with:
           path: models
-          key: models-v2-vosk-small-ru-0.22-piper-dmitri-irina-whisper-small
+          key: models-v3-vosk-small-ru-0.22-piper-4-voices-whisper-small
 
       - name: Скачивание моделей
         run: |
           uv run python -m assistant --download-models
-          uv run python -m piper.download_voices ru_RU-irina-medium --download-dir models/piper
+          # Ещё три голоса — разные дикторы для калибровки слова активации.
+          uv run python -m piper.download_voices ru_RU-irina-medium ru_RU-denis-medium ru_RU-ruslan-medium --download-dir models/piper
 
       - name: Голос на настоящих моделях (Piper → VAD → Vosk → Whisper)
         timeout-minutes: 12

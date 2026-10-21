@@ -140,7 +140,7 @@ def start_voice(
     from assistant.audio.capture import CaptureError, MicrophoneCapture
     from assistant.audio.sounds import SOUND_RATE, listen_chime
     from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
-    from assistant.audio.wakeword import GrammarSpotter, VoskModelError, load_vosk_model
+    from assistant.audio.wakeword import GrammarSpotter, VoskModelError, load_vosk_model, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
     from assistant.stt.whisper_stt import WhisperSTT
     from assistant.voice import VoiceLoop, VoiceSettings
@@ -163,7 +163,7 @@ def start_voice(
             out.write(f"! {exc}\n")
         spotter = None
         if voice.wake_word and vosk_model is not None:
-            spotter = GrammarSpotter(vosk_model, [config.general.name])
+            spotter = wake_spotter(vosk_model, config.general.name)
             if not spotter.usable:
                 out.write(
                     f"! Слова «{config.general.name}» нет в словаре модели Vosk — активация по имени "

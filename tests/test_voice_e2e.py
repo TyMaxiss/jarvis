@@ -1,16 +1,19 @@
 """Сквозная проверка голоса на настоящих моделях: Piper → VAD → Vosk → Whisper → матчер.
 
-Речь синтезируется голосом Piper и подаётся в голосовой цикл вместо микрофона.
+Речь синтезируется голосами Piper и подаётся в голосовой цикл вместо микрофона.
 Нужны скачанные модели (uv run python -m assistant --download-models), поэтому тест
 включается переменной JARVIS_E2E=1 (так сделано в CI на Windows).
 
-Логика цикла и безопасность подтверждения проверяются на всех скачанных голосах.
+Логика цикла и безопасность подтверждения проверяются на голосах dmitri и irina.
 Точность распознавания — на эталонном голосе irina: синтетический dmitri произносит
 отдельные слова так, что Whisper small и Vosk их путают («Открой ютуб» → «Пробою тут»),
 это свойство синтезатора, а не конвейера. Его результаты видны в калибровке.
 
-Калибровка печатает длительность речи по VAD, уверенность Vosk и текст Whisper
-(beam 5 и 1) для фраз с именем и без — по ним подобраны пороги в config.example.yaml.
+Калибровка печатает:
+* для слова активации — сколько фраз с именем Vosk услышал и сколько фраз без имени
+  принял за имя, для трёх вариантов распознавателя и всех скачанных голосов;
+* длительность речи по VAD и текст Whisper с временем распознавания;
+* что Vosk слышит в ответах «да/нет».
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,36 +31,36 @@ import pytest
 
 from assistant.audio.capture import ArraySource, resample, to_int16
 from assistant.audio.vad import SegmentEvent, SileroVAD, SpeechSegmenter
-from assistant.audio.wakeword import GrammarSpotter, SpotResult, load_vosk_model
+from assistant.audio.wakeword import GrammarSpotter, SpotResult, load_vosk_model, parse_result, wake_spotter
 from assistant.config import AppConfig
 from assistant.nlu.matcher import Matcher
 from assistant.nlu.normalize import Normalizer
 from assistant.safety.confirm import NO_PHRASES, YES_PHRASES, VoiceConfirmer
 from assistant.stt.whisper_stt import WhisperSTT
 from assistant.tts.piper_tts import PiperTTS
-from assistant.voice import VoiceLoop, VoiceSettings
+from assistant.voice import Spotter, VoiceLoop, VoiceSettings, name_only_limit_ms
 from tests.conftest import NO_WINDOW, ROOT
 from tests.voice_fakes import FakeSpeech, RecordingStatus
 
 pytestmark = pytest.mark.skipif(os.environ.get("JARVIS_E2E") != "1", reason="включается через JARVIS_E2E=1")
 log = logging.getLogger(__name__)
 CONFIG = AppConfig()
+NAME = CONFIG.general.name
 NORMALIZER = Normalizer(CONFIG.wake_words, CONFIG.matcher.filler_words)
 PIPER_DIR = ROOT / "models" / "piper"
+TEST_VOICES = ("ru_RU-dmitri-medium", "ru_RU-irina-medium")
 REFERENCE_VOICE = "ru_RU-irina-medium"
 
 
-def voice_paths() -> list[Path]:
-    return sorted(PIPER_DIR.glob("ru_RU-*.onnx")) if PIPER_DIR.is_dir() else []
+def voice_paths(names: tuple[str, ...] | None = None) -> list[Path]:
+    """Скачанные голоса Piper (все или только из names)."""
+    paths = sorted(PIPER_DIR.glob("ru_RU-*.onnx")) if PIPER_DIR.is_dir() else []
+    return [p for p in paths if names is None or p.stem in names]
 
 
-def reference_voice() -> Path | None:
-    """Голос для проверки точности: irina, а если её нет — первый скачанный."""
-    voices = voice_paths()
-    return next((p for p in voices if p.stem == REFERENCE_VOICE), voices[0] if voices else None)
-
-
-@pytest.fixture(scope="module", params=voice_paths() or [None], ids=lambda p: p.stem if p else "нет")
+@pytest.fixture(
+    scope="module", params=voice_paths(TEST_VOICES) or [None], ids=lambda p: p.stem if p else "нет"
+)
 def piper(request: pytest.FixtureRequest) -> PiperTTS:
     if request.param is None:
         pytest.skip("голоса Piper не скачаны")
@@ -65,11 +69,11 @@ def piper(request: pytest.FixtureRequest) -> PiperTTS:
 
 @pytest.fixture(scope="module")
 def reference_piper() -> PiperTTS:
-    path = reference_voice()
-    if path is None:
+    paths = voice_paths((REFERENCE_VOICE,)) or voice_paths()
+    if not paths:
         pytest.skip("голоса Piper не скачаны")
-    log.warning("Эталонный голос: %s", path.stem)
-    return PiperTTS(path)
+    log.warning("Эталонный голос: %s", paths[0].stem)
+    return PiperTTS(paths[0])
 
 
 @pytest.fixture(scope="module")
@@ -96,8 +100,31 @@ def gap(seconds: float) -> np.ndarray:
     return np.zeros(int(16_000 * seconds), dtype=np.int16)
 
 
-def spot(vosk_model: object, phrases: list[str], audio: np.ndarray) -> SpotResult:
-    spotter = GrammarSpotter(vosk_model, phrases)
+class FullVocabularySpotter:
+    """Vosk без грамматики: весь словарь и языковая модель (для сравнения в калибровке)."""
+
+    def __init__(self, model: object) -> None:
+        import vosk
+
+        self._recognizer = vosk.KaldiRecognizer(model, 16_000)
+        self._recognizer.SetWords(True)
+
+    def accept(self, block: np.ndarray) -> SpotResult | None:
+        if self._recognizer.AcceptWaveform(block.tobytes()):
+            return parse_result(self._recognizer.Result())
+        return None
+
+    def finish(self) -> SpotResult:
+        result = parse_result(self._recognizer.FinalResult())
+        self._recognizer.Reset()
+        return result
+
+    def reset(self) -> None:
+        self._recognizer.Reset()
+
+
+def spot(spotter: Spotter, audio: np.ndarray) -> SpotResult:
+    """Всё, что распознаватель услышал во фразе."""
     result = SpotResult()
     for start in range(0, len(audio) - 511, 512):
         part = spotter.accept(audio[start : start + 512])
@@ -117,26 +144,29 @@ def speech_span_ms(audio: np.ndarray) -> int:
     return -1
 
 
-def run_loop(audio: np.ndarray, vosk_model: object, stt: WhisperSTT) -> list[str]:
+def run_loop(audio: np.ndarray, vosk_model: object, stt: WhisperSTT) -> tuple[list[str], int]:
+    """Прогоняет звук через голосовой цикл: что ушло в конвейер и сколько раз прозвучал сигнал."""
     handled: list[str] = []
+    speech = FakeSpeech()
     loop = VoiceLoop(
         source=ArraySource(audio, silence_after=2.0),
         vad=SileroVAD(),
         segmenter=SpeechSegmenter(),
-        spotter=GrammarSpotter(vosk_model, [CONFIG.general.name]),
+        spotter=wake_spotter(vosk_model, NAME),
         stt=stt,
         handle_text=lambda text, conf: handled.append(text),
-        speech=FakeSpeech(),
+        speech=speech,
         normalizer=NORMALIZER,
         wake_names=CONFIG.wake_words,
         settings=VoiceSettings(
             followup_seconds=3, listen_timeout=4, wake_confidence=CONFIG.voice.wake_confidence
         ),
         status=RecordingStatus(),
+        chime=(np.zeros(1600, dtype=np.float32), 16_000),
     )
     loop.run(stop_when_exhausted=True)
-    log.warning("Цикл передал в конвейер: %s", handled)
-    return handled
+    log.warning("Цикл передал в конвейер: %s, сигналов «слушаю»: %d", handled, speech.sounds)
+    return handled, speech.sounds
 
 
 def confirm_by_voice(piper: PiperTTS, vosk_model: object, answer: str) -> bool:
@@ -152,17 +182,24 @@ def confirm_by_voice(piper: PiperTTS, vosk_model: object, answer: str) -> bool:
 
 
 def test_wake_word_is_in_vosk_vocabulary(vosk_model: object) -> None:
-    spotter = GrammarSpotter(vosk_model, ["джарвис"])
-    log.warning("Слово «джарвис» в словаре Vosk: %s", spotter.usable)
+    spotter = wake_spotter(vosk_model, NAME)
+    log.warning("Слово «%s» в словаре Vosk: %s, слов-приманок: %d", NAME, spotter.usable, len(spotter.decoys))
     assert spotter.usable
     confirm = GrammarSpotter(vosk_model, YES_PHRASES + NO_PHRASES)
     assert confirm.missing_words == []
 
 
-CALIBRATION_PHRASES = [
+WITH_NAME = [
     "Джарвис.",
     "Джарвис, открой ютуб.",
     "Джарвис, сделай громче.",
+    "Джарвис, который час?",
+    "Джарвис, найди котиков на ютубе.",
+    "Джарвис, пауза.",
+    "Эй, Джарвис!",
+    "Привет, Джарвис.",
+]
+WITHOUT_NAME = [
     "Сделай громче.",
     "Открой ютуб.",
     "Громкость на пятьдесят.",
@@ -170,6 +207,89 @@ CALIBRATION_PHRASES = [
     "Сегодня хорошая погода.",
     "Я пошёл в магазин за хлебом.",
     "Давай посмотрим кино вечером.",
+    "Привет, как дела?",
+    "Ты где сейчас?",
+    "Позвони мне завтра утром.",
+    "Что будем есть на ужин?",
+    "Мне нужно закончить работу.",
+    "Включи свет на кухне.",
+    "Где мои ключи?",
+    "Это очень интересная статья.",
+    "Сколько стоит этот телефон?",
+    "Пойдём гулять в парк.",
+    "Он сказал, что придёт позже.",
+    "Хорошо, договорились.",
+    "Нет, я не согласен.",
+    "Да, конечно.",
+    "Спасибо большое.",
+    "Подожди минутку.",
+    "Какая сегодня дата?",
+    # Похожие на имя по звучанию.
+    "Жарко сегодня, правда?",
+    "Джинсы лежат в шкафу.",
+    "Чарльз Дарвин написал книгу.",
+    "Марвин, иди сюда.",
+]
+
+
+def wake_variants(model: object) -> dict[str, Callable[[], Spotter]]:
+    return {
+        "имя+[unk]": lambda: GrammarSpotter(model, [NAME]),
+        "приманки": lambda: wake_spotter(model, NAME),
+        "без грамматики": lambda: FullVocabularySpotter(model),
+    }
+
+
+def test_calibration_wake_word(vosk_model: object) -> None:
+    """Полнота и ложные срабатывания слова активации для вариантов распознавателя."""
+    voices = voice_paths()
+    if not voices:
+        pytest.skip("голоса Piper не скачаны")
+    limit = name_only_limit_ms(NAME)
+    totals: dict[str, list[int]] = {}
+    for path in voices:
+        piper = PiperTTS(path)
+        audio = {phrase: say(piper, phrase) for phrase in WITH_NAME + WITHOUT_NAME}
+        spans = {phrase: speech_span_ms(sound) for phrase, sound in audio.items()}
+        for variant, factory in wake_variants(vosk_model).items():
+            spotter = factory()
+            found, false, fast, notes = 0, 0, 0, []
+            for phrase, sound in audio.items():
+                heard = spot(spotter, np.concatenate([gap(0.3), sound, gap(0.5)]))
+                woke = heard.find([NAME], CONFIG.voice.wake_confidence) is not None
+                only_name = woke and heard.known_words == [NAME] and not heard.has_unknown
+                if phrase in WITH_NAME:
+                    found += woke
+                    if not woke:
+                        notes.append(f"пропуск «{phrase}»: {heard.describe()}")
+                elif woke:
+                    false += 1
+                    quick = only_name and spans[phrase] <= limit
+                    fast += quick
+                    notes.append(f"ложно «{phrase}»{' (сразу сигнал)' if quick else ''}: {heard.describe()}")
+            total = totals.setdefault(variant, [0, 0, 0, 0, 0])
+            for index, value in enumerate((found, len(WITH_NAME), false, len(WITHOUT_NAME), fast)):
+                total[index] += value
+            log.warning(
+                "КАЛИБРОВКА имени %s | %s: услышано %d/%d, ложно %d/%d, из них сразу сигнал %d%s",
+                path.stem, variant, found, len(WITH_NAME), false, len(WITHOUT_NAME), fast,
+                "".join(f"\n    {note}" for note in notes),
+            )  # fmt: skip
+    for variant, (found, positives, false, negatives, fast) in totals.items():
+        log.warning(
+            "КАЛИБРОВКА имени ИТОГО %s: услышано %d/%d, ложно %d/%d, из них сразу сигнал %d",
+            variant, found, positives, false, negatives, fast,
+        )  # fmt: skip
+
+
+COMMAND_PHRASES = [
+    "Джарвис.",
+    "Джарвис, открой ютуб.",
+    "Джарвис, сделай громче.",
+    "Сделай громче.",
+    "Открой ютуб.",
+    "Громкость на пятьдесят.",
+    "Который час?",
 ]
 CALIBRATION_ANSWERS = [
     "Да.",
@@ -183,25 +303,28 @@ CALIBRATION_ANSWERS = [
 ]
 
 
-def test_calibration_vosk_and_whisper(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
-    """Печатает длительность речи, уверенность Vosk и текст Whisper (beam 5 и 1)."""
-    for number, phrase in enumerate(CALIBRATION_PHRASES):
+def test_calibration_whisper(piper: PiperTTS, stt: WhisperSTT) -> None:
+    """Длительность речи по VAD, текст Whisper и время распознавания."""
+    for phrase in COMMAND_PHRASES:
         speech = say(piper, phrase)
-        audio = np.concatenate([gap(0.3), speech, gap(0.5)])
-        heard = spot(vosk_model, [CONFIG.general.name], audio)
-        timings = []
-        for beam in (5, 1) if number < 7 else (5,):
-            started = time.perf_counter()
-            text = stt.transcribe(audio, beam_size=beam).text
-            timings.append(f"beam{beam}: «{text}» {(time.perf_counter() - started) * 1000:.0f} мс")
+        started = time.perf_counter()
+        text = stt.transcribe(np.concatenate([gap(0.3), speech, gap(0.5)])).text
         log.warning(
-            "КАЛИБРОВКА «%s» | речь %d мс | Vosk: %s | %s",
-            phrase, speech_span_ms(speech), heard.describe(), " | ".join(timings),
+            "КАЛИБРОВКА Whisper «%s» | речь %d мс | «%s» за %.0f мс",
+            phrase, speech_span_ms(speech), text, (time.perf_counter() - started) * 1000,
         )  # fmt: skip
-    for answer in CALIBRATION_ANSWERS:
-        audio = np.concatenate([gap(0.3), say(piper, answer), gap(0.5)])
-        heard = spot(vosk_model, list(YES_PHRASES + NO_PHRASES), audio)
-        log.warning("КАЛИБРОВКА ответ «%s» | Vosk: %s", answer, heard.describe())
+
+
+def test_calibration_answers(vosk_model: object) -> None:
+    """Что Vosk слышит в ответах на вопрос подтверждения (все голоса)."""
+    for path in voice_paths():
+        piper = PiperTTS(path)
+        spotter = GrammarSpotter(vosk_model, YES_PHRASES + NO_PHRASES)
+        heard = []
+        for answer in CALIBRATION_ANSWERS:
+            result = spot(spotter, np.concatenate([gap(0.3), say(piper, answer), gap(0.5)]))
+            heard.append(f"«{answer}» → {result.describe()}")
+        log.warning("КАЛИБРОВКА ответы %s | %s", path.stem, " | ".join(heard))
 
 
 @pytest.mark.parametrize(
@@ -224,26 +347,27 @@ def test_whisper_recognizes_commands(
 
 def test_wake_word_and_command_in_one_phrase(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
     audio = np.concatenate([gap(1.0), say(piper, "Джарвис, открой ютуб."), gap(1.5)])
-    handled = run_loop(audio, vosk_model, stt)
-    assert len(handled) == 1, handled
+    handled, chimes = run_loop(audio, vosk_model, stt)
+    assert len(handled) == 1 and chimes == 0, handled
 
 
 def test_name_then_pause_then_command(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
     audio = np.concatenate(
         [gap(1.0), say(piper, "Джарвис."), gap(1.2), say(piper, "Сделай громче."), gap(1.5)]
     )
-    handled = run_loop(audio, vosk_model, stt)
-    assert len(handled) == 1, handled
+    handled, chimes = run_loop(audio, vosk_model, stt)
+    assert len(handled) == 1 and chimes == 1, handled
 
 
 @pytest.mark.parametrize(
-    "phrase", ["Сделай громче.", "Сегодня хорошая погода.", "Давай посмотрим кино вечером."]
+    "phrase",
+    ["Сделай громче.", "Который час?", "Сегодня хорошая погода.", "Давай посмотрим кино вечером."],
 )
 def test_phrase_without_name_is_ignored(
     piper: PiperTTS, vosk_model: object, stt: WhisperSTT, phrase: str
 ) -> None:
     audio = np.concatenate([gap(1.0), say(piper, phrase), gap(1.5)])
-    assert run_loop(audio, vosk_model, stt) == []
+    assert run_loop(audio, vosk_model, stt) == ([], 0)  # ни команды, ни сигнала «слушаю»
 
 
 @pytest.mark.parametrize(

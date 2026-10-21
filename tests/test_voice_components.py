@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import threading
 import time
 import zipfile
@@ -14,7 +15,7 @@ import pytest
 from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, ArraySource, resample, to_int16
 from assistant.audio.sounds import SOUND_RATE, listen_chime
 from assistant.audio.vad import SegmenterSettings, SegmentEvent, SileroVAD, SpeechSegmenter
-from assistant.audio.wakeword import SpotResult, parse_result
+from assistant.audio.wakeword import SpotResult, parse_result, wake_spotter
 from assistant.config import AppConfig, SttConfig
 from assistant.models import _safe_extract, download_all
 from assistant.safety.confirm import VoiceConfirmer
@@ -262,6 +263,37 @@ def test_sapi_rate() -> None:
     assert sapi_rate(1.0) == 0
     assert sapi_rate(2.0) == 6 and sapi_rate(0.5) == -6
     assert sapi_rate(100) == 10
+
+
+class FakeVoskModel:
+    """Словарь модели Vosk: слова из vocabulary в нём есть, остальных нет."""
+
+    def __init__(self, vocabulary: set[str]) -> None:
+        self.vocabulary = vocabulary
+
+    def vosk_model_find_word(self, word: str) -> int:
+        return 1 if word in self.vocabulary else -1
+
+
+def test_wake_spotter_grammar_has_decoys(monkeypatch: pytest.MonkeyPatch) -> None:
+    import vosk
+
+    grammars: list[list[str]] = []
+
+    class FakeRecognizer:
+        def __init__(self, model: object, rate: int, grammar: str) -> None:
+            grammars.append(json.loads(grammar))
+
+        def SetWords(self, enabled: bool) -> None:
+            pass
+
+    monkeypatch.setattr(vosk, "KaldiRecognizer", FakeRecognizer)
+    model = FakeVoskModel({"джарвис", "который", "час", "компьютер"})
+    spotter = wake_spotter(model, "Джарвис")
+    assert spotter.decoys == ["который", "час", "компьютер"]  # слов не из словаря модели нет
+    assert grammars[-1] == ["джарвис", "который", "час", "компьютер", "[unk]"]
+    renamed = wake_spotter(model, "Компьютер")  # имя совпало с приманкой — остаётся только именем
+    assert renamed.phrases == ["компьютер"] and "компьютер" not in renamed.decoys
 
 
 def test_spot_result_find() -> None:
