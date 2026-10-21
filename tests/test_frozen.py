@@ -30,3 +30,17 @@ def test_external_launch_does_nothing_outside_build() -> None:
     with frozen.external_launch():
         assert os.environ.get("PATH") == before
     assert os.environ.get("PATH") == before
+
+
+def test_run_program_is_like_subprocess_run() -> None:
+    import subprocess
+    import sys
+
+    done = frozen.run_program(
+        [sys.executable, "-c", "print('готово')"], capture_output=True, text=True, timeout=30
+    )
+    assert (done.returncode, done.stdout.strip()) == (0, "готово")
+    with pytest.raises(subprocess.CalledProcessError):
+        frozen.run_program([sys.executable, "-c", "raise SystemExit(3)"], check=True, timeout=30)
+    with pytest.raises(subprocess.TimeoutExpired):
+        frozen.run_program([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.5)

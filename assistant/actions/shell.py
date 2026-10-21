@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from assistant.actions.registry import ActionError, ActionRegistry, Risk
-from assistant.frozen import external_launch
+from assistant.frozen import run_program
 
 log = logging.getLogger(__name__)
 
@@ -36,12 +36,12 @@ def powershell_args(command: str) -> list[str]:
     return ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
-def register(registry: ActionRegistry, runner: Callable[..., Any] = subprocess.run) -> None:
+def register(registry: ActionRegistry, runner: Callable[..., Any] = run_program) -> None:
     """Регистрирует run_shell.
 
     Args:
         registry: реестр действий.
-        runner: запуск процесса (subprocess.run; подменяется в тестах).
+        runner: запуск процесса (как subprocess.run; подменяется в тестах).
     """
 
     @registry.action(
@@ -53,16 +53,15 @@ def register(registry: ActionRegistry, runner: Callable[..., Any] = subprocess.r
         command: Annotated[str, Field(min_length=1, max_length=2000, description="Команда PowerShell")],
     ) -> str:
         try:
-            with external_launch():
-                result = runner(
-                    powershell_args(command),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=TIMEOUT,
-                    creationflags=_CREATE_NO_WINDOW,
-                )
+            result = runner(
+                powershell_args(command),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=TIMEOUT,
+                creationflags=_CREATE_NO_WINDOW,
+            )
         except subprocess.TimeoutExpired as exc:
             raise ActionError(f"Команда не завершилась за {TIMEOUT} секунд") from exc
         except OSError as exc:
