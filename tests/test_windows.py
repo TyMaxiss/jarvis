@@ -86,6 +86,27 @@ def activate_or_skip(hwnd: int) -> None:
     pump(0.2)
 
 
+def wait_for_keyboard_hook(timeout: float = 5.0) -> None:
+    """Ждёт, пока библиотека keyboard поставит перехват клавиатуры.
+
+    add_hotkey возвращается сразу, а перехват (SetWindowsHookEx) ставится в отдельном
+    потоке: нажатия, отправленные раньше, до библиотеки не доходят. Поэтому нажимаем
+    F24 (такой клавиши на клавиатурах нет), пока библиотека её не увидит.
+    """
+    import keyboard
+
+    seen = threading.Event()
+    remove = keyboard.hook(lambda event: seen.set())
+    try:
+        deadline = time.monotonic() + timeout
+        while not seen.is_set() and time.monotonic() < deadline:
+            press_hotkey("f24")
+            seen.wait(0.1)
+    finally:
+        remove()
+    assert seen.is_set(), "перехват клавиатуры библиотекой keyboard не включился"
+
+
 @pytest.fixture
 def edit_window() -> Iterator[int]:
     """Окно-поле ввода (стандартный класс EDIT), активное и пустое."""
@@ -213,6 +234,7 @@ class TestDesktop:
         try:
             manager.add_press("ctrl+alt+f9", pressed.set)
             manager.add_hold("ctrl+alt+f10", down.set, up.set)
+            wait_for_keyboard_hook()
             press_hotkey("ctrl+alt+f9")
             assert pressed.wait(3), "нажатие ctrl+alt+f9 не дошло"
             codes = parse_hotkey("ctrl+alt+f10")
