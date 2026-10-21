@@ -236,6 +236,21 @@ def test_cancel_skips_remaining_tools(tmp_path: Path) -> None:
     assert w.speaker.said == []  # прервали — молчим
 
 
+def test_no_new_sentences_after_cancel(tmp_path: Path) -> None:
+    # «Стоп» прозвучал, пока ассистент произносил первое предложение: остальные уже не нужны.
+    cancel = threading.Event()
+    w = World(tmp_path, [text_reply("Раз. Два. Три.")])
+
+    def say(text: str) -> None:
+        w.speaker.said.append(text)
+        cancel.set()
+
+    w.speaker.say = say  # type: ignore[method-assign]
+    result = w.agent.run("считай", cancel=cancel)
+    assert result.status is AgentStatus.CANCELLED
+    assert w.speaker.said == ["Раз."]
+
+
 def test_dry_run_does_not_execute(tmp_path: Path) -> None:
     w = World(tmp_path, [tool_reply(("open_app", {"name": "Telegram"})), text_reply("Готово.")], dry_run=True)
     w.agent.run("открой телегу")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -81,10 +82,22 @@ class FakeStream:
         self.closed = True
 
 
+class SilentStream(FakeStream):
+    """Нейросеть «думает»: кусочки не приходят, пока не установлен release."""
+
+    def __init__(self, chunks: list[Any]) -> None:
+        super().__init__(chunks)
+        self.release = threading.Event()
+
+    def __iter__(self) -> Any:
+        self.release.wait(timeout=5)
+        return iter(self._chunks)
+
+
 class FakeOpenAI:
     """Вместо openai.OpenAI: на каждый запрос отдаёт следующий ответ из списка.
 
-    Элемент списка — список кусочков или исключение.
+    Элемент списка — список кусочков, готовый поток (FakeStream) или исключение.
     """
 
     def __init__(self, responses: list[Any], **client_kwargs: Any) -> None:
@@ -101,7 +114,7 @@ class FakeOpenAI:
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item
-        stream = FakeStream(item)
+        stream = item if isinstance(item, FakeStream) else FakeStream(item)
         self.streams.append(stream)
         return stream
 

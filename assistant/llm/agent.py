@@ -186,7 +186,12 @@ class Agent:
         if self._last_activity is not None and started - self._last_activity > self._settings.reset_after:
             self.forget()
         result = AgentResult()
-        streamer = SentenceStreamer(lambda sentence: self._say(result, sentence))
+
+        def speak(sentence: str) -> None:
+            if not cancel.is_set():  # после «стоп» новых фраз не начинаем
+                self._say(result, sentence)
+
+        streamer = SentenceStreamer(speak)
         exchange: list[dict[str, Any]] = [{"role": "user", "content": text}]
         try:
             client = self._get_client()

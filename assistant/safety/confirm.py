@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -64,7 +65,8 @@ _YES_WORDS = frozenset(word for phrase in YES_PHRASES for word in phrase.split()
 class VoiceConfirmer:
     """Подтверждение голосом: ассистент задаёт вопрос и слушает «да» или «нет» (Vosk).
 
-    Молчание в течение timeout секунд означает отмену.
+    Молчание в течение timeout секунд означает отмену. Пока подтверждение спрашивает
+    и слушает (listening), голосовой цикл не читает микрофон.
 
     Args:
         speech: озвучка (say, wait_idle).
@@ -89,8 +91,24 @@ class VoiceConfirmer:
         self._timeout_ms = int(timeout * 1000)
         self._min_confidence = min_confidence
         self._block_ms = block_ms
+        self._listening = threading.Event()
+
+    @property
+    def listening(self) -> bool:
+        """Подтверждение сейчас спрашивает и слушает микрофон."""
+        return self._listening.is_set()
 
     def confirm(self, question: str) -> bool:
+        self._listening.set()
+        try:
+            answer = self._ask(question)
+        finally:
+            self._listening.clear()
+        log.info("Голосовое подтверждение «%s»: %s", question, answer or "нет ответа")
+        return answer in YES_PHRASES
+
+    def _ask(self, question: str) -> str | None:
+        """Задаёт вопрос и ждёт ответа; None — ответа не было."""
         self._speech.say(question)
         self._speech.wait_idle(timeout=30)
         self._source.flush()
@@ -108,8 +126,7 @@ class VoiceConfirmer:
                 answer = self._answer(result)
         if answer is None:
             answer = self._answer(spotter.finish())
-        log.info("Голосовое подтверждение «%s»: %s", question, answer or "нет ответа")
-        return answer in YES_PHRASES
+        return answer
 
     def _answer(self, result: Any) -> str | None:
         """«Нет» важнее «да»: если прозвучало и то и другое, действие не выполняется.

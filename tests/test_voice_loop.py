@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,9 +12,12 @@ import pytest
 
 from assistant.audio.capture import SAMPLE_RATE
 from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
+from assistant.audio.wakeword import SpotResult
 from assistant.nlu.normalize import Normalizer
 from assistant.voice import VoiceLoop, VoiceSettings, VoiceState, name_only_limit_ms
+from tests.conftest import wait_until
 from tests.voice_fakes import (
+    STOP,
     WAKE,
     FakeSource,
     FakeSpeech,
@@ -48,6 +53,8 @@ class Harness:
     """Собирает цикл и запоминает, какие фразы дошли до конвейера.
 
     understood=False — конвейер отвечает «не понял» на любую фразу.
+    stop=True — цикл слушает «стоп» (блоки STOP); stopped — услышан ли он.
+    task — что ещё делает конвейер с фразой (например, ждёт, пока его прервут).
     """
 
     def __init__(
@@ -58,18 +65,24 @@ class Harness:
         settings: VoiceSettings | None = None,
         reply: str | None = "Готово",
         understood: bool = True,
+        stop: bool = False,
+        confirmer: object | None = None,
     ) -> None:
         self.handled: list[str] = []
         self.source = FakeSource(audio)
         self.speech = speech_out or FakeSpeech()
         self.status = RecordingStatus()
         self.stt = FakeSTT(SCRIPT)
+        self.stopped = threading.Event()
+        self.task: Callable[[str], object] | None = None
         self._reply = reply
 
         def handle(text: str, confirmer: object) -> object:
             self.handled.append(text)
             if self._reply:
                 self.speech.say(self._reply)
+            if self.task is not None:
+                self.task(text)
             return text if understood else Unhandled(text)
 
         self.loop = VoiceLoop(
@@ -84,7 +97,10 @@ class Harness:
             settings=settings or VoiceSettings(followup_seconds=3, listen_timeout=3),
             wake_names=["джарвис", "jarvis"],
             status=self.status,
+            confirmer=confirmer,  # type: ignore[arg-type]
             chime=(np.zeros(2205, dtype=np.float32), 22050),
+            stop_spotter=FakeSpotter(word="стоп", value=STOP) if stop else None,
+            on_stop=self.stopped.set,
         )
 
     def run(self) -> Harness:
@@ -332,3 +348,115 @@ def test_waiting_for_wake_word_uses_little_cpu() -> None:
 def test_silence_and_quiet_noise_do_nothing(value: int) -> None:
     h = Harness(np.full(SAMPLE_RATE * 3, value, dtype=np.int16)).run()
     assert h.handled == [] and h.stt.calls == []
+
+
+# --- «Стоп» / «отмена» ----------------------------------------------------------------
+
+
+def test_stop_word_cancels_running_task() -> None:
+    # Задача ждёт, пока её прервут. «Стоп» прерывает её; продолжение без имени после этого
+    # не слушается, а следующее обращение по имени снова работает.
+    audio = np.concatenate(
+        [
+            speech(WAKE, 300), speech(5001, 700), silence(800),
+            speech(STOP, 400), silence(1000),
+            speech(5002, 700), silence(1500),
+            speech(WAKE, 300), speech(5001, 700), silence(1500),
+        ]
+    )  # fmt: skip
+    h = Harness(audio, stop=True)
+    interrupted: list[bool] = []
+
+    def task(text: str) -> None:
+        if not interrupted:
+            interrupted.append(h.stopped.wait(timeout=5))
+
+    h.task = task
+    h.run()
+    assert interrupted == [True]
+    assert ("stopped", "стоп") in h.status.events and h.speech.stops >= 1
+    assert h.handled == ["Джарвис, открой ютуб.", "Джарвис, открой ютуб."]
+    assert 5002 not in h.stt.calls
+
+
+def test_stop_inside_other_speech_does_not_cancel() -> None:
+    # «Стоп» посреди фразы (разговор рядом, ответ ассистента) задачу не прерывает.
+    audio = np.concatenate(
+        [
+            speech(WAKE, 300), speech(5001, 700), silence(800),
+            speech(STOP, 300), speech(5003, 600), silence(1000),
+        ]
+    )  # fmt: skip
+    h = Harness(audio, stop=True)
+    h.task = lambda text: wait_until(lambda: h.source.exhausted, timeout=5)
+    h.run()
+    assert h.source.exhausted and not h.stopped.is_set()
+    assert all(kind != "stopped" for kind, _ in h.status.events)
+
+
+class BorrowingConfirmer:
+    """Голосовое подтверждение, которое сейчас само слушает микрофон."""
+
+    listening = True
+
+    def confirm(self, question: str) -> bool:
+        return False
+
+
+def test_confirmation_keeps_microphone() -> None:
+    # Пока подтверждение ждёт «да/нет», цикл не читает микрофон; потом снова слушает «стоп».
+    audio = np.concatenate(
+        [speech(WAKE, 300), speech(5001, 700), silence(800), speech(STOP, 400), silence(1000)]
+    )
+    confirmer = BorrowingConfirmer()
+    h = Harness(audio, stop=True, confirmer=confirmer)
+    taken: list[int] = []
+
+    def task(text: str) -> None:
+        before = h.source.reads
+        time.sleep(0.2)
+        taken.append(h.source.reads - before)
+        confirmer.listening = False
+        h.stopped.wait(timeout=5)
+
+    h.task = task
+    h.run()
+    assert taken == [0]
+    assert h.stopped.is_set()
+
+
+@pytest.mark.parametrize(("stop", "handled"), [(True, 1), (False, 2)], ids=["слушает стоп", "без стоп-слов"])
+def test_stop_while_assistant_speaks(stop: bool, handled: int) -> None:
+    # Ответ звучит 60 блоков (~1,9 с); «Стоп» посреди него обрывает речь, и продолжение без
+    # имени уже не слушается. Без распознавателя стоп-слов «Сделай громче» — продолжение.
+    audio = np.concatenate(
+        [
+            speech(WAKE, 300), speech(5001, 700), silence(900),
+            speech(STOP, 400), silence(2000),
+            speech(5002, 700), silence(1500),
+        ]
+    )  # fmt: skip
+    h = Harness(audio, speech_out=FakeSpeech(speak_blocks=60), stop=stop).run()
+    assert len(h.handled) == handled
+    assert (("stopped", "стоп") in h.status.events) is stop
+    assert h.loop.state is (VoiceState.IDLE if stop else VoiceState.LISTENING)
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        ([("стоп", 0.95)], True),
+        ([("отмена", 0.9)], True),
+        ([("джарвис", 0.9), ("стоп", 0.95)], True),
+        ([("хватит", 0.85), ("хватит", 0.9)], True),
+        ([("стоп", 0.6)], False),  # неуверенно
+        ([("стоп", 0.95), ("[unk]", 1.0)], False),  # и что-то ещё
+        ([("хорошо", 0.9), ("стоп", 0.95)], False),  # слово-приманка: обычная речь
+        ([("джарвис", 0.95)], False),
+        ([], False),
+    ],
+)
+def test_is_stop(words: list[tuple[str, float]], expected: bool) -> None:
+    loop = Harness(silence(100)).loop
+    heard = SpotResult(" ".join(w for w, _ in words), tuple(words))
+    assert loop.is_stop(heard) is expected

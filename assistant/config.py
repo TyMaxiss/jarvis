@@ -131,7 +131,7 @@ class VoiceConfig(_Section):
     push_to_talk_mode: Literal["press", "hold"] = Field(
         "press", description="press — нажать и говорить (конец по паузе), hold — говорить, удерживая"
     )
-    stop_key: str = Field("ctrl+alt+q", description="Прервать речь ассистента")
+    stop_key: str = Field("ctrl+alt+q", description="Прервать речь ассистента и задачу нейросети")
     followup_seconds: float = Field(5, ge=0, le=60, description="Сколько слушать продолжение без имени")
     listen_timeout: float = Field(6, ge=1, le=60, description="Сколько ждать начала речи после активации")
     min_silence_ms: int = Field(700, ge=200, le=3000, description="Пауза, после которой фраза закончена")

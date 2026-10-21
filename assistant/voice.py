@@ -9,8 +9,13 @@
 
 Время в цикле считается по полученному звуку (блоки по 32 мс), а не по часам —
 с живым микрофоном это одно и то же, а тесты на записях становятся детерминированными.
-Пока ассистент говорит, звук с микрофона выбрасывается (полудуплекс). Короткий сигнал
+Пока ассистент говорит, имя и команды не слушаются (полудуплекс). Короткий сигнал
 «слушаю» — исключение: команду часто начинают говорить, не дождавшись его конца.
+
+«Стоп» / «отмена» (STOP_PHRASES) слушаются, пока выполняется задача и пока ассистент
+говорит: они прерывают задачу нейросети и речь. Задача тогда выполняется в отдельном
+потоке, а голосовой цикл ищет стоп-слово так же, как имя: Vosk со своей грамматикой,
+решение в конце фразы.
 """
 
 from __future__ import annotations
@@ -40,6 +45,8 @@ log = logging.getLogger(__name__)
 _ECHO_GUARD_MS = 300
 # Сколько после начала сигнала «слушаю» ещё может длиться его воспроизведение (задержка вывода).
 _CHIME_MARGIN_MS = 500
+# Фразы, которыми голосом прерывают задачу и речь ассистента.
+STOP_PHRASES = ("стоп", "отмена", "отмени", "хватит", "прекрати")
 _VOWELS = frozenset("аеёиоуыэюяaeiouy")
 
 
@@ -130,8 +137,12 @@ class VoiceLoop:
         settings: настройки.
         wake_names: имя ассистента и варианты его написания (для Vosk — первое).
         status: куда сообщать о состоянии.
-        confirmer: голосовое подтверждение рискованных действий.
+        confirmer: голосовое подтверждение рискованных действий; пока оно слушает ответ
+            (свойство listening), цикл не читает микрофон.
         chime: сигнал «слушаю» (звук и частота) или None.
+        stop_spotter: распознаватель STOP_PHRASES (и имени: «Джарвис, стоп»); None —
+            голосом не прерывается ничего, фраза выполняется в потоке цикла.
+        on_stop: что ещё сделать по «стоп», кроме остановки речи (прервать задачу).
     """
 
     def __init__(
@@ -149,6 +160,8 @@ class VoiceLoop:
         status: StatusSink | None = None,
         confirmer: Confirmer | None = None,
         chime: tuple[np.ndarray, int] | None = None,
+        stop_spotter: Spotter | None = None,
+        on_stop: Callable[[], None] | None = None,
     ) -> None:
         self._source = source
         self._vad = vad
@@ -167,6 +180,9 @@ class VoiceLoop:
         self._status = status
         self._confirmer = confirmer
         self._chime = chime
+        self._stop_spotter = stop_spotter
+        self._on_stop = on_stop
+        self._stop_words = frozenset(" ".join((*STOP_PHRASES, self._wake_phrase)).split())
         self._events: queue.Queue[str] = queue.Queue()
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
@@ -236,7 +252,11 @@ class VoiceLoop:
         self._clock_ms += BLOCK_MS
         speaking = self._speech.speaking
         if speaking and self._clock_ms > self._chime_until_ms:
-            self._was_speaking = True
+            if not self._was_speaking:
+                self._was_speaking = True
+                self._reset_audio_state()  # в речи ассистента ищем только «стоп»
+            if self._stop_block(block):
+                self._enter_idle()
             return
         if self._was_speaking:
             # Ассистент договорил: отбрасываем эхо и начинаем фразу с чистого листа.
@@ -279,24 +299,71 @@ class VoiceLoop:
         """
         if self._spotter is None or not self._settings.wake_word:
             return
+        heard = self._spot(self._spotter, block, event)
+        if heard is None:
+            return
+        log.debug("Vosk: %s", heard.describe())
+        if event is SegmentEvent.END and heard.find([self._wake_phrase], self._settings.wake_confidence):
+            log.info("Услышано имя ассистента: %s", heard.describe())
+            self._on_wake(heard)
+
+    def _spot(self, spotter: Spotter, block: np.ndarray, event: SegmentEvent) -> SpotResult | None:
+        """Подаёт речь распознавателю; в конце фразы возвращает всё услышанное в ней, иначе None.
+
+        Vosk получает только звук, в котором есть речь (с запасом до её начала).
+        """
         if event is SegmentEvent.START:
             self._heard = SpotResult()
             audio = self._segmenter.current_audio()
             for start in range(0, len(audio) - BLOCK_SIZE + 1, BLOCK_SIZE):
-                self._collect(self._spotter.accept(audio[start : start + BLOCK_SIZE]))
+                self._collect(spotter.accept(audio[start : start + BLOCK_SIZE]))
         elif self._segmenter.in_speech:
-            self._collect(self._spotter.accept(block))
+            self._collect(spotter.accept(block))
         elif event in (SegmentEvent.END, SegmentEvent.DISCARD):
-            heard = self._heard + self._spotter.finish()
+            heard = self._heard + spotter.finish()
             self._heard = SpotResult()
-            log.debug("Vosk: %s", heard.describe())
-            if event is SegmentEvent.END and heard.find([self._wake_phrase], self._settings.wake_confidence):
-                log.info("Услышано имя ассистента: %s", heard.describe())
-                self._on_wake(heard)
+            return heard
+        return None
 
     def _collect(self, result: SpotResult | None) -> None:
         if result is not None:
             self._heard = self._heard + result
+
+    def _stop_block(self, block: np.ndarray) -> bool:
+        """Ищет «стоп» / «отмена» во время задачи или речи ассистента. True — услышано.
+
+        Сначала прерывается задача, потом речь: так прерванная задача не успеет
+        поставить в очередь новую фразу.
+        """
+        if self._stop_spotter is None:
+            return False
+        event = self._segmenter.feed(block, self._vad(block))
+        heard = self._spot(self._stop_spotter, block, event)
+        if heard is None:
+            return False
+        log.debug("Vosk (стоп): %s", heard.describe())
+        if not self.is_stop(heard):
+            return False
+        log.info("Услышано «%s» — останавливаю", heard.text)
+        if self._on_stop is not None:
+            self._on_stop()
+        self._speech.stop()
+        self._report("stopped", heard.text)
+        return True
+
+    def is_stop(self, heard: SpotResult) -> bool:
+        """Во фразе только стоп-слова (и, может быть, имя), а стоп-слово распознано уверенно.
+
+        Поэтому «стоп» посреди разговора или ответа ассистента ничего не прерывает.
+        Порог уверенности тот же, что для имени (wake_confidence). Короткое «стоп»
+        детектор речи иногда считает шумом — такая фраза тоже проверяется.
+        """
+        words = {word for word, _ in heard.words}
+        return (
+            bool(words)
+            and words <= self._stop_words
+            and heard.find(STOP_PHRASES, self._settings.wake_confidence) is not None
+        )
 
     def _on_wake(self, heard: SpotResult) -> None:
         """Имя распознано в только что закончившейся фразе.
@@ -362,8 +429,10 @@ class VoiceLoop:
     def _reset_audio_state(self) -> None:
         self._vad.reset()
         self._segmenter.reset()
-        if self._spotter is not None:
-            self._spotter.reset()
+        self._heard = SpotResult()
+        for spotter in (self._spotter, self._stop_spotter):
+            if spotter is not None:
+                spotter.reset()
 
     def handle_events(self) -> None:
         """Обрабатывает накопившиеся события горячих клавиш (вызывается в потоке цикла)."""
@@ -422,7 +491,7 @@ class VoiceLoop:
             return
         self._report("recognized", transcript.text)
         started = time.perf_counter()
-        result = self._handle_text(transcript.text, self._confirmer)
+        result, stopped = self._run_task(transcript.text)
         action_ms = (time.perf_counter() - started) * 1000
         total_ms = pause_ms + transcript.duration_ms + action_ms
         log.info("Текст → результат: %.0f мс; конец речи → результат: %.0f мс", action_ms, total_ms)
@@ -433,7 +502,55 @@ class VoiceLoop:
         )
         if self._status is not None and result is not None:
             self._status.voice_result(result)
-        self._after_response(followup=getattr(result, "handled", True))
+        self._after_response(followup=not stopped and getattr(result, "handled", True))
+
+    def _run_task(self, text: str) -> tuple[Any, bool]:
+        """Выполняет фразу; если задан stop_spotter, тем временем слушает «стоп».
+
+        Returns:
+            Результат конвейера и то, прервал ли пользователь задачу голосом.
+        """
+        if self._stop_spotter is None:
+            return self._handle_text(text, self._confirmer), False
+        outcome: list[Any] = []
+        failure: list[BaseException] = []
+
+        def work() -> None:
+            try:
+                outcome.append(self._handle_text(text, self._confirmer))
+            except BaseException as exc:  # ошибку разбирает голосовой цикл, как без отдельного потока
+                failure.append(exc)
+
+        worker = threading.Thread(target=work, name="voice-task", daemon=True)
+        worker.start()
+        stopped = self._watch_task(worker)
+        if failure:
+            raise failure[0]
+        return (outcome[0] if outcome else None), stopped
+
+    def _watch_task(self, worker: threading.Thread) -> bool:
+        """Ждёт конца задачи и слушает «стоп» / «отмена». True — задачу прервали голосом.
+
+        Пока голосовое подтверждение спрашивает «да/нет», микрофон слушает оно.
+        """
+        stopped = False
+        self._reset_audio_state()
+        while worker.is_alive() and not self._stopped.is_set():
+            if stopped:
+                worker.join(timeout=0.1)  # задача прервана — ждём, пока она это заметит
+            elif self._mic_borrowed():
+                self._reset_audio_state()  # после подтверждения — с чистого листа
+                worker.join(timeout=0.05)
+            elif (block := self._source.read(timeout=0.1)) is not None:
+                self._clock_ms += BLOCK_MS
+                stopped = self._stop_block(block)
+            else:
+                worker.join(timeout=0.01)
+        return stopped
+
+    def _mic_borrowed(self) -> bool:
+        """Голосовое подтверждение сейчас само слушает микрофон."""
+        return bool(getattr(self._confirmer, "listening", False))
 
     def _after_response(self, followup: bool) -> None:
         """После ответа: дождаться конца речи, затем слушать продолжение без имени.

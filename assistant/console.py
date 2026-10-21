@@ -31,8 +31,9 @@ HELP = """\
   :listen         начать слушать голосовую команду (как горячая клавиша)
   :forget         забыть разговор с нейросетью
   :help           эта справка
-Задачу нейросети можно прервать: Ctrl+C в консоли, Ctrl+Alt+Q или голосом «стоп»
-  :q              выход"""
+  :q              выход
+Задачу нейросети прерывает Ctrl+C в консоли, а при включённом голосе — ещё горячая
+клавиша остановки (Ctrl+Alt+Q) и слова «стоп» / «отмена»."""
 
 _AGENT_STATUS = {
     AgentStatus.DONE: "ответила",
@@ -211,6 +212,8 @@ class ConsoleApp:
             self._write(f"  [голос] Распознано: «{detail}»")
         elif state == "latency":
             self._write(f"  [голос] {detail}")
+        elif state == "stopped":
+            self._write(f"  [голос] Услышал «{detail}» — останавливаю")
         elif state in _VOICE_MESSAGES:
             self._write(f"  [голос] {_VOICE_MESSAGES[state]}")
 

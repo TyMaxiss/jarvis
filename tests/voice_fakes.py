@@ -2,7 +2,8 @@
 
 Звук строится из блоков с постоянным значением: значение кодирует, что «сказано».
 FakeVAD считает речью всё громче 1000, FakeSTT возвращает текст по самому частому
-значению во фразе, FakeSpotter «слышит» имя, если во фразе были блоки со значением WAKE.
+значению во фразе, FakeSpotter «слышит» имя, если во фразе были блоки со значением WAKE
+(или «стоп» — для блоков STOP).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from assistant.audio.wakeword import SpotResult
 from assistant.stt.whisper_stt import Transcript
 
 WAKE = 7777
+STOP = 8888
 
 
 def silence(ms: int) -> np.ndarray:
@@ -61,21 +63,24 @@ class FakeSTT:
 
 
 class FakeSpotter:
-    """Как Vosk с грамматикой: в конце фразы «слышит» имя, если были блоки WAKE.
+    """Как Vosk с грамматикой: в конце фразы «слышит» слово, если были блоки value.
 
-    conf — уверенность, с которой «распознано» имя; unk=False — остальные слова
+    conf — уверенность, с которой «распознано» слово; unk=False — остальные слова
     не отмечаются как [unk] (так Vosk иногда «проглатывает» команду после имени).
     """
 
-    def __init__(self, conf: float = 0.95, word: str = "джарвис", unk: bool = True) -> None:
+    def __init__(
+        self, conf: float = 0.95, word: str = "джарвис", unk: bool = True, value: int = WAKE
+    ) -> None:
         self.conf = conf
         self.word = word
         self.unk = unk
+        self.value = value
         self._seen_wake = False
         self._seen_other = False
 
     def accept(self, block: np.ndarray) -> SpotResult | None:
-        if int(block[0]) == WAKE:
+        if int(block[0]) == self.value:
             self._seen_wake = True
         elif int(block[0]):
             self._seen_other = True
@@ -127,14 +132,22 @@ class FakeSpeech:
 
 
 class FakeSource:
-    """Блоки из массива; после конца — None."""
+    """Блоки из массива; после конца — None. reads — сколько блоков прочитано."""
 
     def __init__(self, audio: np.ndarray) -> None:
         self._blocks = blocks(audio)
         self.flushes = 0
+        self.reads = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return not self._blocks
 
     def read(self, timeout: float) -> np.ndarray | None:
-        return self._blocks.pop(0) if self._blocks else None
+        if not self._blocks:
+            return None
+        self.reads += 1
+        return self._blocks.pop(0)
 
     def flush(self) -> None:
         self.flushes += 1

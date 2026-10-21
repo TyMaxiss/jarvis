@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import openai
 import pytest
 
 from assistant.config import LlmConfig
 from assistant.llm.client import LlmCancelled, LlmClient, LlmError
+from tests.conftest import wait_until
 from tests.llm_fakes import (
     FakeOpenAI,
+    SilentStream,
     chunk,
     connection_error,
     factory_for,
@@ -98,7 +101,23 @@ def test_cancel_stops_reading() -> None:
 
     with pytest.raises(LlmCancelled):
         client.complete([{"role": "user", "content": "считай"}], on_text=on_text, cancel=cancel)
-    assert fake.streams[0].closed
+    assert wait_until(lambda: fake.streams[0].closed)
+
+
+def test_cancel_works_while_model_is_silent() -> None:
+    # Нейросеть ещё не прислала ни кусочка, а пользователь сказал «стоп»: ждать её не нужно.
+    silent = SilentStream(text_reply("Не ", "успел."))
+    client, _ = make([silent])
+    cancel = threading.Event()
+    heard: list[str] = []
+    threading.Timer(0.2, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(LlmCancelled):
+        client.complete([{"role": "user", "content": "думай"}], on_text=heard.append, cancel=cancel)
+    assert time.monotonic() - started < 1.0
+    silent.release.set()
+    assert wait_until(lambda: silent.closed)  # брошенный запрос закрыт
+    assert heard == []
 
 
 @pytest.mark.parametrize(

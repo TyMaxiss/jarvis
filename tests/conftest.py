@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,16 @@ FAKE_APPS = [
     AppEntry("Калькулятор", "start_app", "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
     AppEntry("Uninstall Telegram", "shortcut", r"C:\Start Menu\Uninstall Telegram.lnk"),
 ]
+
+
+def wait_until(condition: Callable[[], bool], timeout: float = 2.0) -> bool:
+    """Ждёт, пока условие станет истинным (то, что делают фоновые потоки)."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.01)
+    return True
 
 
 class RecordingSpeaker:

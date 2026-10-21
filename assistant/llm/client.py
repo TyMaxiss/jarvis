@@ -4,15 +4,19 @@
 предложения), вызовы инструментов собираются из кусочков в конце. Повторы при
 ошибках сети, таймаутах, 429 и 5xx делает сам SDK (max_retries, с нарастающей паузой).
 Ошибки превращаются в LlmError с понятным текстом; ключи в текст не попадают.
+
+Запрос идёт в отдельном потоке, поэтому отмена срабатывает сразу, даже пока нейросеть
+ещё молчит: иначе её заметили бы только с приходом следующего кусочка.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +26,9 @@ log = logging.getLogger(__name__)
 
 # OpenAI SDK требует непустой ключ даже там, где он не нужен (Ollama).
 _NO_KEY = "not-needed"
+# Как часто проверять отмену, пока нейросеть молчит, секунды.
+_CANCEL_POLL = 0.1
+_END = object()  # поток ответа закончился
 
 
 class LlmError(Exception):
@@ -174,8 +181,7 @@ class LlmClient:
         if timeout is not None:
             request["timeout"] = timeout
         try:
-            stream = self._client.chat.completions.create(**request)
-            reply = self._read(stream, on_text, cancel, started)
+            reply = self._read(self._chunks(request, cancel), on_text, started)
         except (LlmCancelled, LlmError):
             raise
         except openai.OpenAIError as exc:
@@ -190,12 +196,57 @@ class LlmClient:
         )
         return reply
 
+    def _chunks(self, request: dict[str, Any], cancel: threading.Event | None) -> Generator[Any, None, None]:
+        """Кусочки ответа. Запрос выполняется в отдельном потоке, а здесь ждём кусочки и отмену.
+
+        Брошенный запрос (отмена, ошибка при разборе) закрывается, когда придёт его
+        следующий кусочек или истечёт таймаут.
+
+        Raises:
+            LlmCancelled: пользователь прервал запрос.
+        """
+        items: queue.Queue[Any] = queue.Queue()
+        abandoned = threading.Event()
+
+        def pump() -> None:
+            try:
+                stream = self._client.chat.completions.create(**request)
+                try:
+                    for chunk in stream:
+                        if abandoned.is_set():
+                            break
+                        items.put(chunk)
+                finally:
+                    close = getattr(stream, "close", None)
+                    if close is not None:
+                        close()
+            except Exception as exc:  # ошибку разбирает вызывающий поток
+                items.put(exc)
+            else:
+                items.put(_END)
+
+        threading.Thread(target=pump, name="llm-request", daemon=True).start()
+        try:
+            while True:
+                try:
+                    item = items.get(timeout=_CANCEL_POLL)
+                except queue.Empty:
+                    item = None
+                if cancel is not None and cancel.is_set():
+                    raise LlmCancelled
+                if item is None:
+                    continue
+                if item is _END:
+                    return
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            abandoned.set()
+
     @staticmethod
     def _read(
-        stream: Any,
-        on_text: Callable[[str], None] | None,
-        cancel: threading.Event | None,
-        started: float,
+        chunks: Generator[Any, None, None], on_text: Callable[[str], None] | None, started: float
     ) -> LlmReply:
         """Собирает ответ из кусочков потока."""
         reply = LlmReply()
@@ -203,9 +254,7 @@ class LlmClient:
         reasoning: list[str] = []
         calls: dict[int, dict[str, str]] = {}
         try:
-            for chunk in stream:
-                if cancel is not None and cancel.is_set():
-                    raise LlmCancelled
+            for chunk in chunks:
                 if not chunk.choices:  # служебный кусок (например, usage)
                     continue
                 delta = chunk.choices[0].delta
@@ -228,9 +277,7 @@ class LlmClient:
                         slot["name"] += part.function.name or ""
                         slot["arguments"] += part.function.arguments or ""
         finally:
-            close = getattr(stream, "close", None)
-            if close is not None:
-                close()
+            chunks.close()  # если ответ не дочитан, запрос будет брошен
         reply.text = "".join(text)
         reply.reasoning = "".join(reasoning)
         reply.tool_calls = [

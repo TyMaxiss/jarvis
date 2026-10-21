@@ -13,7 +13,8 @@
 * для слова активации — сколько фраз с именем Vosk услышал и сколько фраз без имени
   принял за имя, с приманками и без (все скачанные голоса);
 * длительность речи по VAD и текст Whisper с временем распознавания;
-* что Vosk слышит в ответах «да/нет», с приманками и без.
+* что Vosk слышит в ответах «да/нет», с приманками и без;
+* какие фразы прерывают ассистента как «стоп» (все голоса).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -37,9 +39,9 @@ from assistant.nlu.normalize import Normalizer
 from assistant.safety.confirm import NO_PHRASES, YES_PHRASES, VoiceConfirmer
 from assistant.stt.whisper_stt import WhisperSTT
 from assistant.tts.piper_tts import PiperTTS
-from assistant.voice import Spotter, VoiceLoop, VoiceSettings, name_only_limit_ms
+from assistant.voice import STOP_PHRASES, Spotter, VoiceLoop, VoiceSettings, name_only_limit_ms
 from tests.conftest import NO_WINDOW, ROOT
-from tests.voice_fakes import FakeSpeech, RecordingStatus
+from tests.voice_fakes import FakeSpeech, FakeSTT, RecordingStatus
 
 pytestmark = pytest.mark.skipif(os.environ.get("JARVIS_E2E") != "1", reason="включается через JARVIS_E2E=1")
 log = logging.getLogger(__name__)
@@ -153,6 +155,46 @@ def run_loop(audio: np.ndarray, vosk_model: object, stt: WhisperSTT) -> tuple[li
     return handled, speech.sounds
 
 
+def stop_spotter(vosk_model: object) -> GrammarSpotter:
+    """Распознаватель стоп-слов, как в main.py: «стоп», «отмена»… и имя («Джарвис, стоп»)."""
+    return phrase_spotter(vosk_model, [*STOP_PHRASES, NAME])
+
+
+def stop_heard(audio: np.ndarray, vosk_model: object) -> tuple[bool, list[str]]:
+    """Прерывает ли фраза ассистента, пока он говорит (так же «стоп» слушается во время задачи).
+
+    Returns:
+        Остановил ли цикл речь и что Vosk услышал в каждой фразе.
+    """
+    speech = FakeSpeech(speak_blocks=100_000)
+    speech.say("Длинный ответ ассистента")
+    stopped = threading.Event()
+    loop = VoiceLoop(
+        source=ArraySource(np.concatenate([gap(0.3), audio, gap(1.0)]), silence_after=0.5),
+        vad=SileroVAD(),
+        segmenter=SpeechSegmenter(),
+        spotter=None,
+        stt=FakeSTT({}),
+        handle_text=lambda text, conf: None,
+        speech=speech,
+        normalizer=NORMALIZER,
+        wake_names=CONFIG.wake_words,
+        settings=VoiceSettings(wake_word=False, wake_confidence=CONFIG.voice.wake_confidence),
+        stop_spotter=stop_spotter(vosk_model),
+        on_stop=stopped.set,
+    )
+    heard: list[str] = []
+    is_stop = loop.is_stop
+
+    def remember(result: SpotResult) -> bool:
+        heard.append(result.describe())
+        return is_stop(result)
+
+    loop.is_stop = remember  # type: ignore[method-assign]
+    loop.run(stop_when_exhausted=True)
+    return stopped.is_set(), heard
+
+
 def confirm_by_voice(piper: PiperTTS, vosk_model: object, answer: str) -> bool:
     source = ArraySource(np.concatenate([gap(0.5), say(piper, answer), gap(1.0)]), silence_after=0.5)
     confirmer = VoiceConfirmer(
@@ -171,6 +213,7 @@ def test_wake_word_is_in_vosk_vocabulary(vosk_model: object) -> None:
     assert spotter.usable
     confirm = phrase_spotter(vosk_model, YES_PHRASES + NO_PHRASES)
     assert confirm.missing_words == []
+    assert stop_spotter(vosk_model).missing_words == []
 
 
 WITH_NAME = [
@@ -403,3 +446,36 @@ def test_sapi_voice_synthesizes() -> None:
     log.warning("SAPI: «%s» → %.1f с звука, %d Гц", result["text"], len(audio) / rate, rate)
     assert len(audio) > rate * 0.3
     assert float(np.abs(audio).max()) > 0.01  # не тишина
+
+
+# --- «Стоп» / «отмена» ----------------------------------------------------------------
+
+STOP_SAID = ["Стоп.", "Отмена.", "Хватит.", "Джарвис, стоп."]
+NOT_STOP = ["Сегодня хорошая погода.", "Сделай громче.", "Открываю ютуб.", "Не знаю такой команды."]
+STOP_CALIBRATION = [*STOP_SAID, "Прекрати.", "Отмени.", "Стоп, хватит.", "Отменено.", "Готово.", *NOT_STOP]
+
+
+def test_calibration_stop_words(vosk_model: object) -> None:
+    """Какие фразы цикл принимает за «стоп» (все голоса)."""
+    voices = voice_paths()
+    if not voices:
+        pytest.skip("голоса Piper не скачаны")
+    for path in voices:
+        piper = PiperTTS(path)
+        lines = []
+        for phrase in STOP_CALIBRATION:
+            stopped, heard = stop_heard(say(piper, phrase), vosk_model)
+            lines.append(f"{'СТОП' if stopped else '    '} «{phrase}» → {' | '.join(heard) or '—'}")
+        log.warning("КАЛИБРОВКА стоп %s:%s", path.stem, "".join(f"\n    {line}" for line in lines))
+
+
+@pytest.mark.parametrize("phrase", STOP_SAID)
+def test_stop_word_interrupts(reference_piper: PiperTTS, vosk_model: object, phrase: str) -> None:
+    stopped, heard = stop_heard(say(reference_piper, phrase), vosk_model)
+    assert stopped, heard
+
+
+@pytest.mark.parametrize("phrase", NOT_STOP)
+def test_ordinary_speech_does_not_interrupt(piper: PiperTTS, vosk_model: object, phrase: str) -> None:
+    stopped, heard = stop_heard(say(piper, phrase), vosk_model)
+    assert not stopped, heard

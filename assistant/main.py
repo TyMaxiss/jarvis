@@ -148,7 +148,7 @@ def start_voice(
     from assistant.audio.wakeword import VoskModelError, load_vosk_model, phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
     from assistant.stt.whisper_stt import WhisperSTT
-    from assistant.voice import VoiceLoop, VoiceSettings
+    from assistant.voice import STOP_PHRASES, VoiceLoop, VoiceSettings
 
     voice = config.voice
     if not (voice.wake_word or voice.push_to_talk):
@@ -202,6 +202,11 @@ def start_voice(
                 voice.confirm_timeout,
                 voice.confirm_confidence,
             )
+        stop_spotter = None
+        if vosk_model is not None:
+            # «Джарвис, стоп» тоже считается — если имя есть в словаре Vosk.
+            stop_phrases = [*STOP_PHRASES, *([config.general.name] if spotter is not None else [])]
+            stop_spotter = phrase_spotter(vosk_model, stop_phrases)
         segmenter = SpeechSegmenter(
             SegmenterSettings(
                 threshold=voice.vad_threshold,
@@ -232,7 +237,14 @@ def start_voice(
             status=console,
             confirmer=confirmer,
             chime=(listen_chime(), SOUND_RATE) if voice.sounds else None,
+            stop_spotter=stop_spotter,
+            on_stop=pipeline.cancel,
         )
+
+        def stop_all() -> None:
+            """Горячая клавиша остановки: прервать задачу нейросети, речь и прослушивание."""
+            pipeline.cancel()
+            loop.stop_speech()
 
         ways = []
         if spotter is not None:
@@ -245,7 +257,7 @@ def start_voice(
                 elif voice.push_to_talk:
                     hotkeys.add_press(voice.push_to_talk_key, loop.push_to_talk)
                     ways.append(f"нажмите {voice.push_to_talk_key}")
-                hotkeys.add_press(voice.stop_key, loop.stop_speech)
+                hotkeys.add_press(voice.stop_key, stop_all)
             except HotkeyError as exc:
                 out.write(f"! {exc}\n")
         ways.append("или введите :listen")
@@ -254,7 +266,8 @@ def start_voice(
         hotkeys.close()
         capture.stop()
         raise
-    out.write(f"Голос включён: {', '.join(ways)}. Прервать речь — {voice.stop_key}.\n")
+    stop_ways = f"{voice.stop_key} или «стоп»" if stop_spotter is not None else voice.stop_key
+    out.write(f"Голос включён: {', '.join(ways)}. Прервать ответ или задачу — {stop_ways}.\n")
     return VoiceRuntime(capture, loop, hotkeys)
 
 
