@@ -197,7 +197,13 @@ DEFAULT_LLM_PROFILES: dict[str, dict[str, Any]] = {
         "model": "deepseek-v4-flash-free",
         "api_key_env": "OPENCODE_API_KEY",
     },
-    "ollama": {"base_url": "http://localhost:11434/v1", "model": "qwen3:8b"},
+    "ollama": {
+        "base_url": "http://localhost:11434/v1",
+        "model": "qwen3:8b",
+        # Без «размышлений»: быстрее отвечает. Для моделей вроде qwen3 Ollama переводит
+        # reasoning_effort "none" в think=false (docs/api/openai-compatibility в репозитории ollama).
+        "extra_body": {"reasoning_effort": "none"},
+    },
 }
 
 

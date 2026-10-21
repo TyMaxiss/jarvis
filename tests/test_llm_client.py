@@ -52,11 +52,21 @@ def test_deepseek_profile_request() -> None:
     assert fake.streams[0].closed
 
 
-def test_ollama_needs_no_key_and_no_extra_body() -> None:
+def test_ollama_needs_no_key_and_does_not_think() -> None:
     client, fake = make([text_reply("Да.")], profile="ollama")
     client.complete([{"role": "user", "content": "привет"}])
     assert fake.client_kwargs["api_key"]  # SDK требует непустой ключ
-    assert "extra_body" not in fake.requests[0] and "tools" not in fake.requests[0]
+    assert fake.requests[0]["extra_body"] == {"reasoning_effort": "none"}
+    assert "tools" not in fake.requests[0]
+
+
+def test_user_profile_settings_override_defaults() -> None:
+    client, fake = make(
+        [text_reply("Да.")], profile="ollama", profiles={"ollama": {"model": "llama3.1:8b", "extra_body": {}}}
+    )
+    client.complete([{"role": "user", "content": "привет"}])
+    assert fake.requests[0]["model"] == "llama3.1:8b" and "extra_body" not in fake.requests[0]
+    assert fake.client_kwargs["base_url"] == "http://localhost:11434/v1"  # остальное — из встроенного профиля
 
 
 def test_missing_key_is_explained(monkeypatch: pytest.MonkeyPatch) -> None:

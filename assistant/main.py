@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import platform
 import sys
 import time
@@ -274,6 +275,18 @@ def start_voice(
 # --- Запуск ---------------------------------------------------------------------------
 
 
+def build_masker(config: AppConfig) -> SecretMasker:
+    """Маскировка секретов в логах: переменные *_KEY, *_TOKEN… и ключи всех профилей нейросети.
+
+    Ключ своего профиля может лежать в переменной с любым именем — он тоже маскируется.
+    """
+    masker = SecretMasker.from_environ()
+    for profile in config.llm.profiles.values():
+        if profile.api_key_env:
+            masker.add(os.environ.get(profile.api_key_env, ""))
+    return masker
+
+
 def describe_llm(config: AppConfig) -> str:
     """Строки о нейросети для консоли при старте: профиль и чего не хватает."""
     llm = config.llm
@@ -314,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
 
     debug = args.debug or config.general.debug
     dry_run = args.dry_run or config.general.dry_run
-    masker = SecretMasker.from_environ()
+    masker = build_masker(config)
     log_dir = config.resolve(config.logging.dir)
     setup_logging(
         log_dir / config.logging.file,

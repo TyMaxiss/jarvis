@@ -33,7 +33,7 @@ class TestConfig:
         # Пример конфига не должен расходиться со значениями по умолчанию в коде.
         example = load_config(ROOT / "config.example.yaml")
         defaults = AppConfig()
-        for section in ("general", "matcher", "commands", "browser", "voice", "stt", "tts", "logging"):
+        for section in ("general", "matcher", "commands", "browser", "voice", "stt", "tts", "llm", "logging"):
             assert getattr(example, section) == getattr(defaults, section), section
 
     def test_defaults_without_files(self, tmp_path: Path) -> None:

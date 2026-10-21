@@ -86,6 +86,34 @@ tts:
   rate: 1.0                      # скорость речи
   volume: 1.0
 
+llm:
+  enabled: true                  # false — фразы, которых нет среди команд, в нейросеть не уходят
+  profile: opencode_zen          # deepseek, opencode_zen, ollama или свой профиль из profiles (см. README)
+  max_steps: 15                  # сколько раз агент может обратиться к нейросети за одну задачу
+  timeout: 120                   # лимит на всю задачу, секунды
+  request_timeout: 30            # лимит на один запрос, секунды
+  retries: 2                     # повторы при ошибках сети, таймаутах и 429
+  history: 10                    # сколько последних обменов помнить
+  reset_after: 300               # через сколько секунд тишины забыть разговор
+  temperature: 0.3
+  # Профили провайдеров (любой OpenAI-совместимый сервис). Можно поменять поля встроенного
+  # профиля или добавить свой: указанные поля заменяют встроенные, остальные остаются.
+  profiles:
+    deepseek:
+      base_url: https://api.deepseek.com
+      model: deepseek-flash
+      api_key_env: DEEPSEEK_API_KEY        # в какой переменной .env лежит ключ
+      vision: true
+      extra_body: {thinking: {type: disabled}}   # быстрый режим без рассуждений
+    opencode_zen:
+      base_url: https://opencode.ai/zen/v1
+      model: deepseek-v4-flash-free
+      api_key_env: OPENCODE_API_KEY
+    ollama:                                # локально, без интернета и без ключа
+      base_url: http://localhost:11434/v1
+      model: qwen3:8b
+      extra_body: {reasoning_effort: none}  # без «размышлений» — быстрее
+
 logging:
   level: INFO                    # DEBUG, INFO, WARNING или ERROR
   dir: logs
