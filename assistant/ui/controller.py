@@ -511,7 +511,11 @@ class UiController:
         except SettingsError as exc:
             return self._save_result(False, exc.errors)
         log.info("Нейросеть: профиль %s, модель %s", name, profile.model)
+        agent = self.pipeline.agent
+        unchanged = agent is not None and agent.settings == config.llm
         self._apply(config)
+        if key and unchanged and agent is not None:
+            agent.reconfigure(config.llm)  # профиль тот же, а ключ новый — клиент нужен новый
         return self._save_result(True, [])
 
     def llm_forget_key(self, name: str) -> dict[str, Any]:

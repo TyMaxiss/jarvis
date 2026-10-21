@@ -354,3 +354,15 @@ def test_reload_commands_reports_count(world: SimpleNamespace) -> None:
     result = world.controller.reload_commands()
     assert result["count"] == len(world.controller.commands.commands) and result["issues"] == []
     assert world.bus.of("commands")[-1] == result and rebinds == [1]
+
+
+def test_new_key_for_same_profile_recreates_client(world: SimpleNamespace) -> None:
+    request = {"profile": "deepseek", "model": "deepseek-flash", "key": "sk-deepseek-old-1234567890"}
+    world.controller.llm_save(request)
+    agent = world.pipeline.agent
+    assert agent is world.agents[0] and agent.reconfigured == []  # агент создан с нужным профилем
+    world.controller.llm_save({**request, "key": "sk-deepseek-new-1234567890"})
+    # Профиль и модель те же, а ключ новый: клиент с прежним ключом не должен остаться.
+    assert len(agent.reconfigured) == 1
+    world.controller.llm_save({**request, "key": ""})
+    assert len(agent.reconfigured) == 1  # без нового ключа пересоздавать нечего
