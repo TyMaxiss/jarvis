@@ -15,7 +15,10 @@ const voiceStates: Record<VoiceState, string> = {
 export function voiceLabel(state: AppState | null): string {
   if (!state) return ''
   const voice = state.voice
-  if (!voice.enabled) return voice.problem ? 'Голос недоступен' : voiceStates.off
+  if (!voice.enabled) {
+    if (voice.loading) return 'Запускаю голос…'
+    return voice.problem ? 'Голос недоступен' : voiceStates.off
+  }
   if (voice.paused) return voiceStates.paused
   if (voice.state === 'idle' && voice.wake_word) return `Жду «${state.name}»`
   return voiceStates[voice.state] ?? voiceStates.idle

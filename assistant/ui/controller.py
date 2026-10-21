@@ -158,6 +158,7 @@ class UiController:
         self.hotkeys_paused = hotkeys_paused or threading.Event()
         self.host: WindowHost | None = None
         self.voice: VoiceHandle | None = None
+        self.voice_loading = False  # голос ещё загружается (Whisper — несколько секунд)
         self.voice_problem = ""
         self._voice_state = "off"
         self._paused = False
@@ -204,6 +205,7 @@ class UiController:
                 "wake_word": voice is not None and voice.wake_word,
                 "push_to_talk_key": config.voice.push_to_talk_key if config.voice.push_to_talk else "",
                 "stop_key": config.voice.stop_key,
+                "loading": self.voice_loading,
                 "problem": self.voice_problem,
             },
             "llm": self._llm_summary(),
@@ -266,6 +268,7 @@ class UiController:
     def attach_voice(self, voice: VoiceHandle) -> None:
         """Голос запущен (он загружается в фоне после появления окон)."""
         self.voice = voice
+        self.voice_loading = False
         self.voice_problem = ""
         self._voice_state = "idle"
         self.confirmer.voice = voice.confirmer
@@ -273,6 +276,7 @@ class UiController:
 
     def voice_failed(self, problem: str) -> None:
         """Голос запустить не удалось: окна покажут почему."""
+        self.voice_loading = False
         self.voice_problem = problem
         self.push_state()
 

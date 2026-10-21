@@ -84,9 +84,8 @@ class UiApp:
         urls = ui_urls(config.ui.theme, config.ui.accent, self._dev_url)
         windows = Windows(webview, urls, apis, config.ui.theme, config.ui.start_minimized)
         controller.host = windows
-        controller.voice_problem = self._voice_problem or (
-            "Загружаю распознавание речи…" if self._voice_starter else ""
-        )
+        controller.voice_problem = self._voice_problem
+        controller.voice_loading = self._voice_starter is not None
         controller.on_chat_key = self._bind_chat_key
         controller.on_commands = self._bind_command_keys
         controller.on_state = self._update_tray

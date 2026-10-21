@@ -430,6 +430,10 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     args = parse_args(argv)
     out: Any = sys.stdout if sys.stdout is not None else LogWriter()
+    # pythonw: консоли нет, а библиотеки (прогресс загрузки моделей) пишут в stdout и stderr.
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115
     if hasattr(out, "reconfigure"):
         out.reconfigure(errors="replace")
     try:

@@ -49,6 +49,7 @@ export interface AppState {
     wake_word: boolean
     push_to_talk_key: string
     stop_key: string
+    loading: boolean // голос ещё загружается
     problem: string
   }
   llm: LlmSummary

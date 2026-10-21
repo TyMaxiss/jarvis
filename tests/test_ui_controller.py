@@ -109,6 +109,7 @@ def test_state_matches_interface(world: SimpleNamespace) -> None:
         "wake_word",
         "push_to_talk_key",
         "stop_key",
+        "loading",
         "problem",
     }
     assert set(state["llm"]) == {"enabled", "profile", "title", "model", "ready", "problem"}
@@ -288,10 +289,11 @@ def test_quick_chat_toggles_and_focuses_input(world: SimpleNamespace) -> None:
 def test_voice_controls(world: SimpleNamespace) -> None:
     controller = world.controller
     voice = FakeVoice()
-    controller.voice_problem = "Загружаю распознавание речи…"
+    controller.voice_loading = True
+    assert controller.state()["voice"]["loading"]
     controller.attach_voice(voice)
     state = world.bus.of("state")[-1]["voice"]
-    assert state["enabled"] and state["state"] == "idle" and state["problem"] == "" and state["wake_word"]
+    assert state["enabled"] and state["state"] == "idle" and not state["loading"] and state["wake_word"]
     controller.voice_listen()
     controller.voice_pause(True)
     assert voice.loop.listen_requests == 1 and voice.loop.paused

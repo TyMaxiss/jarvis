@@ -22,7 +22,7 @@ export function Home({ state, onOpenSettings }: { state: AppState; onOpenSetting
 function Hero({ state }: { state: AppState }) {
   const voice = state.voice
   const listening = isListening(voice.state)
-  const busy = voice.state === 'recognizing' || voice.state === 'processing'
+  const busy = voice.loading || voice.state === 'recognizing' || voice.state === 'processing'
   return (
     <Card className="flex items-center gap-7 p-7">
       <button
@@ -49,6 +49,10 @@ function Hero({ state }: { state: AppState }) {
             {!voice.wake_word && voice.push_to_talk_key && 'Нажмите '}
             {voice.push_to_talk_key && <Keys value={voice.push_to_talk_key} />}. Остановить —{' '}
             <Keys value={voice.stop_key} /> или «стоп».
+          </p>
+        ) : voice.loading ? (
+          <p className="mt-1.5 text-[13px] text-muted">
+            Загружаю распознавание речи — это несколько секунд. Команды текстом уже работают.
           </p>
         ) : (
           <p className="mt-1.5 flex items-center gap-2 text-[13px] text-warn">

@@ -16,6 +16,7 @@ describe('voiceLabel', () => {
     expect(voiceLabel(state)).toBe('Жду «Джарвис»')
     expect(voiceLabel({ ...state, voice: { ...state.voice, paused: true } })).toBe('Прослушивание на паузе')
     expect(voiceLabel({ ...state, voice: { ...state.voice, enabled: false, problem: 'нет микрофона' } })).toBe('Голос недоступен')
+    expect(voiceLabel({ ...state, voice: { ...state.voice, enabled: false, loading: true } })).toBe('Запускаю голос…')
     expect(isListening('holding')).toBe(true)
     expect(isListening('processing')).toBe(false)
   })

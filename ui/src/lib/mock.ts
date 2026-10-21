@@ -112,6 +112,7 @@ function makeState(): AppState {
       wake_word: true,
       push_to_talk_key: 'ctrl+alt+space',
       stop_key: 'ctrl+alt+q',
+      loading: false,
       problem: '',
     },
     llm: { enabled: true, profile: 'deepseek', title: 'DeepSeek', model: 'deepseek-flash', ready: true, problem: '' },
