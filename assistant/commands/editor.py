@@ -125,7 +125,8 @@ def read_pack(path: Path) -> Pack:
     except OSError as exc:
         raise EditorError([f"Не удалось прочитать {path.name}: {exc}"]) from exc
     try:
-        root = _yaml().load(text) if text.strip() else None
+        # ruamel оставляет \r в комментариях; число строк от замены \r\n не меняется.
+        root = _yaml().load(text.replace("\r\n", "\n")) if text.strip() else None
     except YAMLError as exc:
         raise EditorError([f"{path.name} не читается, исправьте его вручную: {exc}"]) from exc
     if root is not None and not isinstance(root, CommentedSeq):

@@ -139,6 +139,15 @@ def test_editing_own_command_changes_only_its_text(editor: CommandEditor, comman
     assert text == MY_YAML.replace('  reply: "Все системы готовы"\n', '  confirm: true\n  reply: "Поехали"\n')
 
 
+def test_editing_in_file_with_windows_line_endings(editor: CommandEditor, commands: Path) -> None:
+    (commands / "my.yaml").write_bytes(MY_YAML.replace("\n", "\r\n").encode("utf-8"))
+    current = editor.command("my.yaml", "work_mode")["command"]
+    current["reply"] = "Поехали"
+    editor.save("my.yaml", "work_mode", current)
+    expected = MY_YAML.replace('  reply: "Все системы готовы"\n', '  reply: "Поехали"\n')
+    assert (commands / "my.yaml").read_bytes().decode("utf-8") == expected.replace("\n", "\r\n")
+
+
 def test_editing_steps_keeps_unchanged_steps(editor: CommandEditor, commands: Path) -> None:
     current = editor.command("my.yaml", "work_mode")["command"]
     current["steps"][1]["args"]["name"] = "Блокнот"
