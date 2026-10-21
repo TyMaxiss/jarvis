@@ -160,6 +160,10 @@ class Api:
         return self._controller.command_run(form, str(phrase))
 
     @_logged
+    def timer_cancel(self, alarm_id: str) -> dict[str, Any]:
+        return self._controller.timer_cancel(str(alarm_id))
+
+    @_logged
     def history(self, query: dict[str, Any]) -> dict[str, Any]:
         return self._controller.history(query)
 

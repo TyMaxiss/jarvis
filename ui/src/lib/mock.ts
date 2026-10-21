@@ -221,6 +221,11 @@ function makeHistory(): HistoryItem[] {
   ]
 }
 
+/** Время через столько-то секунд — ISO, как его отдаёт Python. */
+function later(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toISOString()
+}
+
 function makeState(): AppState {
   return {
     name: 'Джарвис',
@@ -242,6 +247,10 @@ function makeState(): AppState {
     scenarios: [
       { id: 'work_mode', title: 'Рабочий режим', phrase: 'рабочий режим', steps: 3 },
       { id: 'minimize_all', title: 'Свернуть все окна', phrase: 'сверни все окна', steps: 1 },
+    ],
+    timers: [
+      { id: 't1', kind: 'timer', due: later(4 * 60 + 12), text: 'чай', seconds: 300 },
+      { id: 'r1', kind: 'reminder', due: later(2 * 3600), text: 'позвонить маме', seconds: 0 },
     ],
     ui: { theme: 'dark', accent: '#7c6cff', overlay: true, quick_chat_key: 'ctrl+alt+enter' },
   }
@@ -449,6 +458,11 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
     },
     async reload_commands() {
       return { count: 42, issues: [] }
+    },
+    async timer_cancel(id: string) {
+      state.timers = state.timers.filter((alarm) => alarm.id !== id)
+      pushState()
+      return structuredClone(state)
     },
     async restart() {},
   }

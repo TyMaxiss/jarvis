@@ -218,6 +218,12 @@ def _raw_tail(original: str, anchor: Sequence[str]) -> str | None:
     return tail or None
 
 
+def _numbers_only(phrase: _Phrase) -> bool:
+    """Все слоты шаблона — числа (int или float)."""
+    slots = [name for kind, name in phrase.elements if kind == "slot"]
+    return bool(slots) and all(phrase.command.slot_type(name) in ("int", "float") for name in slots)
+
+
 class Matcher:
     """Сопоставляет фразы с командами.
 
@@ -389,6 +395,7 @@ class Matcher:
         words = tuple(text.split())
         statics: dict[str, Candidate] = {}
         templates: list[Candidate] = []
+        numeric: list[Candidate] = []  # шаблоны только с числами, совпавшие целиком
         for phrase in self._phrases:
             command = phrase.command
             if command.when is not None and not command.when.matches(window):
@@ -409,9 +416,10 @@ class Matcher:
             found = phrase.regex.fullmatch(text)
             if found:
                 slots = self._extract_slots(phrase, found, original)
-                templates.append(
-                    Candidate(command, 100.0, phrase.source, "template", slots, phrase.specificity)
-                )
+                candidate = Candidate(command, 100.0, phrase.source, "template", slots, phrase.specificity)
+                templates.append(candidate)
+                if _numbers_only(phrase):
+                    numeric.append(candidate)
                 continue
             aligned = _align_template(phrase.elements, words, command.slots)
             if aligned is not None and aligned[0] >= self._config.threshold:
@@ -431,6 +439,10 @@ class Matcher:
         exact = [c for c in ranked if c.kind == "exact"]
         if exact:
             return self._decide(_prefer_when(exact), candidates, _by_score, gap=_TIE)
+        if numeric:
+            # «засеки 10 минут» — это не «засеки минуту», как бы похожи ни были фразы: число
+            # в шаблоне совпало. Со строковым слотом так нельзя: «открой {name}» подходит ко всему.
+            return self._decide_templates(_prefer_when(numeric), candidates)
         if ranked and ranked[0].score >= self._config.threshold:
             # Приоритет when — только среди прошедших порог; иначе сравниваем со всеми,
             # чтобы правило разрыва учитывало и кандидатов ниже порога.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +23,7 @@ from assistant.nlu.matcher import Matcher
 from assistant.pipeline import Pipeline
 from assistant.safety.confirm import StaticConfirmer
 from assistant.safety.policy import SafetyPolicy
+from assistant.timers import Alarms, local_now
 from assistant.ui import controller as controller_module
 from assistant.ui.activity import Activity
 from assistant.ui.confirm import UiConfirmer
@@ -102,7 +104,18 @@ def world(
 def test_state_matches_interface(world: SimpleNamespace) -> None:
     state = world.controller.state()
     # Ключи — как в типе AppState в ui/src/lib/types.ts.
-    assert set(state) == {"name", "version", "voice", "llm", "dry_run", "volume", "recent", "scenarios", "ui"}
+    assert set(state) == {
+        "name",
+        "version",
+        "voice",
+        "llm",
+        "dry_run",
+        "volume",
+        "recent",
+        "scenarios",
+        "timers",
+        "ui",
+    }
     assert set(state["voice"]) == {
         "enabled",
         "state",
@@ -131,6 +144,33 @@ def test_window_ready_starts_events(world: SimpleNamespace) -> None:
                                          "issues": ["my.yaml: шаг 1: неизвестное действие"]}]  # fmt: skip
     world.controller.window_ready("evil")
     assert not world.bus.attached("evil")
+
+
+def test_alarms_reach_window_and_tray(world: SimpleNamespace, tmp_path: Path) -> None:
+    path = tmp_path / "timers.json"
+    Alarms(path).add_reminder(
+        "позвонить маме", local_now() - timedelta(minutes=5)
+    )  # пока программа была закрыта
+    controller = world.controller
+    controller.alarms = Alarms(path)
+    tray: list[str] = []
+    controller.on_alarm = tray.append
+    controller.start_alarms()
+    try:
+        assert len(tray) == 1 and tray[0].startswith("Пока программа была закрыта, в ")
+        assert tray[0].endswith("сработало: напоминаю: позвонить маме")
+        assert world.bus.of("toast") == []  # страница окна ещё грузится — уведомление ждёт её
+        controller.window_ready("main")
+        assert world.bus.of("toast") == [{"kind": "alarm", "text": tray[0]}]
+
+        timer = controller.alarms.add_timer(600, "чай")
+        assert [item["id"] for item in world.bus.of("state")[-1]["timers"]] == [timer.id]
+        controller.alarm_fired(timer, missed=False)
+        assert world.bus.of("toast")[-1] == {"kind": "alarm", "text": "Таймер на 10 минут «чай»: время вышло"}
+        assert len(controller.timer_cancel("")["timers"]) == 1  # без id ничего не снимается
+        assert controller.timer_cancel(timer.id)["timers"] == [] and controller.alarms.active() == []
+    finally:
+        controller.stop()
 
 
 def test_live_settings_apply_without_restart(world: SimpleNamespace) -> None:

@@ -1,6 +1,6 @@
 // Главное окно: своя шапка, боковое меню и разделы.
 
-import { CircleAlert, Info, ShieldQuestion, X } from 'lucide-react'
+import { BellRing, CircleAlert, Info, ShieldQuestion, X } from 'lucide-react'
 import { useCallback, useRef, useState } from 'react'
 import { Sidebar, type Page } from '../components/Sidebar'
 import { ResizeGrip, TitleBar } from '../components/TitleBar'
@@ -77,17 +77,27 @@ function ConfirmBanner() {
 
 interface Toast {
   id: number
-  kind: 'info' | 'error'
+  kind: 'info' | 'error' | 'alarm'
   text: string
 }
 
-/** Короткие уведомления: перезагрузка команд, ошибки сохранения и т. п. */
+const toastIcons = {
+  info: <Info size={16} className="mt-px shrink-0 text-accent" />,
+  error: <CircleAlert size={16} className="mt-px shrink-0 text-danger" />,
+  alarm: <BellRing size={16} className="mt-px shrink-0 text-accent" />,
+}
+
+/** Уведомления: перезагрузка команд, ошибки сохранения; сработавший таймер висит, пока не закроют. */
 function Toasts() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const nextId = useRef(1)
   const push = (kind: Toast['kind'], text: string) => {
     const id = nextId.current++
-    setToasts((current) => [...current, { id, kind, text }].slice(-3))
+    // На экране не больше трёх, но сработавший таймер не вытесняется.
+    setToasts((current) =>
+      [...current, { id, kind, text }].filter((toast, index, all) => toast.kind === 'alarm' || index >= all.length - 3),
+    )
+    if (kind === 'alarm') return
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), kind === 'error' ? 8000 : 4000)
   }
   useAssistantEvent((event) => {
@@ -104,11 +114,7 @@ function Toasts() {
           key={toast.id}
           className="animate-fade-up pointer-events-auto flex items-start gap-2.5 rounded-xl border border-line-strong bg-surface-2 px-3.5 py-3 text-[13px] shadow-lg"
         >
-          {toast.kind === 'error' ? (
-            <CircleAlert size={16} className="mt-px shrink-0 text-danger" />
-          ) : (
-            <Info size={16} className="mt-px shrink-0 text-accent" />
-          )}
+          {toastIcons[toast.kind]}
           <span className="min-w-0 flex-1 leading-snug break-words">{toast.text}</span>
           <IconButton
             label="Закрыть"

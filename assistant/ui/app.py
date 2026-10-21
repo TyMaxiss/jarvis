@@ -89,6 +89,7 @@ class UiApp:
         controller.on_chat_key = self._bind_chat_key
         controller.on_commands = self._bind_command_keys
         controller.on_state = self._update_tray
+        controller.on_alarm = self._tray_notify
 
         self._start_tray()
         self._bind_chat_key(config.ui.quick_chat_key)
@@ -109,8 +110,9 @@ class UiApp:
             self._shutdown()
 
     def _started(self, windows: Any) -> None:
-        """Окна созданы (отдельный поток): подписки, затем загрузка голоса."""
+        """Окна созданы (отдельный поток): подписки, таймеры, затем загрузка голоса."""
         windows.watch_session_end()
+        self._controller.start_alarms()
         if self._voice_starter is None:
             return
         controller = self._controller
@@ -211,6 +213,9 @@ class UiApp:
     def _notify(self, text: str) -> None:
         """Сообщение, когда окон ещё может не быть: в трей и в окна."""
         self._controller.bus.emit("toast", {"kind": "error", "text": text})
+        self._tray_notify(text)
+
+    def _tray_notify(self, text: str) -> None:
         if self._tray is not None:
             self._tray.notify(text)
 

@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from assistant import __version__
 from assistant.actions.registry import ActionError
+from assistant.audio.sounds import SOUND_RATE, alarm_chime
 from assistant.commands.editor import CommandEditor, EditorError, action_catalog
 from assistant.commands.loader import Command, CommandStore
 from assistant.config import AppConfig, LlmConfig, LlmProfile
@@ -33,6 +34,7 @@ from assistant.llm.providers import (
     provider_info,
     with_profile,
 )
+from assistant.timers import Alarm, Alarms
 from assistant.ui.activity import Activity
 from assistant.ui.confirm import UiConfirmer
 from assistant.ui.events import EventBus
@@ -122,6 +124,7 @@ class UiController:
         journal_file: журнал действий.
         force_dry_run: dry-run включён аргументом --dry-run и из настроек не выключается.
         hotkeys_paused: пока установлено, глобальные сочетания не срабатывают.
+        alarms: таймеры и напоминания (их запускает start_alarms, когда окна готовы).
     """
 
     def __init__(
@@ -142,6 +145,7 @@ class UiController:
         journal_file: Path,
         force_dry_run: bool = False,
         hotkeys_paused: threading.Event | None = None,
+        alarms: Alarms | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -159,6 +163,7 @@ class UiController:
         self._history = History(journal_file)
         self._force_dry_run = force_dry_run
         self.hotkeys_paused = hotkeys_paused or threading.Event()
+        self.alarms = alarms
         self.host: WindowHost | None = None
         self.voice: VoiceHandle | None = None
         self.voice_loading = False  # голос ещё загружается (Whisper — несколько секунд)
@@ -172,11 +177,14 @@ class UiController:
         self.restart_requested = False
         self.restart_pending = False
         self.startup_issues: list[str] = []  # команды, пропущенные при запуске
+        self._early_alarms: list[str] = []  # сработали до того, как главное окно загрузилось
+        self._alarms_lock = threading.Lock()
         # Что ещё сделать при изменениях (их подставляет UiApp).
         self.on_state: Callable[[dict[str, Any]], None] | None = None
         self.on_chat_key: Callable[[str], None] | None = None
         self.on_commands: Callable[[], None] | None = None
         self.on_commands_written: Callable[[], None] | None = None  # редактор сам записал паки
+        self.on_alarm: Callable[[str], None] | None = None  # уведомление в трее
         self.editor = CommandEditor(commands, executor.registry, lambda: pipeline.matcher)
         self.overlay = OverlayController(
             show=lambda: self._host_call("show", "overlay"),
@@ -192,10 +200,16 @@ class UiController:
             return
         first = not self.bus.attached(name)
         self.bus.attach(name, self.host.sender(name))
-        if first and name == "main" and self.startup_issues:
+        if not first or name != "main":
+            return
+        if self.startup_issues:
             self.bus.emit(
                 "commands", {"count": len(self.commands.commands), "issues": self.startup_issues}, to=["main"]
             )
+        with self._alarms_lock:
+            early, self._early_alarms = self._early_alarms, []
+        for text in early:
+            self.bus.emit("toast", {"kind": "alarm", "text": text}, to=["main"])
 
     def state(self) -> dict[str, Any]:
         """Состояние для окон (тип AppState в ui/src/lib/types.ts)."""
@@ -218,6 +232,7 @@ class UiController:
             "volume": self._volume_state(),
             "recent": self.activity.recent,
             "scenarios": self.scenarios(),
+            "timers": [alarm.as_dict() for alarm in self.alarms.active()] if self.alarms else [],
             "ui": ui_view(config),
         }
 
@@ -443,6 +458,37 @@ class UiController:
         if self.on_commands_written is not None:
             self.on_commands_written()
         self.reload_commands(announce=False)
+
+    # --- Таймеры и напоминания --------------------------------------------------------
+
+    def start_alarms(self) -> None:
+        """Запускает таймеры, когда окна готовы: пропущенное за время простоя видно в окне."""
+        if self.alarms is None:
+            return
+        self.alarms.on_fire = self.alarm_fired
+        self.alarms.on_change = self.push_state
+        self.alarms.start()
+
+    def alarm_fired(self, alarm: Alarm, missed: bool) -> None:
+        """Сработал таймер или напоминание: сигнал, голос, уведомление в окне и в трее."""
+        message = alarm.message(missed)
+        if self.speech is not None:
+            self.speech.play_sound(alarm_chime(), SOUND_RATE)
+            self.speech.say(message)
+        with self._alarms_lock:
+            # Пропущенное объявляется при запуске, когда страница окна ещё грузится.
+            if not self.bus.attached("main"):
+                self._early_alarms.append(message)
+            else:
+                self.bus.emit("toast", {"kind": "alarm", "text": message})
+        if self.on_alarm is not None:
+            self.on_alarm(message)
+
+    def timer_cancel(self, alarm_id: str) -> dict[str, Any]:
+        """Кнопка × у таймера на главной."""
+        if self.alarms is not None and alarm_id:  # без id cancel() снял бы ближайший таймер
+            self.alarms.cancel(alarm_id=alarm_id)
+        return self.state()
 
     # --- История ---------------------------------------------------------------------
 
@@ -753,6 +799,8 @@ class UiController:
     def stop(self) -> None:
         """Останавливает фоновые потоки контроллера (окна уже закрыты)."""
         self._stopped.set()
+        if self.alarms is not None:
+            self.alarms.stop()
 
     def _host_call(self, method: str, *args: Any) -> None:
         if self.host is not None:

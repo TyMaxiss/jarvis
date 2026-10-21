@@ -1,0 +1,88 @@
+# Таймеры и напоминания. Сложные случаи («напомни завтра в девять позвонить маме»,
+# «поставь таймер на полторы минуты с подписью чай») понимает нейросеть: у неё те же действия.
+
+- id: timer_minutes
+  phrases: ["поставь таймер на {minutes} минут", "поставь таймер на {minutes} минуты",
+            "поставь таймер на {minutes} минуту", "таймер на {minutes} минут", "таймер на {minutes} минуты",
+            "таймер на {minutes} минуту", "засеки {minutes} минут", "засеки {minutes} минуты",
+            "засеки {minutes} минуту"]
+  slots: {minutes: int}
+  reply: "{result}"
+  steps:
+    - set_timer: {minutes: "{minutes}"}
+
+- id: timer_seconds
+  phrases: ["поставь таймер на {seconds} секунд", "поставь таймер на {seconds} секунды",
+            "поставь таймер на {seconds} секунду", "таймер на {seconds} секунд", "таймер на {seconds} секунды",
+            "засеки {seconds} секунд", "засеки {seconds} секунды"]
+  slots: {seconds: int}
+  reply: "{result}"
+  steps:
+    - set_timer: {seconds: "{seconds}"}
+
+- id: timer_hours
+  phrases: ["поставь таймер на {hours} часа", "поставь таймер на {hours} часов", "таймер на {hours} часа",
+            "таймер на {hours} часов"]
+  slots: {hours: int}
+  reply: "{result}"
+  steps:
+    - set_timer: {hours: "{hours}"}
+
+- id: timer_minute
+  phrases: ["поставь таймер на минуту", "таймер на минуту", "засеки минуту"]
+  reply: "{result}"
+  steps:
+    - set_timer: {minutes: 1}
+
+- id: timer_half_hour
+  phrases: ["поставь таймер на полчаса", "таймер на полчаса", "засеки полчаса"]
+  reply: "{result}"
+  steps:
+    - set_timer: {minutes: 30}
+
+- id: timer_hour
+  phrases: ["поставь таймер на час", "таймер на час", "засеки час"]
+  reply: "{result}"
+  steps:
+    - set_timer: {hours: 1}
+
+- id: remind_minutes
+  phrases: ["напомни через {minutes} минут {text}", "напомни через {minutes} минуты {text}",
+            "напомни через {minutes} минуту {text}"]
+  slots: {minutes: int, text: text}
+  reply: "{result}"
+  steps:
+    - set_reminder: {text: "{text}", minutes: "{minutes}"}
+
+- id: remind_hour
+  phrases: ["напомни через час {text}"]
+  slots: {text: text}
+  reply: "{result}"
+  steps:
+    - set_reminder: {text: "{text}", minutes: 60}
+
+- id: remind_half_hour
+  phrases: ["напомни через полчаса {text}"]
+  slots: {text: text}
+  reply: "{result}"
+  steps:
+    - set_reminder: {text: "{text}", minutes: 30}
+
+- id: timers_list
+  phrases: ["какие таймеры", "покажи таймеры", "сколько осталось", "сколько осталось таймеру",
+            "какие напоминания", "что с таймером"]
+  reply: "{result}"
+  steps:
+    - list_timers: {}
+
+- id: timer_cancel
+  phrases: ["отмени таймер", "выключи таймер", "останови таймер", "сбрось таймер", "отмени напоминание"]
+  reply: "{result}"
+  steps:
+    - cancel_timer: {}
+
+- id: timers_cancel_all
+  phrases: ["отмени все таймеры", "отмени все напоминания", "удали все таймеры"]
+  reply: "{result}"
+  steps:
+    - cancel_timer: {everything: true}

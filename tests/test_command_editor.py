@@ -72,7 +72,13 @@ def test_tree_starts_with_own_pack_and_marks_replaced_commands(editor: CommandEd
         file.write('\n- id: volume_up\n  phrases: ["громче"]\n  steps:\n    - volume_change: {delta: 5}\n')
     editor.store.reload()
     tree = editor.tree()
-    assert [pack["file"] for pack in tree] == ["my.yaml", "browser.yaml", "media.yaml", "windows.yaml"]
+    assert [pack["file"] for pack in tree] == [
+        "my.yaml",
+        "browser.yaml",
+        "media.yaml",
+        "timers.yaml",
+        "windows.yaml",
+    ]
     mine = {c["id"]: c for c in tree[0]["commands"]}
     assert mine["work_mode"] == {
         **mine["work_mode"],
@@ -81,7 +87,7 @@ def test_tree_starts_with_own_pack_and_marks_replaced_commands(editor: CommandEd
         "active": True,
         "line": 4,
     }
-    media = {c["id"]: c for c in tree[2]["commands"]}
+    media = {c["id"]: c for c in tree[2]["commands"]}  # media.yaml
     assert media["volume_up"]["replaced_by"] == "my.yaml" and not media["volume_up"]["active"]
     assert all(not c["problem"] for pack in tree for c in pack["commands"])
 

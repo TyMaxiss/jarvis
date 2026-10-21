@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, ArraySource, block_level, resample, to_int16
-from assistant.audio.sounds import SOUND_RATE, listen_chime
+from assistant.audio.sounds import SOUND_RATE, alarm_chime, listen_chime
 from assistant.audio.vad import SegmenterSettings, SegmentEvent, SileroVAD, SpeechSegmenter
 from assistant.audio.wakeword import SpotResult, parse_result, phrase_spotter, wake_spotter
 from assistant.config import AppConfig, SttConfig
@@ -90,6 +90,8 @@ def test_audio_helpers() -> None:
     assert [source.read(0) is None for _ in range(5)] == [False, False, False, False, True]
     chime = listen_chime()
     assert 0.1 < len(chime) / SOUND_RATE < 0.3 and np.abs(chime).max() <= 0.3
+    alarm = alarm_chime()  # таймер: дольше и громче, но без перегрузки
+    assert 1.0 < len(alarm) / SOUND_RATE < 2.0 and 0.3 < np.abs(alarm).max() <= 0.5
 
 
 # --- Озвучка -----------------------------------------------------------------------

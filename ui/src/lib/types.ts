@@ -172,6 +172,15 @@ export interface LlmSummary {
   problem: string // почему не готово: нет ключа и т. п.
 }
 
+/** Таймер или напоминание (assistant/timers.py, Alarm.as_dict). */
+export interface AlarmItem {
+  id: string
+  kind: 'timer' | 'reminder'
+  due: string // ISO с часовым поясом: когда сработает
+  text: string // подпись таймера или о чём напомнить
+  seconds: number // на сколько поставлен таймер
+}
+
 export interface AppState {
   name: string
   version: string
@@ -190,6 +199,7 @@ export interface AppState {
   volume: { percent: number | null; muted: boolean | null }
   recent: RecentItem[]
   scenarios: Scenario[]
+  timers: AlarmItem[] // ближайшие первыми
   ui: UiSettings
 }
 
@@ -297,7 +307,7 @@ export type AssistantEvent =
   | { type: 'confirm'; payload: { id: string; question: string } }
   | { type: 'confirm_done'; payload: { id: string } }
   | { type: 'commands'; payload: { count: number; issues: string[] } }
-  | { type: 'toast'; payload: { kind: 'info' | 'error'; text: string } }
+  | { type: 'toast'; payload: { kind: 'info' | 'error' | 'alarm'; text: string } } // alarm висит, пока не закроют
   | { type: 'chat_shown'; payload: Record<string, never> }
 
 export type WindowName = 'main' | 'overlay' | 'chat'
@@ -334,5 +344,6 @@ export interface AssistantApi {
   command_test(text: string, form: CommandForm | null, originalId: string): Promise<PhraseTest>
   command_run(form: CommandForm, phrase: string): Promise<{ ok: boolean; errors: string[] }>
   reload_commands(): Promise<{ count: number; issues: string[] }>
+  timer_cancel(id: string): Promise<AppState>
   restart(): Promise<void>
 }

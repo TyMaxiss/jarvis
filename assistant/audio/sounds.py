@@ -20,3 +20,11 @@ def _tone(frequency: float, duration: float, volume: float) -> np.ndarray:
 def listen_chime() -> np.ndarray:
     """Сигнал «слушаю»: два коротких восходящих тона (~150 мс)."""
     return np.concatenate([_tone(660, 0.07, 0.25), _tone(880, 0.08, 0.25)])
+
+
+def alarm_chime() -> np.ndarray:
+    """Сигнал таймера: три раза по два тона (~1,4 с), заметнее, чем «слушаю»."""
+    gap = np.zeros(int(SOUND_RATE * 0.01), dtype=np.float32)
+    pause = np.zeros(int(SOUND_RATE * 0.24), dtype=np.float32)
+    beep = np.concatenate([_tone(988, 0.12, 0.45), gap, _tone(1319, 0.16, 0.45)])
+    return np.concatenate([beep, pause, beep, pause, beep, gap])

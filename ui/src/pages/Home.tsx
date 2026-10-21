@@ -1,14 +1,29 @@
-import { CircleAlert, History, Mic, MicOff, Pause, Play, Sparkles, Volume2, VolumeX, Zap } from 'lucide-react'
+import {
+  Bell,
+  CircleAlert,
+  History,
+  Mic,
+  MicOff,
+  Pause,
+  Play,
+  Sparkles,
+  Timer,
+  Volume2,
+  VolumeX,
+  X,
+  Zap,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Button, Card, CardTitle, IconButton, Keys, Slider, cx } from '../components/ui'
 import { call } from '../lib/bridge'
-import { formatMs, isListening, plural, voiceLabel } from '../lib/format'
-import type { AppState, RecentItem } from '../lib/types'
+import { countdown, durationText, formatMs, isListening, momentText, plural, voiceLabel } from '../lib/format'
+import type { AlarmItem, AppState, RecentItem } from '../lib/types'
 
 export function Home({ state, onOpenSettings }: { state: AppState; onOpenSettings: () => void }) {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-7">
       <Hero state={state} />
+      {state.timers.length > 0 && <TimersCard timers={state.timers} />}
       <div className="grid grid-cols-3 gap-5">
         <VolumeCard state={state} />
         <LlmCard state={state} onOpenSettings={onOpenSettings} />
@@ -167,6 +182,71 @@ function ScenariosCard({ state }: { state: AppState }) {
         </p>
       )}
     </Card>
+  )
+}
+
+/** Текущее время, обновляется раз в interval мс. */
+function useNow(interval: number): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), interval)
+    return () => window.clearInterval(timer)
+  }, [interval])
+  return now
+}
+
+export function TimersCard({ timers }: { timers: AlarmItem[] }) {
+  const now = useNow(1000)
+  return (
+    <Card>
+      <CardTitle icon={<Timer size={16} />} title="Таймеры и напоминания" />
+      <ul className="-mx-2 flex flex-col gap-0.5">
+        {timers.map((alarm) => (
+          <TimerRow key={alarm.id} alarm={alarm} now={now} />
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
+function TimerRow({ alarm, now }: { alarm: AlarmItem; now: number }) {
+  const due = Date.parse(alarm.due)
+  const left = Math.max(0, due - now)
+  const timer = alarm.kind === 'timer'
+  const title = timer ? alarm.text || 'Таймер' : alarm.text
+  const detail = timer ? `на ${durationText(alarm.seconds)}` : momentText(new Date(due), new Date(now))
+  const done = timer && alarm.seconds > 0 ? Math.min(1, 1 - left / (alarm.seconds * 1000)) : 0
+  return (
+    <li className="animate-fade-up flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-surface-2/60">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-accent">
+        {timer ? <Timer size={15} /> : <Bell size={15} />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="truncate text-[13.5px]">{title}</span>
+          <span className="shrink-0 text-[12px] text-muted">{detail}</span>
+        </div>
+        {timer && (
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-3">
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-1000 ease-linear"
+              style={{ width: `${done * 100}%` }}
+            />
+          </div>
+        )}
+      </div>
+      {left < 86_400_000 && (
+        <span className="shrink-0 font-display text-[17px] font-semibold tabular-nums" aria-label="Осталось">
+          {countdown(left)}
+        </span>
+      )}
+      <IconButton
+        label={timer ? 'Отменить таймер' : 'Отменить напоминание'}
+        onClick={() => void call('timer_cancel', alarm.id)}
+      >
+        <X size={15} />
+      </IconButton>
+    </li>
   )
 }
 

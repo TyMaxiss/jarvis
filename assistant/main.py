@@ -18,14 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from assistant.actions import apps, browser, files, media, power, shell, system, volume, windows
+from assistant.actions import apps, browser, files, media, power, shell, system, timers, volume, windows
 from assistant.actions import input as input_actions
 from assistant.actions.apps import AppIndex, looks_like_path
 from assistant.actions.executor import ActionExecutor
 from assistant.actions.registry import ActionRegistry
+from assistant.audio.sounds import SOUND_RATE, alarm_chime
 from assistant.commands.loader import CommandStore, LoadResult
 from assistant.commands.watcher import CommandWatcher
-from assistant.config import ENV_FILE, AppConfig, ConfigError, LlmConfig, load_config
+from assistant.config import ENV_FILE, TIMERS_FILE, AppConfig, ConfigError, LlmConfig, load_config
 from assistant.console import ConsoleApp, ConsoleSpeaker
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent
@@ -36,6 +37,7 @@ from assistant.nlu.normalize import Normalizer
 from assistant.pipeline import Pipeline
 from assistant.safety.confirm import NO_PHRASES, YES_PHRASES, Confirmer, ConsoleConfirmer, VoiceConfirmer
 from assistant.safety.policy import SafetyPolicy
+from assistant.timers import Alarm, Alarms
 from assistant.tts.base import SilentSpeech, Speaker, SpeechQueue, TeeSpeaker, TTSEngine, TTSError
 
 if TYPE_CHECKING:
@@ -59,8 +61,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def build_registry(config: AppConfig, index: AppIndex, speaker: Speaker) -> ActionRegistry:
-    """Создаёт реестр и регистрирует все действия."""
+def build_registry(
+    config: AppConfig, index: AppIndex, speaker: Speaker, alarms: Alarms | None = None
+) -> ActionRegistry:
+    """Создаёт реестр и регистрирует все действия (alarms — таймеры; None — только в памяти)."""
     registry = ActionRegistry()
     apps.register(registry, index, config.apps)
     windows.register(registry, config.apps.match_threshold)
@@ -72,6 +76,7 @@ def build_registry(config: AppConfig, index: AppIndex, speaker: Speaker) -> Acti
     power.register(registry)
     files.register(registry)
     shell.register(registry)
+    timers.register(registry, alarms or Alarms(None))
     return registry
 
 
@@ -361,6 +366,7 @@ class Core:
     pipeline: Pipeline
     journal_file: Path
     log_file: Path
+    alarms: Alarms
 
 
 def make_agent(llm: LlmConfig, executor: ActionExecutor, speaker: Speaker, name: str) -> Agent:
@@ -380,7 +386,8 @@ def build_core(
     log_dir = config.resolve(config.logging.dir)
     index = AppIndex(config.apps)
     index.start()
-    registry = build_registry(config, index, speaker)
+    alarms = Alarms(config.resolve(TIMERS_FILE))
+    registry = build_registry(config, index, speaker, alarms)
     journal_file = log_dir / config.logging.journal
     executor = ActionExecutor(
         registry, SafetyPolicy(), confirmer, ActionJournal(journal_file, masker), dry_run=dry_run
@@ -393,7 +400,7 @@ def build_core(
     agent = make_agent(config.llm, executor, speaker, config.general.name) if config.llm.enabled else None
     pipeline = Pipeline(matcher, executor, speaker, windows.active_window, agent=agent)
     return Core(index, registry, executor, normalizer, matcher, store, loaded, pipeline, journal_file,
-                log_dir / config.logging.file)  # fmt: skip
+                log_dir / config.logging.file, alarms)  # fmt: skip
 
 
 def ui_problem() -> str:
@@ -526,12 +533,20 @@ def run_console(
         for issue in result.issues:
             out.write(f"! Команда пропущена: {issue}\n")
 
+    def alarm(alarm: Alarm, missed: bool) -> None:
+        if speech is not None:
+            speech.play_sound(alarm_chime(), SOUND_RATE)
+        speaker.say(alarm.message(missed))
+
+    core.alarms.on_fire = alarm
+    core.alarms.start()
     watcher = CommandWatcher(core.store.directory, reload_commands)
     watcher.start()
     try:
         console.run()
     finally:
         watcher.stop()
+        core.alarms.stop()
         if runtime is not None:
             runtime.close()
         if speech is not None:
@@ -586,6 +601,7 @@ def run_ui(
         journal_file=core.journal_file,
         force_dry_run=args.dry_run,
         hotkeys_paused=hotkeys_paused,
+        alarms=core.alarms,
     )
     controller.startup_issues = [str(issue) for issue in core.loaded.issues]
     confirmer.on_change = controller.overlay.confirming

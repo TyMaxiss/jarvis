@@ -84,6 +84,25 @@ def test_static_phrase_beats_generic_template(matcher: Matcher) -> None:
     assert ids(result) == ["task_manager"]
 
 
+def test_numeric_template_beats_similar_fixed_phrase(normalizer: Normalizer) -> None:
+    # «таймер на пять минут» почти совпадает с «таймер на минуту», но число в шаблоне совпало целиком.
+    matcher = build_matcher(
+        normalizer,
+        [
+            make_command("one_minute", ["таймер на минуту"]),
+            make_command("minutes", ["таймер на {minutes} минут"], slots={"minutes": "int"}),
+        ],
+    )
+    result = matcher.match("таймер на пять минут", NO_WINDOW)
+    assert ids(result) == ["minutes"] and result.matches[0].slots == {"minutes": 5}
+    assert ids(matcher.match("таймер на минуту", NO_WINDOW)) == ["one_minute"]
+
+
+def test_text_template_does_not_beat_fixed_phrase_with_typo(matcher: Matcher) -> None:
+    # «открой {name}» подходит к любой фразе — опечатка в «открой ютуб» решается в пользу фразы.
+    assert ids(matcher.match("открой ютуп", NO_WINDOW)) == ["open_youtube"]
+
+
 def test_raw_text_is_kept_for_trailing_text_slot(matcher: Matcher) -> None:
     result = matcher.match("Джарвис, напечатай Привет, мир!", NO_WINDOW)
     assert ids(result) == ["type_text"]

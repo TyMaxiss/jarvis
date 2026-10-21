@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 CONFIG_FILE = "config.yaml"
 EXAMPLE_FILE = "config.example.yaml"
 ENV_FILE = ".env"
+TIMERS_FILE = "timers.json"  # таймеры и напоминания (рядом с config.yaml)
 
 
 class ConfigError(Exception):
