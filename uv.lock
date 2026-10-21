@@ -304,7 +304,6 @@ dependencies = [
     { name = "pycaw", marker = "sys_platform == 'win32'" },
     { name = "pydantic" },
     { name = "python-dotenv" },
-    { name = "pyttsx3", marker = "sys_platform == 'win32'" },
     { name = "rapidfuzz" },
     { name = "ruamel-yaml" },
     { name = "sounddevice" },
@@ -336,7 +335,6 @@ requires-dist = [
     { name = "pycaw", marker = "sys_platform == 'win32'", specifier = ">=20260927" },
     { name = "pydantic", specifier = ">=2.14" },
     { name = "python-dotenv", specifier = ">=1.2" },
-    { name = "pyttsx3", marker = "sys_platform == 'win32'", specifier = ">=2.99" },
     { name = "rapidfuzz", specifier = ">=3.14" },
     { name = "ruamel-yaml", specifier = ">=0.19" },
     { name = "sounddevice", specifier = ">=0.5.6" },
@@ -561,18 +559,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pypiwin32"
-version = "223"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pywin32" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/13/e8/4f38eb30c4dae36634a53c5b2cd73b517ea3607e10d00f61f2494449cec0/pypiwin32-223.tar.gz", hash = "sha256:71be40c1fbd28594214ecaecb58e7aa8b708eabfa0125c8a109ebd51edbd776a", size = 622, upload-time = "2018-02-26T00:43:23.994Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/1b/2f292bbd742e369a100c91faa0483172cd91a1a422a6692055ac920946c5/pypiwin32-223-py3-none-any.whl", hash = "sha256:67adf399debc1d5d14dffc1ab5acacb800da569754fafdc576b2a039485aa775", size = 1674, upload-time = "2018-02-26T00:43:23.108Z" },
-]
-
-[[package]]
 name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -595,30 +581,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/74/26/2fbeedb218a787a5eea551c7532cac4e009f83d689dd2faa0d0353473f86/python_dotenv-1.2.4.tar.gz", hash = "sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0", size = 60824, upload-time = "2026-10-01T05:36:10Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/d1/38f3a3405989a89ac18390803e70c6ad7c7760da4f9b83cbeca0c44a0c72/python_dotenv-1.2.4-py3-none-any.whl", hash = "sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc", size = 23266, upload-time = "2026-10-01T05:36:08.633Z" },
-]
-
-[[package]]
-name = "pyttsx3"
-version = "2.99"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "comtypes" },
-    { name = "pypiwin32" },
-    { name = "pywin32" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/94/4e/a37786f666f4f084fc45e026ca1e63f7b49ac0d90b53fa35ae62b73c96a8/pyttsx3-2.99.tar.gz", hash = "sha256:a18a5601530a570c43491b4112887fc34c47e118fc937287db8d21905da1f74e", size = 33968, upload-time = "2025-07-08T12:24:21.314Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/14/9fb5842581f0419b5eb85f8c26c1c0c0f4cf6b4d5be638ae3157316a2650/pyttsx3-2.99-py3-none-any.whl", hash = "sha256:ff3e4ff756c24d72b9f3f2f304e0edaafd0f58adb0e6f4b90d930440cda8b207", size = 32157, upload-time = "2025-07-08T12:24:20.299Z" },
-]
-
-[[package]]
-name = "pywin32"
-version = "312"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/ff/32aa7d2ed0ab12b323aaa64f9b75e6ad4f8fd09f9ccfc28c79414d46838d/pywin32-312-cp312-cp312-win32.whl", hash = "sha256:dab4f65ac9c4e48400a2a0530c46c3c579cd5905ecd11b80692373915269208b", size = 6371877, upload-time = "2026-06-04T07:49:28.836Z" },
-    { url = "https://files.pythonhosted.org/packages/03/d9/77040d3b43df3f3be32ea289433d660d2727f5ba327bc73be835127d9d60/pywin32-312-cp312-cp312-win_amd64.whl", hash = "sha256:b457f6d628a47e8a7346ce22acb7e1a46a4a78b52e1d17e1af56871bd19a93bc", size = 6914841, upload-time = "2026-06-04T07:49:31.85Z" },
-    { url = "https://files.pythonhosted.org/packages/e3/cc/7b1ec671775756020a0ee7f4feeaf3c568f0ab86bd3900088cf986937a92/pywin32-312-cp312-cp312-win_arm64.whl", hash = "sha256:6017c58e12f6809fbb0555b75df144c2922a9ffd18e4b9b5afa863b6c1a9d950", size = 6727901, upload-time = "2026-06-04T07:49:34.244Z" },
 ]
 
 [[package]]

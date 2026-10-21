@@ -106,6 +106,7 @@ class SpeechSegmenter:
             maxlen=max(1, self.settings.pre_roll_ms // BLOCK_MS)
         )
         self.segment_audio: np.ndarray = np.zeros(0, dtype=np.int16)
+        self.speech_span_ms = 0  # от начала речи до последнего речевого блока, с паузами внутри
         self.truncated = False
         self.reset()
 
@@ -116,6 +117,7 @@ class SpeechSegmenter:
         self._in_speech = False
         self._silence_blocks = 0
         self._speech_blocks = 0
+        self._start_block = 0  # номер первого речевого блока в _buffer (до него — запас)
 
     @property
     def in_speech(self) -> bool:
@@ -134,6 +136,7 @@ class SpeechSegmenter:
             if probability >= s.threshold:
                 self._in_speech = True
                 self._buffer = list(self._pre_roll)
+                self._start_block = len(self._buffer) - 1
                 self._silence_blocks = 0
                 self._speech_blocks = 1
                 return SegmentEvent.START
@@ -155,6 +158,7 @@ class SpeechSegmenter:
     def _finish(self, truncated: bool) -> SegmentEvent:
         """Завершает фразу: короткий всплеск — шум, иначе — готовая фраза."""
         speech_ms = self._speech_blocks * BLOCK_MS
+        span_ms = (len(self._buffer) - self._start_block - self._silence_blocks) * BLOCK_MS
         # Хвост тишины не нужен распознавателю — оставляем ~200 мс.
         keep_tail = max(0, self._silence_blocks - 200 // BLOCK_MS)
         blocks = self._buffer[: len(self._buffer) - keep_tail] if keep_tail else self._buffer
@@ -163,5 +167,6 @@ class SpeechSegmenter:
         if speech_ms < self.settings.min_speech_ms:
             return SegmentEvent.DISCARD
         self.segment_audio = audio
+        self.speech_span_ms = span_ms
         self.truncated = truncated
         return SegmentEvent.END

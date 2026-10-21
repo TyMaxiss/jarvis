@@ -37,6 +37,17 @@ log = logging.getLogger(__name__)
 
 # После окончания речи ассистента ещё немного не слушаем: эхо и реверберация.
 _ECHO_GUARD_MS = 300
+_VOWELS = frozenset("аеёиоуыэюяaeiouy")
+
+
+def name_only_limit_ms(name: str) -> int:
+    """Самая долгая речь, которую ещё можно считать одним именем без команды.
+
+    «Джарвис» (2 слога) звучит ~0,5–0,7 с, предел — 800 мс; на каждый слог длинного
+    имени — ещё 250 мс. Речь длиннее предела отправляется в Whisper.
+    """
+    syllables = sum(1 for char in name.lower() if char in _VOWELS)
+    return 300 + 250 * max(2, syllables)
 
 
 class VoiceState(StrEnum):
@@ -146,6 +157,7 @@ class VoiceLoop:
         names = [basic_clean(n) for n in (wake_names or ["джарвис"]) if basic_clean(n)]
         self._wake_phrase = names[0]
         self._wake_skeletons = {skeleton(n) for n in names}
+        self._name_only_ms = name_only_limit_ms(self._wake_phrase)
         self._heard = SpotResult()
         self._status = status
         self._confirmer = confirmer
@@ -280,11 +292,19 @@ class VoiceLoop:
             self._heard = self._heard + result
 
     def _on_wake(self, heard: SpotResult) -> None:
-        """Имя распознано в только что закончившейся фразе."""
-        if heard.known_words == self._wake_phrase.split() and "[unk]" not in heard.text:
-            # Сказали только «Джарвис» — Whisper не нужен, сразу слушаем команду.
+        """Имя распознано в только что закончившейся фразе.
+
+        Если сказали только «Джарвис», Whisper не нужен: сразу сигнал и ожидание команды.
+        Одних слов Vosk для этого мало: с маленькой грамматикой он может вернуть
+        «джарвис» и на «Джарвис, открой ютуб», не отметив остальное как [unk].
+        Поэтому «только имя» — это ещё и короткая речь; всё длиннее распознаёт Whisper.
+        """
+        only_name = heard.known_words == self._wake_phrase.split() and not heard.has_unknown
+        span_ms = self._segmenter.speech_span_ms
+        if only_name and span_ms <= self._name_only_ms:
             self._listen(chime=True)
         else:
+            log.debug("Речь с именем %d мс — распознаю целиком", span_ms)
             self._process(self._segmenter.segment_audio, "wake")
 
     def mentions_name(self, text: str) -> bool:

@@ -74,6 +74,11 @@ class SpotResult:
         """Распознанные слова без [unk]."""
         return [w for w, _ in self.words if w != "[unk]"]
 
+    @property
+    def has_unknown(self) -> bool:
+        """Были ли во фразе слова не из грамматики."""
+        return any(w == "[unk]" for w, _ in self.words)
+
     def __add__(self, other: SpotResult) -> SpotResult:
         """Склеивает результаты, если Vosk разбил одну фразу на части."""
         return SpotResult(f"{self.text} {other.text}".strip(), self.words + other.words)

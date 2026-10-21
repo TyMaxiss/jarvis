@@ -88,11 +88,15 @@ def register_cuda_dlls() -> None:
             log.debug("DLL CUDA: %s", bin_dir)
 
 
-def physical_cores() -> int:
-    """Число физических ядер процессора (по ним лучше всего масштабируется Whisper)."""
+def default_cpu_threads() -> int:
+    """Потоков для Whisper на процессоре: по числу физических ядер, но не меньше 4.
+
+    4 — значение CTranslate2 по умолчанию. Меньше брать не стоит: на CI с 2 физическими
+    и 4 логическими ядрами фраза с 2 потоками распознавалась ~4,3 с, а с 4 — ~3,0 с.
+    """
     import psutil
 
-    return psutil.cpu_count(logical=False) or 4
+    return max(4, psutil.cpu_count(logical=False) or 0)
 
 
 def cuda_available() -> bool:
@@ -165,7 +169,7 @@ class WhisperSTT:
             "download_root": str(self._download_dir),
         }
         if device == "cpu":
-            options["cpu_threads"] = self._config.cpu_threads or physical_cores()
+            options["cpu_threads"] = self._config.cpu_threads or default_cpu_threads()
         try:
             # Сначала только локальный кэш: так работает без интернета и не ждёт сеть.
             self._model = WhisperModel(model, local_files_only=True, **options)

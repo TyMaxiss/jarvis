@@ -144,8 +144,10 @@ class SttConfig(_Section):
     model: str = Field("auto", description="auto: large-v3-turbo на видеокарте, small на процессоре")
     device: Literal["auto", "cuda", "cpu"] = "auto"
     compute_type: str = Field("auto", description="auto: float16 на видеокарте, int8 на процессоре")
-    beam_size: int = Field(1, ge=1, le=10, description="1 — быстрее, 5 — точнее")
-    cpu_threads: int = Field(0, ge=0, le=64, description="Потоков на процессоре; 0 — по числу ядер")
+    beam_size: int = Field(5, ge=1, le=10, description="5 — точнее, 1 — на несколько процентов быстрее")
+    cpu_threads: int = Field(
+        0, ge=0, le=64, description="Потоков на процессоре; 0 — по числу ядер, но не меньше 4"
+    )
     download_dir: Path = Path("models/whisper")
     prompt_app_names: int = Field(30, ge=0, le=200, description="Сколько названий программ подсказывать")
 

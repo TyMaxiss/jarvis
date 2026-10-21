@@ -55,7 +55,8 @@ class StaticConfirmer:
         return self.answer
 
 
-YES_PHRASES = ("да", "подтверждаю", "конечно", "давай", "выполняй")
+# «Давай» в голосовых ответах нет: Vosk слышал его в «Сделай громче» — ложное «да» опаснее «нет».
+YES_PHRASES = ("да", "подтверждаю", "конечно", "выполняй")
 NO_PHRASES = ("нет", "отмена", "не надо", "стоп", "отменить")
 
 
@@ -110,7 +111,14 @@ class VoiceConfirmer:
         return answer in YES_PHRASES
 
     def _answer(self, result: Any) -> str | None:
-        """«Нет» важнее «да»: если прозвучало и то и другое, действие не выполняется."""
+        """«Нет» важнее «да»: если прозвучало и то и другое, действие не выполняется.
+
+        «Да» засчитывается, только если в ответе нет посторонних слов ([unk]): Vosk
+        с маленькой грамматикой может найти «да» и в «хорошая погода». Тогда ответа
+        нет, и подтверждение слушает дальше.
+        """
         log.debug("Ответ Vosk: %s", result.describe())
         no = result.find(NO_PHRASES, self._min_confidence)
-        return no or result.find(YES_PHRASES, self._min_confidence)
+        if no or result.has_unknown:
+            return no
+        return result.find(YES_PHRASES, self._min_confidence)

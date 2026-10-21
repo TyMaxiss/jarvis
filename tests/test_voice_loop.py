@@ -10,7 +10,7 @@ import pytest
 from assistant.audio.capture import SAMPLE_RATE
 from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
 from assistant.nlu.normalize import Normalizer
-from assistant.voice import VoiceLoop, VoiceSettings, VoiceState
+from assistant.voice import VoiceLoop, VoiceSettings, VoiceState, name_only_limit_ms
 from tests.voice_fakes import (
     WAKE,
     FakeSource,
@@ -92,6 +92,30 @@ def test_only_name_then_command() -> None:
     assert h.handled == ["Сделай громче."]
     assert h.speech.sounds == 1  # сигнал «слушаю» после имени
     assert h.stt.calls == [5002]  # для одного имени Whisper не нужен
+
+
+def test_name_and_command_when_vosk_hears_only_name() -> None:
+    # Vosk вернул только «джарвис» без [unk], но речь длинная — значит, была и команда.
+    audio = np.concatenate([silence(300), speech(WAKE, 400), speech(5001, 900), silence(1200)])
+    h = Harness(audio, spotter=FakeSpotter(unk=False)).run()
+    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.speech.sounds == 0  # без сигнала «слушаю»: команда уже прозвучала
+
+
+def test_long_name_only_goes_through_whisper() -> None:
+    # Протяжное «Джаааарвис» дольше предела: его распознаёт Whisper, и ассистент ждёт команду.
+    audio = np.concatenate(
+        [silence(300), speech(WAKE, 1100), silence(1000), speech(5002, 800), silence(1200)]
+    )
+    h = Harness(audio).run()
+    assert h.handled == ["Сделай громче."]
+    assert h.stt.calls == [WAKE, 5002]
+    assert h.speech.sounds == 1
+
+
+@pytest.mark.parametrize(("name", "limit"), [("джарвис", 800), ("jarvis", 800), ("эй компьютер", 1300)])
+def test_name_only_limit(name: str, limit: int) -> None:
+    assert name_only_limit_ms(name) == limit
 
 
 def test_only_name_recognized_by_whisper_then_command() -> None:

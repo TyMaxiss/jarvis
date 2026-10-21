@@ -58,12 +58,14 @@ class FakeSTT:
 class FakeSpotter:
     """Как Vosk с грамматикой: в конце фразы «слышит» имя, если были блоки WAKE.
 
-    conf — уверенность, с которой «распознано» имя.
+    conf — уверенность, с которой «распознано» имя; unk=False — остальные слова
+    не отмечаются как [unk] (так Vosk иногда «проглатывает» команду после имени).
     """
 
-    def __init__(self, conf: float = 0.95, word: str = "джарвис") -> None:
+    def __init__(self, conf: float = 0.95, word: str = "джарвис", unk: bool = True) -> None:
         self.conf = conf
         self.word = word
+        self.unk = unk
         self._seen_wake = False
         self._seen_other = False
 
@@ -76,7 +78,7 @@ class FakeSpotter:
 
     def finish(self) -> SpotResult:
         words = ([(self.word, self.conf)] if self._seen_wake else []) + (
-            [("[unk]", 1.0)] if self._seen_other else []
+            [("[unk]", 1.0)] if self._seen_other and self.unk else []
         )
         self.reset()
         return SpotResult(" ".join(w for w, _ in words), tuple(words))

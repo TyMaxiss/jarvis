@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from assistant.audio.capture import BLOCK_SIZE, ArraySource, resample, to_int16
+from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, ArraySource, resample, to_int16
 from assistant.audio.sounds import SOUND_RATE, listen_chime
 from assistant.audio.vad import SegmenterSettings, SegmentEvent, SileroVAD, SpeechSegmenter
 from assistant.audio.wakeword import SpotResult, parse_result
@@ -20,6 +20,7 @@ from assistant.models import _safe_extract, download_all
 from assistant.safety.confirm import VoiceConfirmer
 from assistant.stt.whisper_stt import WhisperSTT, build_prompt, is_hallucination, resolve_settings
 from assistant.tts.base import SpeechQueue, TeeSpeaker, split_sentences
+from assistant.tts.sapi_tts import sapi_rate, token_languages
 from tests.voice_fakes import FakeSource, FakeSpeech, silence, speech
 
 # --- VAD и границы фразы -----------------------------------------------------------
@@ -49,6 +50,14 @@ def test_segment_start_and_end_with_pre_roll() -> None:
     first_block = int(seg.segment_audio[0])
     assert first_block == 15 - 9  # 10 блоков (320 мс) до начала речи, включая текущий
     assert len(seg.segment_audio) // BLOCK_SIZE <= 10 + 20 + 7  # хвост тишины обрезан до ~200 мс
+
+
+def test_speech_span_counts_pauses_inside_phrase() -> None:
+    seg = SpeechSegmenter(SegmenterSettings(min_silence_ms=640, pre_roll_ms=320))
+    feed_probs(seg, [0.0] * 15 + [0.9] * 20 + [0.0] * 25)
+    assert seg.speech_span_ms == 20 * BLOCK_MS  # без запаса до речи и тишины после
+    feed_probs(seg, [0.9] * 10 + [0.0] * 10 + [0.9] * 10 + [0.0] * 25)
+    assert seg.speech_span_ms == 30 * BLOCK_MS  # пауза внутри фразы входит
 
 
 def test_short_noise_is_discarded() -> None:
@@ -194,7 +203,17 @@ class AnswerSpotter:
 
 
 @pytest.mark.parametrize(
-    ("answer", "expected"), [("да", True), ("подтверждаю", True), ("нет", False), ("не надо", False)]
+    ("answer", "expected"),
+    [
+        ("да", True),
+        ("подтверждаю", True),
+        ("да конечно", True),
+        ("нет", False),
+        ("не надо", False),
+        ("давай", False),
+        ("[unk] да", False),  # «хорошая погода»: «да» среди посторонних слов — не согласие
+        ("да [unk] нет", False),
+    ],
 )
 def test_voice_confirmer_answers(answer: str, expected: bool) -> None:
     out = FakeSpeech()
@@ -218,6 +237,31 @@ def test_voice_confirmer_ignores_unsure_yes() -> None:
         FakeSpeech(), source, lambda: AnswerSpotter("да", conf=0.4), timeout=1, min_confidence=0.7
     )
     assert confirmer.confirm("Точно?") is False
+
+
+class FakeVoiceToken:
+    """Голос SAPI с атрибутом Language (None — атрибута нет)."""
+
+    def __init__(self, language: str | None) -> None:
+        self.language = language
+
+    def GetAttribute(self, name: str) -> str:
+        if self.language is None:
+            raise OSError("атрибута нет")
+        return self.language
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("419", ["419"]), ("409;9", ["409", "9"]), ("0419", ["419"]), (None, [])]
+)
+def test_sapi_token_languages(value: str | None, expected: list[str]) -> None:
+    assert token_languages(FakeVoiceToken(value)) == expected
+
+
+def test_sapi_rate() -> None:
+    assert sapi_rate(1.0) == 0
+    assert sapi_rate(2.0) == 6 and sapi_rate(0.5) == -6
+    assert sapi_rate(100) == 10
 
 
 def test_spot_result_find() -> None:
