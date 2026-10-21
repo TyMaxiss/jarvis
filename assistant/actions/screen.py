@@ -412,6 +412,12 @@ UIA_EXPAND_COLLAPSE_PATTERN = 10005
 UIA_SELECTION_ITEM_PATTERN = 10010
 UIA_TOGGLE_PATTERN = 10015
 EXPAND_STATE_COLLAPSED = 0
+# Родной способ «нажать» элемент этого типа (остальные — Invoke).
+_PREFERRED_PATTERN = {
+    "CheckBox": UIA_TOGGLE_PATTERN,
+    "RadioButton": UIA_SELECTION_ITEM_PATTERN,
+    "TabItem": UIA_SELECTION_ITEM_PATTERN,
+}
 MONITOR_DEFAULTTONEAREST = 2
 MONITOR_DEFAULTTOPRIMARY = 1
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
@@ -615,15 +621,30 @@ class _Uia:
         return result
 
     def press(self, native: Any, element: Element, hwnd: int, pressing: threading.Event) -> str:
-        """Нажимает элемент подходящим способом; pressing — нажатие начато."""
+        """Нажимает элемент подходящим способом; pressing — нажатие начато.
+
+        Обычно — Invoke; флажок переключается (Toggle), вкладка и переключатель выбираются
+        (Select): их «нажатие» тоже работает, но так точнее и ответ правдивее.
+        """
         module = self.module
-        patterns = (
-            (UIA_INVOKE_PATTERN, module.IUIAutomationInvokePattern),
-            (UIA_TOGGLE_PATTERN, module.IUIAutomationTogglePattern),
-            (UIA_SELECTION_ITEM_PATTERN, module.IUIAutomationSelectionItemPattern),
-            (UIA_EXPAND_COLLAPSE_PATTERN, module.IUIAutomationExpandCollapsePattern),
-        )
-        for pattern_id, interface in patterns:
+        interfaces = {
+            UIA_INVOKE_PATTERN: module.IUIAutomationInvokePattern,
+            UIA_TOGGLE_PATTERN: module.IUIAutomationTogglePattern,
+            UIA_SELECTION_ITEM_PATTERN: module.IUIAutomationSelectionItemPattern,
+            UIA_EXPAND_COLLAPSE_PATTERN: module.IUIAutomationExpandCollapsePattern,
+        }
+        order = [
+            UIA_INVOKE_PATTERN,
+            UIA_TOGGLE_PATTERN,
+            UIA_SELECTION_ITEM_PATTERN,
+            UIA_EXPAND_COLLAPSE_PATTERN,
+        ]
+        preferred = _PREFERRED_PATTERN.get(element.kind)
+        if preferred is not None:
+            order.remove(preferred)
+            order.insert(0, preferred)
+        for pattern_id in order:
+            interface = interfaces[pattern_id]
             unknown = native.GetCurrentPattern(pattern_id)
             if not unknown:
                 continue
