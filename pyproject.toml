@@ -22,6 +22,13 @@ dependencies = [
     "keyboard>=0.13.5 ; sys_platform == 'win32'",
 ]
 
+[project.optional-dependencies]
+# Библиотеки CUDA для Whisper на видеокарте NVIDIA: uv sync --extra cuda (~1,2 ГБ).
+cuda = [
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9,<10; sys_platform == 'win32'",
+]
+
 [dependency-groups]
 dev = ["pytest>=9.1"]
 

@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -31,6 +33,8 @@ HALLUCINATION_MARKERS = (
     "подпишись на канал",
 )
 _MAX_PROMPT_CHARS = 600
+# Тишина по краям фразы: без неё Whisper иногда «съедает» первый звук («Делай» вместо «Сделай»).
+_PAD_SECONDS = 0.3
 
 
 def is_hallucination(text: str) -> bool:
@@ -62,6 +66,26 @@ class Transcript:
     text: str
     duration_ms: float
     no_speech_prob: float = 0.0
+
+
+def register_cuda_dlls() -> None:
+    """Делает видимыми DLL CUDA из pip-пакетов nvidia-* (uv sync --extra cuda).
+
+    CTranslate2 загружает cuBLAS и cuDNN при первом распознавании на видеокарте.
+    Пакеты nvidia-cublas-cu12 и nvidia-cudnn-cu12 кладут DLL в site-packages/nvidia/*/bin,
+    куда Windows сама не заглядывает.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import nvidia  # type: ignore[import-not-found]
+    except ImportError:
+        return
+    for base in getattr(nvidia, "__path__", []):
+        for bin_dir in sorted(Path(base).glob("*/bin")):
+            os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            log.debug("DLL CUDA: %s", bin_dir)
 
 
 def cuda_available() -> bool:
@@ -108,6 +132,7 @@ class WhisperSTT:
 
     def load(self) -> None:
         """Загружает модель: видеокарта, а при ошибке — процессор."""
+        register_cuda_dlls()
         model, device, compute = resolve_settings(self._config, cuda_available())
         if device == "cuda":
             try:
@@ -143,21 +168,27 @@ class WhisperSTT:
         segments, _ = self._model.transcribe(np.zeros(16_000, dtype=np.float32), language="ru", beam_size=1)
         list(segments)
 
-    def transcribe(self, audio: np.ndarray) -> Transcript:
+    def transcribe(self, audio: np.ndarray, beam_size: int | None = None) -> Transcript:
         """Распознаёт фразу (int16 или float32, 16 кГц).
 
         Возвращает пустой текст, если Whisper не услышал речь или выдал «галлюцинацию».
+
+        Args:
+            audio: звук фразы.
+            beam_size: ширина поиска; по умолчанию — из настроек.
         """
         if self._model is None:
             raise RuntimeError("Модель Whisper не загружена")
         samples = audio.astype(np.float32)
         if audio.dtype == np.int16:
             samples /= 32768.0
+        pad = np.zeros(int(16_000 * _PAD_SECONDS), dtype=np.float32)
+        samples = np.concatenate([pad, samples, pad])
         started = time.perf_counter()
         segments, _ = self._model.transcribe(
             samples,
             language="ru",
-            beam_size=self._config.beam_size,
+            beam_size=beam_size or self._config.beam_size,
             initial_prompt=self._prompt() or None,
             condition_on_previous_text=False,
             without_timestamps=True,

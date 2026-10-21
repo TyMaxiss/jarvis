@@ -131,7 +131,10 @@ class VoiceConfig(_Section):
     vad_threshold: float = Field(0.5, gt=0, lt=1)
     input_device: int | str | None = Field(None, description="Номер или часть названия микрофона")
     sounds: bool = Field(True, description="Короткий сигнал «слушаю»")
+    wake_confidence: float = Field(0.8, ge=0, le=1, description="Уверенность Vosk в имени ассистента")
+    verify_wake_word: bool = Field(True, description="Имя должно быть и в тексте от Whisper")
     confirm_timeout: float = Field(5, ge=1, le=30, description="Сколько ждать «да» или «нет»")
+    confirm_confidence: float = Field(0.7, ge=0, le=1, description="Уверенность Vosk в «да/нет»")
     vosk_model: Path = Path("models/vosk-model-small-ru-0.22")
 
 

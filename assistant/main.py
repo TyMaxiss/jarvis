@@ -96,7 +96,9 @@ def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
     if config.tts.engine == "piper":
         try:
             primary = PiperTTS(config.resolve(config.tts.piper_voice), config.tts.rate)
-        except TTSError as exc:
+        except Exception as exc:
+            if not isinstance(exc, TTSError):
+                log.exception("Не удалось загрузить голос Piper")
             out.write(f"! {exc}\n")
             if sapi is not None:
                 out.write("  Пока буду говорить голосом Windows (SAPI).\n")
@@ -175,7 +177,13 @@ def start_voice(
         stt = WhisperSTT(
             config.stt, config.resolve(config.stt.download_dir), whisper_prompt(config, store, index)
         )
-        stt.load()
+        try:
+            stt.load()
+        except Exception as exc:
+            log.exception("Не удалось загрузить Whisper")
+            raise VoiceSetupError(
+                f"не удалось загрузить Whisper ({exc}). Нужен интернет для первой загрузки"
+            ) from exc
 
         confirmer = None
         if vosk_model is not None and speech is not None:
@@ -185,6 +193,7 @@ def start_voice(
                 capture,
                 lambda: GrammarSpotter(model, YES_PHRASES + NO_PHRASES),
                 voice.confirm_timeout,
+                voice.confirm_confidence,
             )
         segmenter = SpeechSegmenter(
             SegmenterSettings(
@@ -203,8 +212,11 @@ def start_voice(
             handle_text=lambda text, conf: pipeline.handle_text(text, "voice", conf),
             speech=speech or SilentSpeech(),
             normalizer=normalizer,
+            wake_names=config.wake_words,
             settings=VoiceSettings(
                 wake_word=spotter is not None,
+                wake_confidence=voice.wake_confidence,
+                verify_wake_word=voice.verify_wake_word,
                 followup_seconds=voice.followup_seconds,
                 listen_timeout=voice.listen_timeout,
                 push_to_talk_mode=voice.push_to_talk_mode,
@@ -311,6 +323,11 @@ def main(argv: list[str] | None = None) -> int:
             console.on_listen = runtime.loop.push_to_talk
         except VoiceSetupError as exc:
             out.write(f"! Голос недоступен: {exc}. Работаю с вводом текста.\n")
+        except Exception as exc:
+            log.exception("Ошибка запуска голоса")
+            out.write(
+                f"! Голос недоступен из-за ошибки: {exc}. Подробности в логе. Работаю с вводом текста.\n"
+            )
     log.info(
         "Готов к работе за %.1f с: действий %d, команд %d, голос %s",
         time.perf_counter() - started, len(registry), len(store.commands), "вкл" if runtime else "выкл",

@@ -78,6 +78,17 @@ class SapiTTS:
         self._engine, self._owner_thread = engine, threading.get_ident()
         return engine
 
+    def available_voices(self) -> list[str]:
+        """Названия и языки установленных голосов Windows."""
+        engine = self._ensure_engine()
+        return [f"{v.name} ({', '.join(map(str, v.languages or []))})" for v in engine.getProperty("voices")]
+
+    @property
+    def has_russian_voice(self) -> bool:
+        """Найден ли русский голос (без него русский текст SAPI не произнесёт)."""
+        engine = self._ensure_engine()
+        return self._pick_voice(engine.getProperty("voices")) is not None
+
     def _pick_voice(self, voices: list[Any]) -> Any:
         if self._voice_hint:
             for voice in voices:

@@ -14,6 +14,7 @@ import pytest
 from assistant.audio.capture import BLOCK_SIZE, ArraySource, resample, to_int16
 from assistant.audio.sounds import SOUND_RATE, listen_chime
 from assistant.audio.vad import SegmenterSettings, SegmentEvent, SileroVAD, SpeechSegmenter
+from assistant.audio.wakeword import SpotResult, parse_result
 from assistant.config import AppConfig, SttConfig
 from assistant.models import _safe_extract, download_all
 from assistant.safety.confirm import VoiceConfirmer
@@ -174,23 +175,27 @@ def test_tee_speaker() -> None:
 
 
 class AnswerSpotter:
-    """Отвечает заданным словом, когда в звуке появляется речь."""
+    """Как Vosk: когда в звуке есть речь, «распознаёт» заданное слово с заданной уверенностью."""
 
-    def __init__(self, answer: str | None) -> None:
+    def __init__(self, answer: str | None, conf: float = 0.95) -> None:
         self.answer = answer
-        self.last_text = ""
+        self.conf = conf
 
-    def accept(self, block: np.ndarray) -> str | None:
-        return self.answer if block.any() else None
-
-    def finish(self) -> str | None:
+    def accept(self, block: np.ndarray) -> SpotResult | None:
+        if block.any() and self.answer:
+            return SpotResult(self.answer, tuple((w, self.conf) for w in self.answer.split()))
         return None
+
+    def finish(self) -> SpotResult:
+        return SpotResult()
 
     def reset(self) -> None:
         pass
 
 
-@pytest.mark.parametrize(("answer", "expected"), [("да", True), ("подтверждаю", True), ("нет", False)])
+@pytest.mark.parametrize(
+    ("answer", "expected"), [("да", True), ("подтверждаю", True), ("нет", False), ("не надо", False)]
+)
 def test_voice_confirmer_answers(answer: str, expected: bool) -> None:
     out = FakeSpeech()
     source = FakeSource(np.concatenate([silence(300), speech(3000, 300)]))
@@ -205,6 +210,25 @@ def test_voice_confirmer_silence_means_no() -> None:
         FakeSpeech(), FakeSource(silence(6000)), lambda: AnswerSpotter("да"), timeout=5
     )
     assert confirmer.confirm("Точно?") is False
+
+
+def test_voice_confirmer_ignores_unsure_yes() -> None:
+    source = FakeSource(np.concatenate([silence(300), speech(3000, 300)]))
+    confirmer = VoiceConfirmer(
+        FakeSpeech(), source, lambda: AnswerSpotter("да", conf=0.4), timeout=1, min_confidence=0.7
+    )
+    assert confirmer.confirm("Точно?") is False
+
+
+def test_spot_result_find() -> None:
+    result = SpotResult("джарвис [unk]", (("джарвис", 0.9), ("[unk]", 1.0)))
+    assert result.find(["джарвис"], 0.8) == "джарвис"
+    assert result.find(["джарвис"], 0.95) is None
+    assert result.known_words == ["джарвис"]
+    both = SpotResult("да", (("да", 0.9),)) + SpotResult("не надо", (("не", 0.9), ("надо", 0.8)))
+    assert both.find(["не надо", "да"], 0.7) == "не надо"
+    assert both.find(["не надо"], 0.85) is None
+    assert parse_result('{"text": "да", "result": [{"word": "да", "conf": 0.75}]}').words == (("да", 0.75),)
 
 
 # --- Whisper ---------------------------------------------------------------------

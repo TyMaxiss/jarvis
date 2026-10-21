@@ -173,11 +173,15 @@ def to_int16(audio: np.ndarray) -> np.ndarray:
 
 
 def resample(audio: np.ndarray, source_rate: int, target_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Простая передискретизация линейной интерполяцией (для синтезированной речи в тестах)."""
-    if source_rate == target_rate:
+    """Передискретизация через БПФ (без наложения частот) — для синтезированной речи в тестах."""
+    if source_rate == target_rate or not len(audio):
         return audio
-    duration = len(audio) / source_rate
-    target_len = int(round(duration * target_rate))
-    source_times = np.arange(len(audio)) / source_rate
-    target_times = np.arange(target_len) / target_rate
-    return np.interp(target_times, source_times, audio.astype(np.float64)).astype(audio.dtype)
+    target_len = int(round(len(audio) * target_rate / source_rate))
+    spectrum = np.fft.rfft(audio.astype(np.float64))
+    bins = target_len // 2 + 1
+    if bins <= len(spectrum):
+        spectrum = spectrum[:bins]
+    else:
+        spectrum = np.concatenate([spectrum, np.zeros(bins - len(spectrum), dtype=spectrum.dtype)])
+    result = np.fft.irfft(spectrum, target_len) * (target_len / len(audio))
+    return result.astype(audio.dtype)

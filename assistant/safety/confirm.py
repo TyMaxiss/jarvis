@@ -69,6 +69,7 @@ class VoiceConfirmer:
         source: микрофон.
         spotter_factory: создаёт распознаватель с грамматикой YES_PHRASES + NO_PHRASES.
         timeout: сколько секунд ждать ответа.
+        min_confidence: минимальная уверенность Vosk в ответе; неуверенное «да» — не согласие.
     """
 
     def __init__(
@@ -77,12 +78,14 @@ class VoiceConfirmer:
         source: Any,
         spotter_factory: Callable[[], Any],
         timeout: float = 5.0,
+        min_confidence: float = 0.7,
         block_ms: int = 32,
     ) -> None:
         self._speech = speech
         self._source = source
         self._spotter_factory = spotter_factory
         self._timeout_ms = int(timeout * 1000)
+        self._min_confidence = min_confidence
         self._block_ms = block_ms
 
     def confirm(self, question: str) -> bool:
@@ -98,9 +101,16 @@ class VoiceConfirmer:
                 heard_ms += 200
                 continue
             heard_ms += self._block_ms
-            answer = spotter.accept(block)
+            result = spotter.accept(block)
+            if result is not None:
+                answer = self._answer(result)
         if answer is None:
-            answer = spotter.finish()
-        accepted = answer in YES_PHRASES
-        log.info("Голосовое подтверждение «%s»: %s", question, answer or "тишина")
-        return accepted
+            answer = self._answer(spotter.finish())
+        log.info("Голосовое подтверждение «%s»: %s", question, answer or "нет ответа")
+        return answer in YES_PHRASES
+
+    def _answer(self, result: Any) -> str | None:
+        """«Нет» важнее «да»: если прозвучало и то и другое, действие не выполняется."""
+        log.debug("Ответ Vosk: %s", result.describe())
+        no = result.find(NO_PHRASES, self._min_confidence)
+        return no or result.find(YES_PHRASES, self._min_confidence)

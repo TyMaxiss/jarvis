@@ -27,7 +27,9 @@ import numpy as np
 
 from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, AudioSource
 from assistant.audio.vad import SegmentEvent, SpeechSegmenter
-from assistant.nlu.normalize import Normalizer
+from assistant.audio.wakeword import SpotResult
+from assistant.nlu.names import skeleton
+from assistant.nlu.normalize import Normalizer, basic_clean
 from assistant.safety.confirm import Confirmer
 from assistant.stt.whisper_stt import Transcript
 
@@ -67,11 +69,9 @@ class SpeechOutput(Protocol):
 
 
 class Spotter(Protocol):
-    last_text: str
+    def accept(self, block: np.ndarray) -> SpotResult | None: ...
 
-    def accept(self, block: np.ndarray) -> str | None: ...
-
-    def finish(self) -> str | None: ...
+    def finish(self) -> SpotResult: ...
 
     def reset(self) -> None: ...
 
@@ -91,6 +91,8 @@ class VoiceSettings:
     """Поведение голосового цикла."""
 
     wake_word: bool = True
+    wake_confidence: float = 0.8  # минимальная уверенность Vosk в имени
+    verify_wake_word: bool = True  # имя должно быть и в тексте от Whisper
     followup_seconds: float = 5.0
     listen_timeout: float = 6.0
     push_to_talk_mode: str = "press"
@@ -110,6 +112,7 @@ class VoiceLoop:
         speech: озвучка (для полудуплекса и сигналов).
         normalizer: чтобы понять, что во фразе было только имя.
         settings: настройки.
+        wake_names: имя ассистента и варианты его написания (для Vosk — первое).
         status: куда сообщать о состоянии.
         confirmer: голосовое подтверждение рискованных действий.
         chime: сигнал «слушаю» (звук и частота) или None.
@@ -126,6 +129,7 @@ class VoiceLoop:
         speech: SpeechOutput,
         normalizer: Normalizer,
         settings: VoiceSettings,
+        wake_names: list[str] | None = None,
         status: StatusSink | None = None,
         confirmer: Confirmer | None = None,
         chime: tuple[np.ndarray, int] | None = None,
@@ -139,6 +143,10 @@ class VoiceLoop:
         self._speech = speech
         self._normalizer = normalizer
         self._settings = settings
+        names = [basic_clean(n) for n in (wake_names or ["джарвис"]) if basic_clean(n)]
+        self._wake_phrase = names[0]
+        self._wake_skeletons = {skeleton(n) for n in names}
+        self._heard = SpotResult()
         self._status = status
         self._confirmer = confirmer
         self._chime = chime
@@ -245,35 +253,49 @@ class VoiceLoop:
     # --- Состояния ------------------------------------------------------------------
 
     def _idle_block(self, block: np.ndarray, event: SegmentEvent) -> None:
-        """Ожидание имени: Vosk получает только звук, в котором есть речь."""
+        """Ожидание имени: Vosk получает только звук, в котором есть речь.
+
+        Решение принимается в конце фразы по окончательному результату Vosk
+        с уверенностью не ниже wake_confidence.
+        """
         if self._spotter is None or not self._settings.wake_word:
             return
-        heard = None
         if event is SegmentEvent.START:
+            self._heard = SpotResult()
             audio = self._segmenter.current_audio()
             for start in range(0, len(audio) - BLOCK_SIZE + 1, BLOCK_SIZE):
-                heard = self._spotter.accept(audio[start : start + BLOCK_SIZE]) or heard
+                self._collect(self._spotter.accept(audio[start : start + BLOCK_SIZE]))
         elif self._segmenter.in_speech:
-            heard = self._spotter.accept(block)
+            self._collect(self._spotter.accept(block))
         elif event in (SegmentEvent.END, SegmentEvent.DISCARD):
-            if self._spotter.finish():
-                log.info("Услышано имя ассистента (в конце фразы)")
-                self._on_wake_after_phrase()
-            return
-        if heard:
-            # Имя услышано посреди фразы — дослушиваем её целиком и распознаём Whisper.
-            log.info("Услышано имя ассистента")
-            self._spotter.reset()
-            self._set_state(VoiceState.CAPTURING)
+            heard = self._heard + self._spotter.finish()
+            self._heard = SpotResult()
+            log.debug("Vosk: %s", heard.describe())
+            if event is SegmentEvent.END and heard.find([self._wake_phrase], self._settings.wake_confidence):
+                log.info("Услышано имя ассистента: %s", heard.describe())
+                self._on_wake(heard)
 
-    def _on_wake_after_phrase(self) -> None:
-        """Имя распознано, когда фраза уже закончилась."""
-        only_name = self._spotter is not None and self._normalizer.normalize(self._spotter.last_text) == ""
-        if only_name:
+    def _collect(self, result: SpotResult | None) -> None:
+        if result is not None:
+            self._heard = self._heard + result
+
+    def _on_wake(self, heard: SpotResult) -> None:
+        """Имя распознано в только что закончившейся фразе."""
+        if heard.known_words == self._wake_phrase.split() and "[unk]" not in heard.text:
             # Сказали только «Джарвис» — Whisper не нужен, сразу слушаем команду.
             self._listen(chime=True)
         else:
             self._process(self._segmenter.segment_audio, "wake")
+
+    def mentions_name(self, text: str) -> bool:
+        """Есть ли имя ассистента в тексте (с учётом вариантов написания: «Jarvis», «Джервис»)."""
+        from rapidfuzz import fuzz
+
+        for word in basic_clean(text).split():
+            word_skeleton = skeleton(word)
+            if any(fuzz.ratio(word_skeleton, name) >= 80 for name in self._wake_skeletons):
+                return True
+        return False
 
     def _enter_idle(self) -> None:
         self._hold_buffer = []
@@ -348,6 +370,11 @@ class VoiceLoop:
             transcript.duration_ms, len(audio) / 16_000, transcript.text,
         )  # fmt: skip
         if not transcript.text:
+            self._enter_idle()
+            return
+        if origin == "wake" and self._settings.verify_wake_word and not self.mentions_name(transcript.text):
+            # Vosk «услышал» имя, а Whisper его не слышит — скорее всего, ложное срабатывание.
+            log.info("Имени нет в распознанном «%s» — игнорирую", transcript.text)
             self._enter_idle()
             return
         if not self._normalizer.normalize(transcript.text):

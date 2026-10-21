@@ -10,12 +10,15 @@
 * нечёткие совпадения выше порога важнее шаблонов: «открой ютуб» — это команда
   открытия сайта, а не open_app из шаблона «открой {name}»;
 * среди шаблонов выигрывает самый конкретный (с большей долей постоянного текста);
+  постоянные слова шаблона сравниваются нечётко, чтобы ошибка распознавания
+  («ломкость на 50») не мешала найти «громкость на {percent}»;
 * составная фраза («открой ютуб и сделай громче») делится по союзам; если каждая часть
   нашлась локально, выполняются все части по очереди, иначе фраза пробуется целиком.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
@@ -51,6 +54,7 @@ class _Phrase:
     specificity: int = 0  # длина постоянного текста шаблона
     tail_slot: str | None = None  # строковый слот в конце шаблона
     anchor: tuple[str, ...] = ()  # слова шаблона прямо перед хвостовым слотом
+    elements: tuple[tuple[str, str], ...] = ()  # ("word", слово) или ("slot", имя) по порядку
 
 
 @dataclass(frozen=True)
@@ -112,13 +116,62 @@ def _by_score(candidate: Candidate) -> float:
     return candidate.score
 
 
-def _by_specificity(candidate: Candidate) -> float:
-    return candidate.specificity
-
-
 def _prefer_when(group: list[Candidate]) -> list[Candidate]:
     """Команды с выполненным условием when вытесняют остальные."""
     return [c for c in group if c.command.when is not None] or group
+
+
+_MIN_WORD_SCORE = 75  # каждое постоянное слово шаблона должно совпасть хотя бы так
+
+
+def _word_score(expected: str, actual: str) -> float:
+    """Похожесть двух слов: посимвольно и по «скелету» (ютуб ≈ youtube)."""
+    if expected == actual:
+        return 100.0
+    return max(fuzz.ratio(expected, actual), fuzz.ratio(skeleton(expected), skeleton(actual)))
+
+
+def _align_template(
+    elements: tuple[tuple[str, str], ...], words: tuple[str, ...], slot_types: dict[str, str]
+) -> tuple[float, dict[str, str]] | None:
+    """Нечётко сопоставляет шаблон со словами фразы.
+
+    Постоянные слова шаблона сравниваются по одному со словами фразы, числовой слот
+    занимает ровно одно число, строковый — одно или несколько слов.
+
+    Returns:
+        Средняя оценка постоянных слов и значения слотов или None, если не подходит.
+    """
+    literal_count = sum(1 for kind, _ in elements if kind == "word")
+
+    @functools.cache
+    def align(i: int, j: int) -> tuple[float, tuple[tuple[str, str], ...]] | None:
+        if i == len(elements):
+            return (0.0, ()) if j == len(words) else None
+        kind, value = elements[i]
+        if kind == "word":
+            if j >= len(words):
+                return None
+            score = _word_score(value, words[j])
+            rest = align(i + 1, j + 1) if score >= _MIN_WORD_SCORE else None
+            return None if rest is None else (rest[0] + score, rest[1])
+        best: tuple[float, tuple[tuple[str, str], ...]] | None = None
+        numeric = slot_types.get(value, "str") != "str"
+        for end in range(j + 1, (j + 2 if numeric else len(words) + 1)):
+            if end > len(words):
+                break
+            chunk = " ".join(words[j:end])
+            if numeric and not re.fullmatch(_SLOT_PATTERNS[slot_types[value]], chunk):
+                break
+            rest = align(i + 1, end)
+            if rest is not None and (best is None or rest[0] > best[0]):
+                best = (rest[0], ((value, chunk), *rest[1]))
+        return best
+
+    result = align(0, 0)
+    if result is None or not literal_count:
+        return None
+    return result[0] / literal_count, dict(result[1])
 
 
 def _fuzzy_score(text: str, text_skeleton: str, phrase: _Phrase) -> float:
@@ -191,6 +244,7 @@ class Matcher:
         regex_parts: list[str] = []
         display: list[str] = []
         literal: list[str] = []
+        elements: list[tuple[str, str]] = []
         tail_slot: str | None = None
         anchor: tuple[str, ...] = ()
         for index, part in enumerate(parts):
@@ -200,12 +254,14 @@ class Matcher:
                     regex_parts.append(re.escape(" ".join(tokens)))
                     display.append(" ".join(tokens))
                     literal.extend(tokens)
+                    elements.extend(("word", token) for token in tokens)
                     anchor = tuple(tokens)
                     tail_slot = None
             else:
                 slot_type = command.slot_type(part)
                 regex_parts.append(f"(?P<{part}>{_SLOT_PATTERNS[slot_type]})")
                 display.append(f"{{{part}}}")
+                elements.append(("slot", part))
                 tail_slot = part if slot_type == "str" else None
         text = " ".join(display)
         return _Phrase(
@@ -217,6 +273,7 @@ class Matcher:
             specificity=len(" ".join(literal)),
             tail_slot=tail_slot,
             anchor=anchor if tail_slot else (),
+            elements=tuple(elements),
         )
 
     # --- Поиск ---------------------------------------------------------------------
@@ -281,6 +338,7 @@ class Matcher:
     def _match_segment(self, text: str, window: WindowInfo, original: str | None = None) -> _SegmentResult:
         """Ищет одну команду для нормализованного фрагмента."""
         text_skeleton = skeleton(text)
+        words = tuple(text.split())
         statics: dict[str, Candidate] = {}
         templates: list[Candidate] = []
         for phrase in self._phrases:
@@ -306,9 +364,20 @@ class Matcher:
                 templates.append(
                     Candidate(command, 100.0, phrase.source, "template", slots, phrase.specificity)
                 )
+                continue
+            aligned = _align_template(phrase.elements, words, command.slots)
+            if aligned is not None and aligned[0] >= self._config.threshold:
+                score, raw_slots = aligned
+                slots = {
+                    name: _SLOT_CONVERTERS[command.slot_type(name)](value)
+                    for name, value in raw_slots.items()
+                }
+                templates.append(
+                    Candidate(command, score, phrase.source, "template", slots, phrase.specificity)
+                )
 
         ranked = sorted(statics.values(), key=lambda c: -c.score)
-        templates.sort(key=lambda c: -c.specificity)
+        templates.sort(key=lambda c: (-c.specificity, -c.score))
         candidates = sorted(ranked[:3] + templates[:3], key=lambda c: (-c.score, -c.specificity))
 
         exact = [c for c in ranked if c.kind == "exact"]
@@ -322,7 +391,7 @@ class Matcher:
             ]
             return self._decide(viable_when or ranked, candidates, _by_score, gap=self._config.ambiguity_gap)
         if templates:
-            return self._decide(_prefer_when(templates), candidates, _by_specificity, gap=_TIE)
+            return self._decide_templates(_prefer_when(templates), candidates)
         return _SegmentResult(None, "not_found", candidates, "нет подходящей команды")
 
     @staticmethod
@@ -340,6 +409,22 @@ class Matcher:
             reason = f"неоднозначно: {best.command.id} или {rivals[0].command.id}"
             return _SegmentResult(None, "ambiguous", candidates, reason)
         # Выбранный кандидат — первым в списке (для лога и «Проверить фразу»).
+        return _SegmentResult(best, "matched", [best, *(c for c in candidates if c is not best)])
+
+    def _decide_templates(self, group: list[Candidate], candidates: list[Candidate]) -> _SegmentResult:
+        """Среди шаблонов побеждает самый конкретный; при равной конкретности — с лучшей оценкой.
+
+        Если у двух разных команд одинаковая конкретность и оценки ближе ambiguity_gap,
+        фраза неоднозначна.
+        """
+        ordered = sorted(group, key=lambda c: (c.specificity, c.score), reverse=True)
+        best = ordered[0]
+        rivals = [
+            c for c in ordered[1:] if c.command.id != best.command.id and c.specificity == best.specificity
+        ]
+        if rivals and best.score - rivals[0].score < max(self._config.ambiguity_gap, _TIE):
+            reason = f"неоднозначно: {best.command.id} или {rivals[0].command.id}"
+            return _SegmentResult(None, "ambiguous", candidates, reason)
         return _SegmentResult(best, "matched", [best, *(c for c in candidates if c is not best)])
 
     def _extract_slots(self, phrase: _Phrase, found: re.Match[str], original: str | None) -> dict[str, Any]:

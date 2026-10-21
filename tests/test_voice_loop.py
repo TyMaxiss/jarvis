@@ -28,8 +28,10 @@ SCRIPT = {
     5001: "Джарвис, открой ютуб.",
     5002: "Сделай громче.",
     5003: "Который час?",
+    5004: "Сделай тише.",  # без имени: Vosk «ослышался», Whisper имени не слышит
+    5005: "Джарвис.",
     WAKE: "Джарвис.",
-    6666: "Субтитры сделал DimaTorzok",
+    6666: "Джарвис, субтитры сделал DimaTorzok",
 }
 
 
@@ -67,6 +69,7 @@ class Harness:
             speech=self.speech,
             normalizer=Normalizer(["джарвис"]),
             settings=settings or VoiceSettings(followup_seconds=3, listen_timeout=3),
+            wake_names=["джарвис", "jarvis"],
             status=self.status,
             chime=(np.zeros(2205, dtype=np.float32), 22050),
         )
@@ -83,26 +86,51 @@ def test_wake_word_inside_phrase() -> None:
     assert ("recognized", "Джарвис, открой ютуб.") in h.status.events
 
 
-def test_wake_word_detected_only_at_phrase_end() -> None:
-    audio = np.concatenate([silence(500), speech(WAKE, 300), speech(5002, 700), silence(1200)])
-    h = Harness(audio, spotter=FakeSpotter(mid_phrase=False)).run()
-    assert h.handled == ["Сделай громче."]
-
-
 def test_only_name_then_command() -> None:
     audio = np.concatenate([silence(300), speech(WAKE, 500), silence(1000), speech(5002, 800), silence(1200)])
-    h = Harness(audio, spotter=FakeSpotter(mid_phrase=False)).run()
+    h = Harness(audio).run()
     assert h.handled == ["Сделай громче."]
     assert h.speech.sounds == 1  # сигнал «слушаю» после имени
     assert h.stt.calls == [5002]  # для одного имени Whisper не нужен
 
 
 def test_only_name_recognized_by_whisper_then_command() -> None:
-    # Имя услышано посреди фразы, Whisper вернул только «Джарвис.» — ждём команду.
-    audio = np.concatenate([silence(300), speech(WAKE, 500), silence(1000), speech(5003, 800), silence(1200)])
-    h = Harness(audio, spotter=FakeSpotter(mid_phrase=True)).run()
+    # Vosk услышал имя и ещё что-то, а Whisper — только «Джарвис.»: ждём команду.
+    audio = np.concatenate(
+        [silence(300), speech(WAKE, 300), speech(5005, 400), silence(1000), speech(5003, 800), silence(1200)]
+    )
+    h = Harness(audio).run()
     assert h.handled == ["Который час?"]
-    assert h.stt.calls == [WAKE, 5003]
+    assert h.stt.calls == [5005, 5003]
+
+
+def test_low_confidence_name_is_ignored() -> None:
+    audio = np.concatenate([silence(300), speech(WAKE, 300), speech(5001, 700), silence(1200)])
+    h = Harness(audio, spotter=FakeSpotter(conf=0.5)).run()
+    assert h.handled == [] and h.stt.calls == []
+
+
+def test_false_wake_rejected_by_whisper() -> None:
+    # Vosk уверен, что слышал имя, но в тексте от Whisper его нет — команда не выполняется.
+    audio = np.concatenate([silence(300), speech(WAKE, 200), speech(5004, 900), silence(1200)])
+    h = Harness(audio).run()
+    assert h.stt.calls == [5004]
+    assert h.handled == []
+
+
+def test_wake_check_can_be_disabled() -> None:
+    audio = np.concatenate([silence(300), speech(WAKE, 200), speech(5004, 900), silence(1200)])
+    h = Harness(audio, settings=VoiceSettings(verify_wake_word=False)).run()
+    assert h.handled == ["Сделай тише."]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("Джарвис, открой", True), ("Jarvis, open", True), ("Джервис, привет", True), ("Сделай тише", False)],
+)
+def test_mentions_name(text: str, expected: bool) -> None:
+    loop = Harness(silence(100)).loop
+    assert loop.mentions_name(text) is expected
 
 
 def test_speech_without_name_is_ignored() -> None:
@@ -174,8 +202,8 @@ def test_half_duplex_ignores_own_speech() -> None:
 def test_hallucination_and_silence_are_not_commands() -> None:
     audio = np.concatenate([speech(WAKE, 300), speech(6666, 700), silence(1500)])
     h = Harness(audio).run()
-    # Фейковый STT не фильтрует; фильтр «галлюцинаций» проверяется в test_stt.
-    assert h.handled == ["Субтитры сделал DimaTorzok"]
+    # Фейковый STT не фильтрует; фильтр «галлюцинаций» проверяется в test_voice_components.
+    assert h.handled == ["Джарвис, субтитры сделал DimaTorzok"]
     empty = Harness(np.concatenate([speech(WAKE, 300), speech(4999, 700), silence(1500)])).run()
     assert empty.handled == []  # STT ничего не распознал
 
@@ -206,7 +234,7 @@ def test_status_events() -> None:
     audio = np.concatenate([speech(WAKE, 300), speech(5001, 700), silence(1500)])
     h = Harness(audio).run()
     kinds = [kind for kind, _ in h.status.events]
-    assert "capturing" in kinds and "recognizing" in kinds and "recognized" in kinds
+    assert kinds.index("recognizing") < kinds.index("recognized") < kinds.index("listening")
     assert h.status.results == ["Джарвис, открой ютуб."]
 
 

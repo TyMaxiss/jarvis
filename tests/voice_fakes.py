@@ -2,7 +2,7 @@
 
 Звук строится из блоков с постоянным значением: значение кодирует, что «сказано».
 FakeVAD считает речью всё громче 1000, FakeSTT возвращает текст по самому частому
-значению во фразе, FakeSpotter «слышит» имя в блоках со значением WAKE.
+значению во фразе, FakeSpotter «слышит» имя, если во фразе были блоки со значением WAKE.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from collections import Counter
 import numpy as np
 
 from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, SAMPLE_RATE
+from assistant.audio.wakeword import SpotResult
 from assistant.stt.whisper_stt import Transcript
 
 WAKE = 7777
@@ -55,40 +56,33 @@ class FakeSTT:
 
 
 class FakeSpotter:
-    """Находит имя в блоках со значением WAKE.
+    """Как Vosk с грамматикой: в конце фразы «слышит» имя, если были блоки WAKE.
 
-    mid_phrase=True — «услышать» сразу (как частичный результат Vosk),
-    иначе — только в конце фразы (как окончательный результат).
+    conf — уверенность, с которой «распознано» имя.
     """
 
-    def __init__(self, mid_phrase: bool = True, word: str = "джарвис") -> None:
-        self.mid_phrase = mid_phrase
+    def __init__(self, conf: float = 0.95, word: str = "джарвис") -> None:
+        self.conf = conf
         self.word = word
-        self.last_text = ""
         self._seen_wake = False
         self._seen_other = False
 
-    def accept(self, block: np.ndarray) -> str | None:
+    def accept(self, block: np.ndarray) -> SpotResult | None:
         if int(block[0]) == WAKE:
             self._seen_wake = True
         elif int(block[0]):
             self._seen_other = True
-        self.last_text = self._text()
-        return self.word if self._seen_wake and self.mid_phrase else None
+        return None
 
-    def finish(self) -> str | None:
-        found = self.word if self._seen_wake else None
-        self.last_text = self._text()
-        self._seen_wake = self._seen_other = False
-        return found
+    def finish(self) -> SpotResult:
+        words = ([(self.word, self.conf)] if self._seen_wake else []) + (
+            [("[unk]", 1.0)] if self._seen_other else []
+        )
+        self.reset()
+        return SpotResult(" ".join(w for w, _ in words), tuple(words))
 
     def reset(self) -> None:
         self._seen_wake = self._seen_other = False
-        self.last_text = ""
-
-    def _text(self) -> str:
-        parts = ([self.word] if self._seen_wake else []) + (["[unk]"] if self._seen_other else [])
-        return " ".join(parts)
 
 
 class FakeSpeech:
