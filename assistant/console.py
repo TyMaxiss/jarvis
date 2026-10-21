@@ -1,0 +1,200 @@
+"""Консольный режим для отладки: фразы вводятся текстом вместо голоса."""
+
+from __future__ import annotations
+
+import logging
+import sys
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import TextIO
+
+from assistant.actions import winapi
+from assistant.actions.apps import AppIndex
+from assistant.commands.loader import CommandStore
+from assistant.nlu.matcher import Matcher, MatchResult
+from assistant.pipeline import Pipeline, PipelineResult
+
+log = logging.getLogger(__name__)
+
+HELP = """\
+Введите фразу так, как сказали бы голосом, например «сделай громче».
+Служебные команды:
+  :check <фраза>  какая команда сработает и с какой оценкой (без выполнения)
+  :delay <сек>    пауза перед выполнением, чтобы успеть переключиться в нужное окно
+  :reload         перечитать YAML-команды
+  :commands       список команд
+  :apps [текст]   найденные приложения (можно с фильтром)
+  :windows        открытые окна
+  :help           эта справка
+  :q              выход"""
+
+
+class ConsoleSpeaker:
+    """Выводит ответы ассистента в консоль (озвучка появится на этапе 2).
+
+    Во время обработки фразы ответы можно придержать (deferred), чтобы напечатать их
+    после подробностей о выполненных шагах.
+    """
+
+    def __init__(self, name: str, out: TextIO = sys.stdout) -> None:
+        self._name = name.capitalize()
+        self._out = out
+        self._held: list[str] | None = None
+
+    def say(self, text: str) -> None:
+        line = f"  {self._name}: {text}"
+        if self._held is not None:
+            self._held.append(line)
+            return
+        self._out.write(line + "\n")
+        self._out.flush()
+
+    @contextmanager
+    def deferred(self) -> Iterator[None]:
+        """Копит ответы внутри блока и печатает их при выходе."""
+        self._held = []
+        try:
+            yield
+        finally:
+            held, self._held = self._held, None
+            for line in held:
+                self._out.write(line + "\n")
+            self._out.flush()
+
+
+class ConsoleApp:
+    """Цикл чтения фраз из консоли.
+
+    Args:
+        pipeline: конвейер обработки фраз.
+        speaker: вывод ответов (придерживается, пока печатаются шаги).
+        matcher: матчер (для :check и перезагрузки).
+        store: хранилище команд (для :reload и :commands).
+        index: индекс приложений (для :apps).
+        window_provider: активное окно (для :check).
+        ask: функция чтения строки (по умолчанию input).
+        out: куда писать.
+    """
+
+    def __init__(
+        self,
+        pipeline: Pipeline,
+        speaker: ConsoleSpeaker,
+        matcher: Matcher,
+        store: CommandStore,
+        index: AppIndex,
+        window_provider: Callable[[], winapi.WindowInfo],
+        ask: Callable[[str], str] = input,
+        out: TextIO = sys.stdout,
+    ) -> None:
+        self._pipeline = pipeline
+        self._speaker = speaker
+        self._matcher = matcher
+        self._store = store
+        self._index = index
+        self._window_provider = window_provider
+        self._ask = ask
+        self._out = out
+        self._delay = 0.0
+
+    def run(self) -> None:
+        """Читает фразы до :q или Ctrl+C."""
+        self._write("Консольный режим. Введите фразу или :help для справки.")
+        while True:
+            try:
+                line = self._ask("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                self._write("")
+                break
+            if not line:
+                continue
+            if line.startswith(":"):
+                if not self._service_command(line):
+                    break
+                continue
+            if self._delay:
+                self._write(f"  Выполню через {self._delay:g} с — переключитесь в нужное окно…")
+                time.sleep(self._delay)
+            with self._speaker.deferred():
+                try:
+                    result = self._pipeline.handle_text(line, source="local")
+                except Exception:
+                    log.exception("Ошибка при обработке фразы «%s»", line)
+                    self._write("  Внутренняя ошибка, подробности в логе")
+                    continue
+                self._print_result(result)
+
+    def _service_command(self, line: str) -> bool:
+        """Выполняет служебную команду. Возвращает False для выхода."""
+        name, _, arg = line[1:].partition(" ")
+        name, arg = name.lower(), arg.strip()
+        if name in ("q", "quit", "exit", "выход"):
+            return False
+        if name == "help":
+            self._write(HELP)
+        elif name == "check":
+            self._print_match(self._matcher.match(arg, self._window_provider()))
+        elif name == "delay":
+            try:
+                self._delay = max(0.0, float(arg.replace(",", ".") or 0))
+            except ValueError:
+                self._write("  Укажите число секунд, например :delay 3")
+            else:
+                self._write(f"  Пауза перед выполнением: {self._delay:g} с")
+        elif name == "reload":
+            result = self._store.reload()
+            self._matcher.set_commands(self._store.commands)
+            self._write(f"  Загружено команд: {len(result.commands)}")
+            for issue in result.issues:
+                self._write(f"  ! {issue}")
+        elif name == "commands":
+            for command in self._store.commands:
+                self._write(f"  {command.id:20} {command.source:14} {', '.join(command.phrases[:3])}")
+        elif name == "apps":
+            entries = [e for e in self._index.entries() if arg.lower() in e.name.lower()]
+            for entry in entries[:100]:
+                self._write(f"  {entry.name}  [{entry.kind}]")
+            self._write(f"  Всего: {len(entries)}")
+        elif name == "windows":
+            if not winapi.IS_WINDOWS:
+                self._write("  Доступно только в Windows")
+            else:
+                for window in winapi.list_windows():
+                    self._write(f"  {window.title}  [{window.process}]")
+        else:
+            self._write(f"  Неизвестная служебная команда :{name}. Список — :help")
+        return True
+
+    def _print_match(self, match: MatchResult) -> None:
+        self._write(f"  Нормализовано: «{match.normalized}»")
+        if match.matched:
+            for item in match.matches:
+                slots = f" {item.slots}" if item.slots else ""
+                self._write(f"  Сработает: {item.command.id} ({item.score:.0f}, «{item.phrase}»){slots}")
+        else:
+            self._write(f"  Локально не найдено ({match.reason or match.status}) — уйдёт в нейросеть")
+        for candidate in match.candidates[:3]:
+            self._write(f"    кандидат: {candidate.describe()}")
+
+    def _print_result(self, result: PipelineResult) -> None:
+        if result.route == "llm":
+            self._write(f"  [→ нейросеть] {result.match.reason or result.match.status}"
+                        " (нейросеть подключается на этапе 3)")  # fmt: skip
+            for candidate in result.match.candidates[:3]:
+                self._write(f"    кандидат: {candidate.describe()}")
+            return
+        for outcome in result.outcomes:
+            matched = outcome.matched
+            slots = f" {matched.slots}" if matched.slots else ""
+            self._write(f"  [локально] {matched.command.id} ({matched.score:.0f}){slots}")
+            for step in outcome.run.steps:
+                mark = "✓" if step.ok else "✗"
+                self._write(f"    {mark} {step.action}: {step.text} ({step.duration_ms:.0f} мс)")
+            if outcome.run.status.value == "cancelled":
+                self._write("    отменено")
+        self._write(f"  ({result.total_ms:.0f} мс)")
+
+    def _write(self, text: str) -> None:
+        self._out.write(text + "\n")
+        self._out.flush()

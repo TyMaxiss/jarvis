@@ -1,0 +1,84 @@
+# Браузер и сайты.
+
+- id: open_youtube
+  phrases: ["открой ютуб", "запусти ютуб", "открой youtube", "ютуб"]
+  steps:
+    - open_url: {url: "https://www.youtube.com"}
+
+- id: open_google
+  phrases: ["открой гугл", "открой google"]
+  steps:
+    - open_url: {url: "https://www.google.com"}
+
+- id: open_vk
+  phrases: ["открой вконтакте", "открой вк", "открой контакт"]
+  steps:
+    - open_url: {url: "https://vk.com"}
+
+- id: open_translate
+  phrases: ["открой переводчик", "открой гугл переводчик"]
+  steps:
+    - open_url: {url: "https://translate.google.com"}
+
+- id: youtube_search
+  phrases: ["найди на ютубе {query}", "найди в ютубе {query}", "найди на youtube {query}",
+            "включи на ютубе {query}", "поищи на ютубе {query}", "ютуб {query}"]
+  steps:
+    - youtube_search: {query: "{query}"}
+
+- id: web_search
+  phrases: ["найди {query}", "найди в интернете {query}", "поищи {query}", "поищи в интернете {query}",
+            "загугли {query}", "погугли {query}"]
+  steps:
+    - web_search: {query: "{query}"}
+
+- id: new_tab
+  phrases: ["новая вкладка", "открой новую вкладку"]
+  steps:
+    - hotkey: {keys: "ctrl+t"}
+
+- id: close_tab
+  phrases: ["закрой вкладку", "закрой эту вкладку"]
+  steps:
+    - hotkey: {keys: "ctrl+w"}
+
+- id: reopen_tab
+  phrases: ["верни вкладку", "открой закрытую вкладку", "восстанови вкладку"]
+  steps:
+    - hotkey: {keys: "ctrl+shift+t"}
+
+- id: next_tab
+  phrases: ["следующая вкладка"]
+  steps:
+    - hotkey: {keys: "ctrl+tab"}
+
+- id: prev_tab
+  phrases: ["предыдущая вкладка"]
+  steps:
+    - hotkey: {keys: "ctrl+shift+tab"}
+
+- id: refresh_page
+  phrases: ["обнови страницу", "перезагрузи страницу"]
+  steps:
+    - hotkey: {keys: "f5"}
+
+- id: browser_back
+  phrases: ["назад", "вернись назад", "страница назад"]
+  steps:
+    - hotkey: {keys: "alt+left"}
+
+- id: browser_forward
+  phrases: ["вперед", "страница вперед"]
+  steps:
+    - hotkey: {keys: "alt+right"}
+
+- id: fullscreen
+  phrases: ["полный экран", "на весь экран", "выйди из полноэкранного режима"]
+  steps:
+    - hotkey: {keys: "f11"}
+
+- id: youtube_fullscreen
+  phrases: ["полный экран", "на весь экран", "выйди из полноэкранного режима"]
+  when: {active_window_contains: "YouTube"}
+  steps:
+    - hotkey: {keys: "f"}

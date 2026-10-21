@@ -1,0 +1,37 @@
+name: Тесты
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows / Python 3.12
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      # Тесты, которые создают окна и печатают в них через SendInput.
+      JARVIS_DESKTOP_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Установка зависимостей (только колёса)
+        run: uv sync --locked --no-build
+
+      - name: Тесты
+        run: uv run pytest -v -rs
+
+      - name: Запуск консольного режима (dry-run)
+        shell: pwsh
+        run: |
+          "сделай громче`nкоторый час`n:apps power`n:q" | uv run python -m assistant --dry-run

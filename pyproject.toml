@@ -1,0 +1,40 @@
+[project]
+name = "jarvis-assistant"
+version = "0.1.0"
+description = "Голосовой ассистент для Windows 11: локальные команды из YAML и LLM-агент"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.14",
+    "ruamel.yaml>=0.19",
+    "rapidfuzz>=3.14",
+    "python-dotenv>=1.2",
+    "psutil>=7.2",
+    "comtypes>=1.4.17; sys_platform == 'win32'",
+    "pycaw>=20260927; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.1"]
+
+[tool.uv]
+# Это приложение, а не библиотека: пакет не собирается, запуск через `python -m assistant`.
+package = false
+# Целевая платформа — Windows; Linux нужен только для разработки и тестов.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "windows: тест работает только в настоящей Windows",
+    "desktop: тесту нужен интерактивный рабочий стол Windows (фокус окон, ввод с клавиатуры)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "I"]

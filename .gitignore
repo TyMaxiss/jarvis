@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Секреты и локальные настройки (создаются из примеров)
+.env
+config.yaml
+
+# Логи и журнал действий
+logs/
+
+# Модели (скачиваются отдельно, см. README)
+models/
+
+# Сборка
+build/
+dist/
+
+# Фронтенд (этап 4)
+ui/node_modules/
+ui/dist/

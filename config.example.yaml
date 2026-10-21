@@ -1,0 +1,56 @@
+# Настройки голосового ассистента.
+# При первом запуске этот файл копируется в config.yaml — меняйте config.yaml.
+# Любой раздел или параметр можно не указывать: тогда берётся значение по умолчанию.
+# Ключи API сюда не пишутся — они хранятся в файле .env (см. .env.example).
+
+general:
+  name: джарвис                  # имя ассистента (оно же слово активации)
+  name_variants: [джарвиз, жарвис, jarvis]   # как ещё распознаватель может записать имя
+  dry_run: false                 # true — действия только пишутся в журнал, но не выполняются
+  debug: false                   # true — подробный лог, включая топ-3 кандидата матчера
+
+matcher:
+  threshold: 85                  # минимальная оценка совпадения фразы с командой (0–100)
+  ambiguity_gap: 5               # если два лучших кандидата ближе, фраза уходит в нейросеть
+  filler_words: [пожалуйста, слушай, ну, давай, ка, мне, будь добр, будь добра, эй, окей]
+  split_words: [а затем, а потом, и затем, и потом, затем, потом, и]
+
+commands:
+  dir: commands                  # папка с YAML-паками команд
+  user_file: my.yaml             # ваш пак: грузится последним и может перекрывать встроенные команды
+
+apps:
+  # Разговорное название → название приложения из меню «Пуск», путь к программе или URI.
+  aliases:
+    телега: Telegram
+    телеграм: Telegram
+    хром: Google Chrome
+    гугл хром: Google Chrome
+    эдж: Microsoft Edge
+    яндекс браузер: Yandex
+    вс код: Visual Studio Code
+    вскод: Visual Studio Code
+    дискорд: Discord
+    стим: Steam
+    спотифай: Spotify
+    блокнот: notepad.exe
+    калькулятор: calc.exe
+    проводник: explorer.exe
+    диспетчер задач: taskmgr.exe
+    командная строка: cmd.exe
+    параметры: "ms-settings:"
+    настройки: "ms-settings:"
+  match_threshold: 80            # минимальная оценка при поиске приложения по названию
+  launch_wait: 3                 # сколько секунд ждать окна запущенного приложения
+  exclude: [uninstall, удалить, удаление, деинсталл, readme, help, справка, website, веб-сайт,
+            documentation, документация, license, лицензия, release notes]
+
+browser:
+  search_url: "https://www.google.com/search?q={query}"
+  youtube_search_url: "https://www.youtube.com/results?search_query={query}"
+
+logging:
+  level: INFO                    # DEBUG, INFO, WARNING или ERROR
+  dir: logs
+  file: assistant.log            # лог программы
+  journal: actions.jsonl         # журнал всех выполненных действий

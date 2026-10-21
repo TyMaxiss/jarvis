@@ -1,0 +1,77 @@
+# Музыка, видео и громкость.
+
+- id: media_play_pause
+  phrases: ["пауза", "поставь на паузу", "поставь паузу", "продолжи", "продолжи воспроизведение",
+            "воспроизведение", "играй", "сними с паузы"]
+  steps:
+    - media: {action: play_pause}
+
+# На YouTube в браузере пауза надёжнее работает клавишей k.
+- id: youtube_pause
+  phrases: ["пауза", "стоп", "поставь на паузу", "продолжи", "сними с паузы"]
+  when: {active_window_contains: "YouTube"}
+  steps:
+    - hotkey: {keys: "k"}
+
+- id: media_stop
+  phrases: ["стоп", "останови музыку", "останови воспроизведение"]
+  steps:
+    - media: {action: stop}
+
+- id: media_next
+  phrases: ["следующий трек", "следующая песня", "следующее видео", "переключи трек"]
+  steps:
+    - media: {action: next}
+
+- id: media_prev
+  phrases: ["предыдущий трек", "предыдущая песня", "прошлый трек", "верни трек"]
+  steps:
+    - media: {action: prev}
+
+- id: volume_up
+  phrases: ["сделай громче", "громче", "прибавь звук", "прибавь громкость", "увеличь громкость"]
+  steps:
+    - volume_change: {delta: 10}
+
+- id: volume_down
+  phrases: ["сделай тише", "тише", "убавь звук", "убавь громкость", "уменьши громкость"]
+  steps:
+    - volume_change: {delta: -10}
+
+- id: volume_up_by
+  slots: {delta: int}
+  phrases: ["сделай громче на {delta}", "громче на {delta}", "прибавь громкость на {delta}",
+            "прибавь звук на {delta}", "увеличь громкость на {delta}"]
+  steps:
+    - volume_change: {delta: "{delta}"}
+
+- id: volume_down_by
+  slots: {delta: int}
+  phrases: ["сделай тише на {delta}", "тише на {delta}", "убавь громкость на {delta}",
+            "убавь звук на {delta}", "уменьши громкость на {delta}"]
+  steps:
+    - volume_change: {delta: "-{delta}"}
+
+- id: volume_set
+  slots: {percent: int}
+  phrases: ["громкость на {percent}", "громкость {percent}", "поставь громкость {percent}",
+            "поставь громкость на {percent}", "сделай громкость {percent}",
+            "сделай громкость на {percent}", "установи громкость {percent}",
+            "убавь громкость до {percent}", "прибавь громкость до {percent}"]
+  steps:
+    - volume_set: {percent: "{percent}"}
+
+- id: volume_max
+  phrases: ["громкость на максимум", "максимальная громкость", "сделай громкость на максимум"]
+  steps:
+    - volume_set: {percent: 100}
+
+- id: mute
+  phrases: ["выключи звук", "отключи звук", "без звука", "замолчи звук"]
+  steps:
+    - mute: {state: true}
+
+- id: unmute
+  phrases: ["включи звук", "верни звук"]
+  steps:
+    - mute: {state: false}

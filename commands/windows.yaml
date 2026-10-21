@@ -1,0 +1,79 @@
+# Окна, программы и система.
+# Формат команд описан в README.md («Как добавить свою команду»).
+
+- id: minimize_all
+  phrases: ["сверни все окна", "сверни окна", "покажи рабочий стол"]
+  steps:
+    - hotkey: {keys: "win+d"}
+
+- id: window_minimize
+  phrases: ["сверни окно", "сверни это окно", "сверни"]
+  steps:
+    - window_action: {action: minimize}
+
+- id: window_maximize
+  phrases: ["разверни окно", "разверни это окно", "разверни на весь экран", "разверни"]
+  steps:
+    - window_action: {action: maximize}
+
+- id: window_close
+  phrases: ["закрой окно", "закрой это окно", "закрой текущее окно"]
+  steps:
+    - window_action: {action: close}
+
+- id: switch_window
+  phrases: ["переключи окно", "предыдущее окно", "верни окно"]
+  steps:
+    - hotkey: {keys: "alt+tab"}
+
+- id: active_window
+  phrases: ["какое окно активно", "что за окно", "какое сейчас окно"]
+  reply: "{result}"
+  steps:
+    - get_active_window: {}
+
+- id: focus_window
+  phrases: ["переключись на {title}", "перейди в {title}", "перейди на {title}", "покажи окно {title}"]
+  steps:
+    - focus_window: {title: "{title}"}
+
+- id: open_app
+  phrases: ["открой {name}", "запусти {name}", "открыть {name}", "запустить {name}"]
+  steps:
+    - open_app: {name: "{name}"}
+
+- id: close_app
+  phrases: ["закрой {name}", "закрыть {name}", "выйди из {name}"]
+  steps:
+    - close_app: {name: "{name}"}
+
+- id: task_manager
+  phrases: ["открой диспетчер задач", "диспетчер задач"]
+  steps:
+    - hotkey: {keys: "ctrl+shift+esc"}
+
+- id: explorer
+  phrases: ["открой проводник", "проводник", "открой мой компьютер"]
+  steps:
+    - hotkey: {keys: "win+e"}
+
+- id: windows_settings
+  phrases: ["открой параметры", "открой настройки", "параметры windows", "настройки windows"]
+  steps:
+    - hotkey: {keys: "win+i"}
+
+- id: screenshot
+  phrases: ["сделай скриншот", "скриншот", "снимок экрана"]
+  steps:
+    - hotkey: {keys: "win+shift+s"}
+
+- id: type_text
+  phrases: ["напечатай {text}", "введи текст {text}"]
+  steps:
+    - type_text: {text: "{text}"}
+
+- id: time
+  phrases: ["который час", "сколько времени", "сколько сейчас времени", "какое сегодня число"]
+  reply: "{result}"
+  steps:
+    - get_time: {}
