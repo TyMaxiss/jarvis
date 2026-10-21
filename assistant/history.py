@@ -31,7 +31,7 @@ def read_entries(path: Path, tail_bytes: int = TAIL_BYTES) -> list[dict[str, Any
         with path.open("rb") as file:
             size = file.seek(0, 2)
             start = max(0, size - tail_bytes)
-            file.seek(start)
+            file.seek(max(0, start - 1))
             data = file.read()
     except FileNotFoundError:
         return []
@@ -40,7 +40,7 @@ def read_entries(path: Path, tail_bytes: int = TAIL_BYTES) -> list[dict[str, Any
         return []
     lines = data.split(b"\n")
     if start > 0:
-        lines = lines[1:]  # первая строка начинается с середины
+        lines = lines[1:]  # до первого перевода строки — конец предыдущей строки или она сама
     entries = []
     for line in lines:
         if not line.strip():

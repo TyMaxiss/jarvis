@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Annotated, Any
 
+import pytest
 from pydantic import Field
 
 from assistant.actions.executor import ActionExecutor
@@ -189,9 +190,15 @@ def test_history_rereads_only_changed_journal(tmp_path: Path, monkeypatch: Any) 
     assert [i["phrase"] for i in history.query()["items"]] == ["два", "раз"]
 
 
-def test_tail_skips_cut_line_and_garbage(tmp_path: Path) -> None:
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])  # журнал в Windows пишется с \r\n
+def test_tail_skips_cut_line_and_garbage(tmp_path: Path, newline: str) -> None:
     path = tmp_path / "actions.jsonl"
     good = json.dumps({"time": "2026-10-21T10:00:00+03:00", "kind": "phrase", "request": "x", "phrase": "ок"})
-    path.write_text('{"time": "обрезано\n' + "не json\n" + good + "\n[1, 2]\n", encoding="utf-8")
+    tail = good + newline + "[1, 2]" + newline
+    path.write_bytes(('{"time": "обрезано' + newline + "не json" + newline + tail).encode("utf-8"))
     assert [e["phrase"] for e in read_entries(path)] == ["ок"]
-    assert [e["phrase"] for e in read_entries(path, tail_bytes=len(good.encode()) + 10)] == ["ок"]
+    size = len(tail.encode())
+    # Начало прочитанного куска посреди строки, ровно на её начале и сразу после него.
+    assert [e["phrase"] for e in read_entries(path, tail_bytes=size + 3)] == ["ок"]
+    assert [e["phrase"] for e in read_entries(path, tail_bytes=size)] == ["ок"]
+    assert [e["phrase"] for e in read_entries(path, tail_bytes=size - 1)] == []
