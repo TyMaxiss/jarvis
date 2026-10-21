@@ -130,6 +130,7 @@ class ActionExecutor:
         question: str | None = None,
         confirmer: Confirmer | None = None,
         on_step: Callable[[int, int, StepResult], None] | None = None,
+        request: str | None = None,
     ) -> RunResult:
         """Выполняет шаги по порядку; при первой ошибке останавливается.
 
@@ -147,8 +148,9 @@ class ActionExecutor:
             confirmer: как спросить подтверждение (голосом или в консоли); по умолчанию —
                 способ, заданный при создании исполнителя.
             on_step: вызывается после каждого шага с его номером, числом шагов и итогом.
+            request: id фразы, к которой относятся шаги (для журнала и Истории).
         """
-        context = {"source": source, "command_id": command_id, "phrase": phrase}
+        context = {"source": source, "command_id": command_id, "phrase": phrase, "request": request}
         decisions = [self.policy.evaluate(step.action, step.args) for step in planned]
 
         forbidden = [(s, d) for s, d in zip(planned, decisions, strict=True) if d.verdict is Verdict.FORBID]
@@ -225,4 +227,5 @@ class ActionExecutor:
             duration_ms=duration_ms,
             command_id=context["command_id"],
             phrase=context["phrase"],
+            request=context["request"],
         )

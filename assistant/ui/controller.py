@@ -21,6 +21,7 @@ from assistant import __version__
 from assistant.actions.registry import ActionError
 from assistant.commands.loader import Command, CommandStore
 from assistant.config import AppConfig, LlmConfig, LlmProfile
+from assistant.history import FILTERS, PAGE, History
 from assistant.llm.client import LlmError, resolve_api_key
 from assistant.llm.providers import (
     CUSTOM_KEY_ENV,
@@ -154,6 +155,7 @@ class UiController:
         self.confirmer = confirmer
         self._log_file = log_file
         self._journal_file = journal_file
+        self._history = History(journal_file)
         self._force_dry_run = force_dry_run
         self.hotkeys_paused = hotkeys_paused or threading.Event()
         self.host: WindowHost | None = None
@@ -368,6 +370,28 @@ class UiController:
         self.bus.emit("commands", {"count": len(result.commands), "issues": issues})
         self.push_state()
         return {"count": len(result.commands), "issues": issues}
+
+    # --- История ---------------------------------------------------------------------
+
+    def history(self, query: Any) -> dict[str, Any]:
+        """Страница «История»: фразы из журнала, новые первыми.
+
+        query: limit, before и before_time (id и время последней показанной фразы),
+        filter (all, errors, llm, local), search.
+        """
+        query = query if isinstance(query, Mapping) else {}
+        kind = str(query.get("filter") or "all")
+        try:
+            limit = int(query.get("limit") or PAGE)
+        except (TypeError, ValueError):
+            limit = PAGE
+        return self._history.query(
+            limit=min(max(limit, 1), 200),
+            before=str(query.get("before") or ""),
+            before_time=str(query.get("before_time") or ""),
+            kind=kind if kind in FILTERS else "all",
+            search=str(query.get("search") or "")[:200],
+        )
 
     # --- Громкость -------------------------------------------------------------------
 

@@ -253,4 +253,7 @@ def test_interface_with_real_python(
     assert "Шаг 1" in results["chatSteps"]
     assert controller.activity.recent[0]["phrase"] == "сделай громче"
     assert results["recent"] == "сделай громче"
+    # История: фраза из журнала (не из памяти окна) вместе с действием команды.
+    assert results["historyDay"] == "Сегодня"
+    assert results["historyAction"] == "volume_change(delta=10)"
     assert KEY not in json.dumps(controller.settings())

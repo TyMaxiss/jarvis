@@ -9,7 +9,7 @@ export type Page = 'home' | 'commands' | 'history' | 'settings'
 const items: Array<{ page: Page; title: string; icon: ReactNode; soon?: boolean }> = [
   { page: 'home', title: 'Главная', icon: <House size={17} /> },
   { page: 'commands', title: 'Команды', icon: <ListChecks size={17} />, soon: true },
-  { page: 'history', title: 'История', icon: <History size={17} />, soon: true },
+  { page: 'history', title: 'История', icon: <History size={17} /> },
   { page: 'settings', title: 'Настройки', icon: <Settings2 size={17} /> },
 ]
 

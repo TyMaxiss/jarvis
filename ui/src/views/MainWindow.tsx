@@ -7,6 +7,7 @@ import { ResizeGrip, TitleBar } from '../components/TitleBar'
 import { Button, IconButton } from '../components/ui'
 import { call } from '../lib/bridge'
 import { useAppState, useAssistantEvent } from '../lib/store'
+import { HistoryPage } from '../pages/History'
 import { Home } from '../pages/Home'
 import { SettingsPage } from '../pages/Settings'
 import { Soon } from '../pages/Soon'
@@ -26,6 +27,8 @@ export function MainWindow() {
             <Home state={state} onOpenSettings={() => setPage('settings')} />
           ) : page === 'settings' ? (
             <SettingsPage />
+          ) : page === 'history' ? (
+            <HistoryPage />
           ) : (
             <Soon page={page} />
           )}

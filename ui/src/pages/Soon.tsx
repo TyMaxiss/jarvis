@@ -3,7 +3,7 @@ import { Button } from '../components/ui'
 import { call } from '../lib/bridge'
 
 /** Заглушка разделов следующего этапа: что уже можно сделать руками. */
-export function Soon({ page }: { page: 'commands' | 'history' }) {
+export function Soon({ page }: { page: 'commands' }) {
   const commands = page === 'commands'
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-7 text-center">

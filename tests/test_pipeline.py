@@ -145,7 +145,7 @@ class StubAgent:
         self.calls: list[tuple[str, object]] = []
         self.forgotten = False
 
-    def run(self, text: str, *, confirmer: object, cancel: object, on_step: object) -> object:
+    def run(self, text: str, *, confirmer: object, cancel: object, on_step: object, request: str) -> object:
         self.calls.append((text, cancel))
         return self.result
 

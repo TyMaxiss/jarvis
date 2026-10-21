@@ -5,6 +5,8 @@ import type {
   AppState,
   AssistantApi,
   AssistantEvent,
+  HistoryItem,
+  HistoryQuery,
   LlmProfileInfo,
   LlmRequest,
   RecentItem,
@@ -111,6 +113,113 @@ const recent: RecentItem[] = [
   { id: 1, time: '18:31', phrase: 'Открой ютуб', route: 'local', reply: '', ok: true, ms: 380, source: 'text' },
 ]
 
+/** Время «столько-то минут назад» в формате журнала (ISO с часовым поясом). */
+function ago(minutes: number): string {
+  const date = new Date(Date.now() - minutes * 60_000)
+  const offset = -date.getTimezoneOffset()
+  const sign = offset >= 0 ? '+' : '-'
+  const pad = (n: number) => String(Math.trunc(Math.abs(n))).padStart(2, '0')
+  const local = new Date(date.getTime() + offset * 60_000).toISOString().slice(0, 23)
+  return `${local}${sign}${pad(offset / 60)}:${pad(offset % 60)}`
+}
+
+function makeHistory(): HistoryItem[] {
+  const done = (action: string, args: Record<string, unknown>, result: string, ms = 120) => ({
+    action,
+    args,
+    status: 'done',
+    result,
+    duration_ms: ms,
+  })
+  const item = (fields: Partial<HistoryItem> & Pick<HistoryItem, 'id' | 'time' | 'phrase'>): HistoryItem => ({
+    source: 'voice',
+    route: 'local',
+    commands: [],
+    reply: '',
+    ok: true,
+    error: '',
+    duration_ms: 400,
+    actions: [],
+    ...fields,
+  })
+  return [
+    item({
+      id: 'h1',
+      time: ago(3),
+      phrase: 'сделай громче',
+      commands: ['volume_up'],
+      reply: 'Громкость 60',
+      actions: [done('volume_change', { delta: 10 }, 'Громкость 60', 35)],
+    }),
+    item({
+      id: 'h2',
+      time: ago(5),
+      phrase: 'создай на рабочем столе папку Проекты и открой её',
+      route: 'llm',
+      reply: 'Создал папку «Проекты» на рабочем столе и открыл её.',
+      duration_ms: 2310,
+      actions: [
+        done('create_folder', { path: 'Рабочий стол\\Проекты' }, 'Папка создана: C:\\Users\\user\\Desktop\\Проекты'),
+        done('open_folder', { path: 'C:\\Users\\user\\Desktop\\Проекты' }, 'Открываю Проекты'),
+      ],
+    }),
+    item({
+      id: 'h3',
+      time: ago(14),
+      phrase: 'открой телеграм',
+      source: 'text',
+      commands: ['open_app'],
+      ok: false,
+      error: 'Не нашёл приложение «телеграм»',
+      actions: [
+        { action: 'open_app', args: { name: 'телеграм' }, status: 'failed', result: 'Не нашёл приложение «телеграм»', duration_ms: 210 },
+      ],
+    }),
+    item({
+      id: 'h4',
+      time: ago(31),
+      phrase: 'расскажи анекдот',
+      route: 'llm',
+      duration_ms: 1840,
+      reply: 'Программист заходит в бар… и заказывает 1 пиво, 0 пива, 999999 пив и −1 пиво.',
+    }),
+    item({
+      id: 'h5',
+      time: ago(40),
+      phrase: 'выключи компьютер',
+      commands: ['shutdown'],
+      ok: false,
+      error: 'Отменено',
+      reply: 'Отменено',
+      actions: [{ action: 'shutdown', args: {}, status: 'cancelled', result: 'не подтверждено', duration_ms: 0 }],
+    }),
+    item({
+      id: 'h6',
+      time: ago(60 * 26),
+      phrase: 'рабочий режим',
+      source: 'hotkey',
+      commands: ['work_mode'],
+      reply: 'Все системы готовы',
+      duration_ms: 1520,
+      actions: [
+        done('open_app', { name: 'Telegram' }, 'Открываю Telegram', 640),
+        done('open_app', { name: 'Visual Studio Code' }, 'Открываю Visual Studio Code', 710),
+        done('volume_set', { percent: 30 }, 'Громкость 30', 40),
+      ],
+    }),
+    item({
+      id: 'h7',
+      time: ago(60 * 27),
+      phrase: 'сколько места свободно на диске C',
+      route: 'llm',
+      source: 'text',
+      reply: 'На диске C свободно 182 ГБ из 476.',
+      duration_ms: 3900,
+      actions: [done('run_shell', { command: 'Get-PSDrive C' }, 'Free: 195 421 380 608', 880)],
+    }),
+  ]
+}
+
 function makeState(): AppState {
   return {
     name: 'Джарвис',
@@ -183,6 +292,7 @@ function makeSettings(state: AppState): Settings {
 
 export function createMockApi(emit: (event: AssistantEvent) => void): AssistantApi {
   const state = makeState()
+  const history = makeHistory()
   let settings = makeSettings(state)
   let meter: number | undefined
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -208,6 +318,19 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
       source: 'text',
     }
     state.recent = [item, ...state.recent].slice(0, 20)
+    history.unshift({
+      id: `m${item.id}`,
+      time: ago(0),
+      phrase: text,
+      source: 'text',
+      route: 'llm',
+      commands: [],
+      reply,
+      ok: true,
+      error: '',
+      duration_ms: 1100,
+      actions: [{ action: 'open_app', args: { name: 'Блокнот' }, status: 'done', result: 'Открываю Блокнот', duration_ms: 300 }],
+    })
     emit({ type: 'result', payload: item })
     emit({ type: 'voice', payload: { state: 'idle', detail: '' } })
   }
@@ -309,6 +432,19 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
     async window_resize() {},
     async pause_hotkeys() {},
     async open_path() {},
+    async history(query: HistoryQuery) {
+      let items = history
+      const index = query.before ? items.findIndex((item) => item.id === query.before) : -1
+      if (index >= 0) items = items.slice(index + 1)
+      const needle = (query.search ?? '').trim().toLowerCase()
+      items = items.filter((item) => {
+        if (query.filter === 'errors' && item.ok) return false
+        if ((query.filter === 'llm' || query.filter === 'local') && item.route !== query.filter) return false
+        return !needle || [item.phrase, item.reply, item.error].some((text) => text.toLowerCase().includes(needle))
+      })
+      const limit = query.limit ?? 50
+      return structuredClone({ items: items.slice(0, limit), more: items.length > limit })
+    },
     async reload_commands() {
       return { count: 42, issues: [] }
     },

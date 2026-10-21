@@ -188,6 +188,7 @@ class Agent:
         confirmer: Confirmer | None = None,
         cancel: threading.Event | None = None,
         on_step: Callable[[AgentStep], None] | None = None,
+        request: str | None = None,
     ) -> AgentResult:
         """Выполняет просьбу пользователя.
 
@@ -196,6 +197,7 @@ class Agent:
             confirmer: как подтверждать рискованные действия.
             cancel: если установлено — задача прерывается.
             on_step: вызывается после каждого выполненного инструмента.
+            request: id фразы для журнала: по нему История связывает фразу и действия.
         """
         cancel = cancel or threading.Event()
         started = self._clock()
@@ -254,7 +256,9 @@ class Agent:
                 if cancel.is_set():
                     exchange.append({"role": "tool", "tool_call_id": call.id, "content": _CANCELLED_TOOL})
                     continue
-                step = self._run_tool(len(result.steps) + 1, call.name, call.arguments, text, confirmer)
+                step = self._run_tool(
+                    len(result.steps) + 1, call.name, call.arguments, text, confirmer, request
+                )
                 result.steps.append(step)
                 if on_step is not None:
                     on_step(step)
@@ -320,7 +324,13 @@ class Agent:
         return result
 
     def _run_tool(
-        self, number: int, name: str, raw_args: str, phrase: str, confirmer: Confirmer | None
+        self,
+        number: int,
+        name: str,
+        raw_args: str,
+        phrase: str,
+        confirmer: Confirmer | None,
+        request: str | None = None,
     ) -> AgentStep:
         """Выполняет вызов инструмента; любой исход становится текстом для модели."""
         try:
@@ -336,7 +346,12 @@ class Agent:
         except ArgsError as exc:
             return AgentStep(number, name, args, "error", f"Ошибка в аргументах: {exc}")
         run = self._executor.run(
-            planned, source="llm", phrase=phrase, question=confirm_question(planned[0]), confirmer=confirmer
+            planned,
+            source="llm",
+            phrase=phrase,
+            question=confirm_question(planned[0]),
+            confirmer=confirmer,
+            request=request,
         )
         if run.status is StepStatus.CANCELLED:
             text = "Пользователь не подтвердил действие, оно не выполнено"

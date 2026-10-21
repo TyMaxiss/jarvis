@@ -23,6 +23,44 @@ export interface RecentItem {
   source: 'voice' | 'text'
 }
 
+export interface HistoryAction {
+  action: string
+  args: Record<string, unknown>
+  status: string // done, failed, forbidden, cancelled, dry_run
+  result: string
+  duration_ms: number
+}
+
+/** Фраза из журнала: что сказано, куда ушло, какие действия и чем кончилось. */
+export interface HistoryItem {
+  id: string
+  time: string // ISO с часовым поясом
+  phrase: string
+  source: string // voice, text, hotkey, local (консоль); '' — неизвестно (старый журнал)
+  route: Route
+  commands: string[]
+  reply: string
+  ok: boolean
+  error: string
+  duration_ms: number
+  actions: HistoryAction[]
+}
+
+export type HistoryFilter = 'all' | 'errors' | 'llm' | 'local'
+
+export interface HistoryQuery {
+  limit?: number
+  before?: string // id последней показанной фразы
+  before_time?: string // её время — если её уже нет в журнале
+  filter?: HistoryFilter
+  search?: string
+}
+
+export interface HistoryPage {
+  items: HistoryItem[]
+  more: boolean
+}
+
 export interface Scenario {
   id: string
   title: string
@@ -192,6 +230,7 @@ export interface AssistantApi {
   window_action(window: WindowName, action: 'minimize' | 'maximize' | 'close' | 'hide'): Promise<void>
   window_resize(width: number, height: number, seq: number): Promise<void> // главное окно без рамки
   open_path(kind: 'config' | 'log' | 'journal' | 'commands'): Promise<void>
+  history(query: HistoryQuery): Promise<HistoryPage>
   reload_commands(): Promise<{ count: number; issues: string[] }>
   restart(): Promise<void>
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -17,7 +18,7 @@ from assistant.actions.executor import ActionExecutor, RunResult, StepResult, St
 from assistant.actions.registry import ArgsError, UnknownActionError
 from assistant.actions.winapi import WindowInfo
 from assistant.commands.loader import Command, render_reply, substitute
-from assistant.llm.agent import Agent, AgentResult, AgentStep
+from assistant.llm.agent import Agent, AgentResult, AgentStatus, AgentStep
 from assistant.nlu.matcher import MatchedCommand, Matcher, MatchResult
 from assistant.safety.confirm import Confirmer
 from assistant.tts.base import Speaker
@@ -25,6 +26,18 @@ from assistant.tts.base import Speaker
 log = logging.getLogger(__name__)
 
 Route = Literal["local", "llm"]
+
+# Почему задача нейросети не выполнена — для Истории.
+_AGENT_PROBLEMS = {
+    AgentStatus.CANCELLED: "прервано",
+    AgentStatus.TIMEOUT: "нейросеть не уложилась во время",
+    AgentStatus.STEP_LIMIT: "слишком много шагов",
+}
+
+
+def new_request() -> str:
+    """Id фразы в журнале: им связаны фраза и её действия."""
+    return uuid.uuid4().hex[:12]
 
 
 @dataclass
@@ -48,6 +61,25 @@ class PipelineResult:
     match_ms: float = 0.0
     total_ms: float = 0.0
     agent: AgentResult | None = None
+    request: str = ""  # id фразы в журнале
+
+    @property
+    def ok(self) -> bool:
+        """Всё получилось: команды выполнены или нейросеть справилась."""
+        if self.route == "local":
+            return bool(self.outcomes) and all(outcome.run.ok for outcome in self.outcomes)
+        return self.agent is not None and self.agent.ok
+
+    @property
+    def problem(self) -> str:
+        """Что пошло не так ('' — всё в порядке)."""
+        if self.ok:
+            return ""
+        if self.route == "local":
+            return next((o.reply or "не получилось" for o in self.outcomes if not o.run.ok), "")
+        if self.agent is None:
+            return "нейросеть выключена"
+        return self.agent.error or _AGENT_PROBLEMS.get(self.agent.status, self.agent.status.value)
 
     @property
     def handled(self) -> bool:
@@ -123,7 +155,9 @@ class Pipeline:
             confirmer: как подтверждать рискованные действия для этой фразы.
         """
         with self._lock:
-            return self._handle(text, source, confirmer)
+            result = self._handle(text, source, confirmer, new_request())
+        self._journal_phrase(result, source)
+        return result
 
     def run_command(
         self, command: Command, source: str = "local", confirmer: Confirmer | None = None
@@ -134,16 +168,37 @@ class Pipeline:
         """
         phrase = command.phrases[0] if command.phrases else command.id
         matched = MatchedCommand(command, {}, 100.0, phrase, phrase)
+        request = new_request()
         with self._lock:
             started = time.perf_counter()
-            outcome = self._run_command(matched, phrase, source, confirmer)
+            outcome = self._run_command(matched, phrase, source, confirmer, request)
             total_ms = (time.perf_counter() - started) * 1000
         if outcome.reply:
             self._speaker.say(outcome.reply)
         match = MatchResult("matched", phrase, [matched])
-        return PipelineResult(phrase, "local", match, [outcome], outcome.reply or "", 0.0, total_ms)
+        result = PipelineResult(
+            phrase, "local", match, [outcome], outcome.reply or "", 0.0, total_ms, request=request
+        )
+        self._journal_phrase(result, source)
+        return result
 
-    def _handle(self, text: str, source: str, confirmer: Confirmer | None) -> PipelineResult:
+    def _journal_phrase(self, result: PipelineResult, source: str) -> None:
+        """Запись о фразе для Истории; её действия уже в журнале с тем же request."""
+        if result.match.status == "empty":
+            return
+        self._executor.journal.write_phrase(
+            request=result.request,
+            phrase=result.text,
+            source=source,
+            route=result.route,
+            commands=[outcome.matched.command.id for outcome in result.outcomes],
+            reply=result.reply,
+            ok=result.ok,
+            duration_ms=result.total_ms,
+            error=result.problem,
+        )
+
+    def _handle(self, text: str, source: str, confirmer: Confirmer | None, request: str) -> PipelineResult:
         started = time.perf_counter()
         match = self._matcher.match(text, self._window_provider())
         match_ms = (time.perf_counter() - started) * 1000
@@ -151,21 +206,37 @@ class Pipeline:
         if not match.matched:
             log.info("«%s» не найдена локально (%s) — маршрут LLM", text, match.reason or match.status)
             if match.status == "empty":
-                return PipelineResult(text, "llm", match, match_ms=match_ms)
+                return PipelineResult(text, "llm", match, match_ms=match_ms, request=request)
             llm_agent = self._agent
+            agent = None
             if llm_agent is None:
                 reply = "Не знаю такой команды"
                 self._speaker.say(reply)
-                return PipelineResult(text, "llm", match, reply=reply, match_ms=match_ms,
-                                      total_ms=(time.perf_counter() - started) * 1000)  # fmt: skip
-            self._cancel.clear()
-            agent = llm_agent.run(text, confirmer=confirmer, cancel=self._cancel, on_step=self.on_agent_step)
-            return PipelineResult(text, "llm", match, reply=agent.text, match_ms=match_ms,
-                                  total_ms=(time.perf_counter() - started) * 1000, agent=agent)  # fmt: skip
+            else:
+                self._cancel.clear()
+                agent = llm_agent.run(
+                    text,
+                    confirmer=confirmer,
+                    cancel=self._cancel,
+                    on_step=self.on_agent_step,
+                    request=request,
+                )
+                reply = agent.text
+            total_ms = (time.perf_counter() - started) * 1000
+            return PipelineResult(
+                text,
+                "llm",
+                match,
+                reply=reply,
+                match_ms=match_ms,
+                total_ms=total_ms,
+                agent=agent,
+                request=request,
+            )
 
         outcomes: list[CommandOutcome] = []
         for matched in match.matches:
-            outcome = self._run_command(matched, text, source, confirmer)
+            outcome = self._run_command(matched, text, source, confirmer, request)
             outcomes.append(outcome)
             if not outcome.run.ok:
                 break
@@ -174,10 +245,10 @@ class Pipeline:
         log.info("Задержки: матчинг %.0f мс, текст → результат %.0f мс", match_ms, total_ms)
         if reply:
             self._speaker.say(reply)
-        return PipelineResult(text, "local", match, outcomes, reply, match_ms, total_ms)
+        return PipelineResult(text, "local", match, outcomes, reply, match_ms, total_ms, request=request)
 
     def _run_command(
-        self, matched: MatchedCommand, phrase: str, source: str, confirmer: Confirmer | None
+        self, matched: MatchedCommand, phrase: str, source: str, confirmer: Confirmer | None, request: str
     ) -> CommandOutcome:
         """Подставляет слоты в шаги команды и выполняет их."""
         command = matched.command
@@ -198,6 +269,7 @@ class Pipeline:
             question=f"Выполнить «{matched.text}»?",
             confirmer=confirmer,
             on_step=self.on_command_step,
+            request=request,
         )
         if run.status is StepStatus.CANCELLED:
             reply: str | None = "Отменено"

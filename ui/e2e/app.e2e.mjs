@@ -62,6 +62,15 @@ try {
   await main.getByText('сделай громче').first().waitFor({ timeout: 5000 })
   results.recent = await main.getByText('сделай громче').first().textContent()
   await main.screenshot({ path: `${shots}/e2e-home.png` })
+
+  // История: фраза из журнала с её действием; подробности по щелчку.
+  await main.getByRole('button', { name: 'История' }).click()
+  await main.getByText('сделай громче').first().click()
+  await main.getByText(/^volume_change\(/).waitFor({ timeout: 5000 })
+  results.historyDay = await main.getByRole('region').first().getAttribute('aria-label')
+  results.historyAction = await main.getByText(/^volume_change\(/).textContent()
+  await main.waitForTimeout(300) // подробности появляются плавно
+  await main.screenshot({ path: `${shots}/e2e-history.png` })
 } catch (error) {
   errors.push(String(error))
   for (const [index, page] of browser.contexts().flatMap((context) => context.pages()).entries()) {

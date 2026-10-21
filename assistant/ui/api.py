@@ -132,6 +132,10 @@ class Api:
         self._controller.open_path(str(kind))
 
     @_logged
+    def history(self, query: dict[str, Any]) -> dict[str, Any]:
+        return self._controller.history(query)
+
+    @_logged
     def reload_commands(self) -> dict[str, Any]:
         return self._controller.reload_commands()
 
