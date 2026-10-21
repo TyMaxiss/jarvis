@@ -170,12 +170,15 @@ class GrammarSpotter:
         self._recognizer.Reset()
 
 
-def phrase_spotter(model: Any, phrases: Iterable[str]) -> GrammarSpotter:
+def phrase_spotter(model: Any, phrases: Iterable[str], exclude_decoys: Iterable[str] = ()) -> GrammarSpotter:
     """Распознаватель заданных фраз среди слов-приманок (DECOY_WORDS).
 
     Если искомое слово совпадает с приманкой («компьютер», «нет»), оно остаётся только искомым.
+    exclude_decoys — приманки, слишком похожие на искомое слово: короткое «стоп» Vosk
+    принимал за «тот» и «сам».
     """
-    return GrammarSpotter(model, phrases, decoys=DECOY_WORDS)
+    excluded = set(exclude_decoys)
+    return GrammarSpotter(model, phrases, decoys=[word for word in DECOY_WORDS if word not in excluded])
 
 
 def wake_spotter(model: Any, name: str) -> GrammarSpotter:

@@ -149,7 +149,7 @@ def start_voice(
     from assistant.audio.wakeword import VoskModelError, load_vosk_model, phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
     from assistant.stt.whisper_stt import WhisperSTT
-    from assistant.voice import STOP_PHRASES, VoiceLoop, VoiceSettings
+    from assistant.voice import STOP_PHRASES, STOP_SOUNDALIKES, VoiceLoop, VoiceSettings
 
     voice = config.voice
     if not (voice.wake_word or voice.push_to_talk):
@@ -207,7 +207,7 @@ def start_voice(
         if vosk_model is not None:
             # «Джарвис, стоп» тоже считается — если имя есть в словаре Vosk.
             stop_phrases = [*STOP_PHRASES, *([config.general.name] if spotter is not None else [])]
-            stop_spotter = phrase_spotter(vosk_model, stop_phrases)
+            stop_spotter = phrase_spotter(vosk_model, stop_phrases, exclude_decoys=STOP_SOUNDALIKES)
         segmenter = SpeechSegmenter(
             SegmenterSettings(
                 threshold=voice.vad_threshold,
@@ -229,6 +229,7 @@ def start_voice(
             settings=VoiceSettings(
                 wake_word=spotter is not None,
                 wake_confidence=voice.wake_confidence,
+                stop_confidence=voice.stop_confidence,
                 verify_wake_word=voice.verify_wake_word,
                 followup_seconds=voice.followup_seconds,
                 listen_timeout=voice.listen_timeout,

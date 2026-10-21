@@ -67,6 +67,7 @@ voice:
   verify_wake_word: true         # имя должно быть и в тексте от Whisper (отсекает ложные срабатывания)
   confirm_timeout: 5             # сколько секунд ждать «да» или «нет» при подтверждении
   confirm_confidence: 0.7        # уверенность распознавания «да/нет»
+  stop_confidence: 0.7           # уверенность распознавания «стоп» / «отмена» во время задачи и ответа
   vosk_model: models/vosk-model-small-ru-0.22
 
 stt:
