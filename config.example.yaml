@@ -89,7 +89,7 @@ tts:
 
 llm:
   enabled: true                  # false — фразы, которых нет среди команд, в нейросеть не уходят
-  profile: deepseek              # deepseek, anthropic (Claude), ollama, opencode_zen или свой профиль
+  profile: deepseek              # deepseek, openai (ChatGPT), anthropic (Claude), ollama, opencode_zen или свой
   max_steps: 15                  # сколько раз агент может обратиться к нейросети за одну задачу
   timeout: 120                   # лимит на всю задачу, секунды
   request_timeout: 30            # лимит на один запрос, секунды
@@ -108,6 +108,13 @@ llm:
       vision: true
       temperature: 0.3
       extra_body: {thinking: {type: disabled}}   # быстрый режим без рассуждений
+    openai:
+      title: ChatGPT
+      base_url: https://api.openai.com/v1
+      model: gpt-6-luna                    # ещё gpt-5.4-mini, gpt-6-sol, gpt-5.5
+      api_key_env: OPENAI_API_KEY
+      vision: true
+      effort: none                         # без рассуждений: иначе модели OpenAI не вызывают действия
     anthropic:
       title: Claude
       provider: anthropic                  # через официальный SDK anthropic

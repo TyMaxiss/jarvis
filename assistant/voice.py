@@ -194,6 +194,7 @@ class VoiceLoop:
         self._stop_words = frozenset(" ".join((*STOP_PHRASES, self._wake_phrase)).split())
         self._events: queue.Queue[str] = queue.Queue()
         self._stopped = threading.Event()
+        self._paused = False
         self._thread: threading.Thread | None = None
         self.state = VoiceState.IDLE
         self._clock_ms = 0
@@ -224,6 +225,15 @@ class VoiceLoop:
         self._speech.stop()
         self._events.put("stop")
 
+    def set_paused(self, paused: bool) -> None:
+        """Пауза: микрофон не слушается — ни имя, ни горячая клавиша (трей, интерфейс)."""
+        self._events.put("pause" if paused else "resume")
+
+    @property
+    def paused(self) -> bool:
+        """Прослушивание на паузе."""
+        return self._paused
+
     # --- Поток ---------------------------------------------------------------------
 
     def start(self) -> None:
@@ -250,6 +260,8 @@ class VoiceLoop:
                     return
                 continue
             empty_reads = 0
+            if self._paused:  # звук читается, чтобы не копился в очереди, но не слушается
+                continue
             try:
                 self.feed(block)
             except Exception:
@@ -449,7 +461,11 @@ class VoiceLoop:
                 event = self._events.get_nowait()
             except queue.Empty:
                 return
-            if event == "ptt" and self.state in (VoiceState.IDLE, VoiceState.LISTENING):
+            if event in ("pause", "resume"):
+                self._pause(event == "pause")
+            elif self._paused:
+                continue  # на паузе горячие клавиши не активируют прослушивание
+            elif event == "ptt" and self.state in (VoiceState.IDLE, VoiceState.LISTENING):
                 self._speech.stop()
                 self._source.flush()
                 self._listen(chime=True)
@@ -462,6 +478,18 @@ class VoiceLoop:
                 self._process(audio, "hold")
             elif event == "stop" and self.state is not VoiceState.PROCESSING:
                 self._enter_idle()
+
+    def _pause(self, paused: bool) -> None:
+        if paused == self._paused:
+            return
+        self._paused = paused
+        log.info("Прослушивание %s", "на паузе" if paused else "продолжено")
+        self._enter_idle()
+        if paused:
+            self._report("paused")
+        else:
+            self._source.flush()
+            self._report(VoiceState.IDLE.value)
 
     # --- Обработка фразы ------------------------------------------------------------
 

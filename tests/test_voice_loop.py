@@ -467,3 +467,27 @@ def test_stop_threshold_is_separate_from_name() -> None:
     loop = Harness(silence(100), settings=settings).loop
     assert loop.is_stop(SpotResult("стоп", (("стоп", 0.75),)))
     assert not loop.is_stop(SpotResult("стоп", (("стоп", 0.65),)))
+
+
+def test_pause_ignores_name_and_hotkey() -> None:
+    audio = np.concatenate([silence(300), speech(WAKE, 300), speech(5001, 700), silence(1200)])
+    h = Harness(audio)
+    h.loop.set_paused(True)
+    h.loop.push_to_talk()
+    h.run()
+    assert h.handled == [] and h.stt.calls == []
+    assert h.loop.paused
+    assert ("paused", "") in h.status.events
+    assert h.source.exhausted  # звук читается, чтобы не копился в очереди
+
+
+def test_resume_after_pause_listens_again() -> None:
+    audio = np.concatenate([silence(300), speech(WAKE, 300), speech(5001, 700), silence(1200)])
+    h = Harness(audio)
+    h.loop.set_paused(True)
+    h.loop.set_paused(False)
+    h.run()
+    assert h.handled == ["Джарвис, открой ютуб."]
+    assert not h.loop.paused
+    states = [state for state, _ in h.status.events]
+    assert states.index("paused") < len(states) - 1 - states[::-1].index("idle")

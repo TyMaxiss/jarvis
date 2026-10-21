@@ -61,6 +61,18 @@ def resolve_device(device: int | str | None) -> int | None:
     raise CaptureError(f"Микрофон «{device}» не найден. Список: python -m assistant --list-devices")
 
 
+def block_level(block: np.ndarray) -> float:
+    """Громкость блока int16 для индикатора: 0 — тишина, 1 — громко (речь вблизи микрофона).
+
+    Берётся среднеквадратичное значение; обычная речь даёт 0,02–0,1 от полной шкалы,
+    поэтому оно усиливается в 8 раз.
+    """
+    if not len(block):
+        return 0.0
+    rms = float(np.sqrt(np.mean(np.square(block.astype(np.float32))))) / 32768
+    return min(1.0, rms * 8)
+
+
 class MicrophoneCapture:
     """Запись с микрофона в очередь блоков.
 
@@ -76,6 +88,7 @@ class MicrophoneCapture:
         )
         self._stream: Any = None
         self.dropped_blocks = 0
+        self.level = 0.0  # громкость последнего блока, 0–1 (для индикатора в интерфейсе)
 
     def start(self) -> None:
         """Открывает микрофон.
@@ -106,6 +119,7 @@ class MicrophoneCapture:
         if status:
             log.debug("Статус аудиопотока: %s", status)
         block = indata[:, 0].copy()
+        self.level = block_level(block)
         try:
             self._queue.put_nowait(block)
         except queue.Full:

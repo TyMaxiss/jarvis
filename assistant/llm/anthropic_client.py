@@ -150,9 +150,12 @@ class AnthropicClient:
     Args:
         settings: раздел llm конфига (активный профиль с provider: anthropic).
         factory: конструктор клиента (по умолчанию anthropic.Anthropic) — подменяется в тестах.
+        api_key: ключ вместо сохранённого в .env.
     """
 
-    def __init__(self, settings: LlmConfig, factory: Callable[..., Any] | None = None) -> None:
+    def __init__(
+        self, settings: LlmConfig, factory: Callable[..., Any] | None = None, api_key: str | None = None
+    ) -> None:
         self._settings = settings
         self.profile_name = settings.profile
         self.profile = settings.active
@@ -161,7 +164,7 @@ class AnthropicClient:
 
             factory = Anthropic
         options: dict[str, Any] = {
-            "api_key": resolve_api_key(self.profile_name, self.profile),
+            "api_key": api_key or resolve_api_key(self.profile_name, self.profile),
             "max_retries": settings.retries,
             "timeout": settings.request_timeout,
         }

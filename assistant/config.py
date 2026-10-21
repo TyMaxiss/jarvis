@@ -188,8 +188,12 @@ class LlmProfile(_Section):
         None, ge=0, le=2, description="Не задана — не передаётся: часть моделей её не принимает"
     )
     max_tokens: int | None = Field(None, ge=1, description="Предел длины ответа; для Claude — 16000")
-    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
-        None, description="Claude: сколько думать перед ответом; low — быстрее всего"
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = Field(
+        None,
+        description=(
+            "Сколько модели думать перед ответом: ChatGPT — reasoning_effort (none — не думать), "
+            "Claude — effort (low — быстрее всего)"
+        ),
     )
     fallbacks: bool = Field(
         True, description="Claude: если модель откажется отвечать, повторить на рекомендованной запасной"
@@ -202,6 +206,8 @@ class LlmProfile(_Section):
     def _base_url_for_openai(self) -> LlmProfile:
         if self.provider == "openai" and not self.base_url:
             raise ValueError("для провайдера openai нужен base_url — адрес OpenAI-совместимого API")
+        if self.provider == "anthropic" and self.effort in ("none", "minimal"):
+            raise ValueError(f"у Claude нет effort {self.effort}: используйте значения от low до max")
         return self
 
 
@@ -216,6 +222,17 @@ DEFAULT_LLM_PROFILES: dict[str, dict[str, Any]] = {
         "temperature": 0.3,
         # Для команд нужен быстрый режим без рассуждений (api-docs.deepseek.com, Thinking Mode).
         "extra_body": {"thinking": {"type": "disabled"}},
+    },
+    "openai": {
+        "title": "ChatGPT",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-6-luna",
+        "api_key_env": "OPENAI_API_KEY",
+        "vision": True,
+        # С GPT-5.4 Chat Completions вызывает инструменты только без рассуждений:
+        # reasoning_effort "none" (developers.openai.com, Migrate to Responses).
+        # temperature не задана: при других effort модели её не принимают.
+        "effort": "none",
     },
     "anthropic": {
         "title": "Claude",

@@ -167,3 +167,13 @@ def test_policy_verdicts(reg: ActionRegistry) -> None:
     assert policy.evaluate(say, say.parse_args({"text": "x"})).verdict is Verdict.FORBID
     shutdown = reg.get("shutdown")
     assert SafetyPolicy().evaluate(shutdown, shutdown.parse_args({})).verdict is Verdict.CONFIRM
+
+
+def test_step_callback_reports_progress(reg: ActionRegistry, calls: Calls, tmp_path: Path) -> None:
+    executor, _, _ = make_executor(reg, tmp_path)
+    seen: list[tuple[int, int, str, bool]] = []
+    planned = executor.plan([("say", {"text": "раз"}), ("broken", {}), ("say", {"text": "три"})])
+    executor.run(
+        planned, source="local", on_step=lambda n, total, step: seen.append((n, total, step.text, step.ok))
+    )
+    assert seen == [(1, 3, "сказал раз", True), (2, 3, "Не нашёл приложение", False)]

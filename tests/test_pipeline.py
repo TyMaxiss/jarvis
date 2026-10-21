@@ -9,7 +9,7 @@ from pydantic import Field
 
 from assistant.actions.executor import ActionExecutor
 from assistant.actions.registry import ActionError, ActionRegistry
-from assistant.commands.loader import CommandStore
+from assistant.commands.loader import Command, CommandStore
 from assistant.config import MatcherConfig
 from assistant.journal import ActionJournal
 from assistant.logging_setup import SecretMasker
@@ -181,3 +181,50 @@ def test_cancel_reaches_agent_and_is_reset(tmp_path: Path) -> None:
     assert not cancel.is_set()  # type: ignore[attr-defined]
     pipeline.cancel()
     assert cancel.is_set()  # type: ignore[attr-defined]
+
+
+def test_run_command_without_phrase(tmp_path: Path) -> None:
+    pipeline, speaker, calls = build(tmp_path)
+    steps: list[tuple[int, int]] = []
+    pipeline.on_command_step = lambda number, total, step: steps.append((number, total))
+    command = next(c for c in pipeline_commands(tmp_path) if c.id == "time")
+    result = pipeline.run_command(command, source="hotkey")
+    assert result.route == "local" and result.handled
+    assert calls == ["time"] and speaker.said == ["Сейчас 12:00"]
+    assert steps == [(1, 1)]
+
+
+def test_run_command_asks_confirmation(tmp_path: Path) -> None:
+    pipeline, _, calls = build(tmp_path, confirm_answer=False)
+    command = next(c for c in pipeline_commands(tmp_path) if c.id == "shutdown")
+    result = pipeline.run_command(command)
+    assert calls == [] and result.reply == "Отменено"
+
+
+def test_reload_commands_and_toggle_agent(tmp_path: Path) -> None:
+    pipeline, speaker, _ = build(tmp_path)
+    pipeline.reload_commands([])
+    assert pipeline.handle_text("который час").route == "llm"
+    assert speaker.said == ["Не знаю такой команды"]
+    assert pipeline.agent is None
+
+
+def pipeline_commands(tmp_path: Path) -> list[Command]:
+    """Команды из того же пака, что и в build (он уже записан в tmp_path)."""
+    reg = ActionRegistry()
+
+    @reg.action("set_volume", "Громкость")
+    def set_volume(percent: int) -> str:
+        return ""
+
+    @reg.action("get_time", "Время")
+    def get_time() -> str:
+        return ""
+
+    @reg.action("open_app", "Открыть")
+    def open_app(name: str) -> str:
+        return ""
+
+    store = CommandStore(tmp_path, "my.yaml", reg)
+    store.reload()
+    return store.commands

@@ -13,10 +13,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from assistant.actions.executor import ActionExecutor, RunResult, StepStatus
+from assistant.actions.executor import ActionExecutor, RunResult, StepResult, StepStatus
 from assistant.actions.registry import ArgsError, UnknownActionError
 from assistant.actions.winapi import WindowInfo
-from assistant.commands.loader import render_reply, substitute
+from assistant.commands.loader import Command, render_reply, substitute
 from assistant.llm.agent import Agent, AgentResult, AgentStep
 from assistant.nlu.matcher import MatchedCommand, Matcher, MatchResult
 from assistant.safety.confirm import Confirmer
@@ -83,6 +83,23 @@ class Pipeline:
         # Голос и консоль могут прислать фразы одновременно — выполняем по одной.
         self._lock = threading.Lock()
         self.on_agent_step: Callable[[AgentStep], None] | None = None
+        # Шаг локальной команды: номер, число шагов, итог (для оверлея «шаг 2 из 5»).
+        self.on_command_step: Callable[[int, int, StepResult], None] | None = None
+
+    @property
+    def agent(self) -> Agent | None:
+        """Агент нейросети; None — нейросеть выключена."""
+        return self._agent
+
+    def set_agent(self, agent: Agent | None) -> None:
+        """Включает или выключает нейросеть без перезапуска (настройки в интерфейсе)."""
+        with self._lock:
+            self._agent = agent
+
+    def reload_commands(self, commands: list[Command]) -> None:
+        """Подменяет команды матчера, когда фраза не выполняется (файлы команд изменились)."""
+        with self._lock:
+            self._matcher.set_commands(commands)
 
     def cancel(self) -> None:
         """Прерывает задачу нейросети (горячая клавиша или «стоп»). Можно звать из любого потока."""
@@ -105,6 +122,24 @@ class Pipeline:
         """
         with self._lock:
             return self._handle(text, source, confirmer)
+
+    def run_command(
+        self, command: Command, source: str = "local", confirmer: Confirmer | None = None
+    ) -> PipelineResult:
+        """Выполняет команду напрямую, без поиска по фразе: сценарий из интерфейса или по горячей клавише.
+
+        Слотов у такой команды нет: значения взять неоткуда.
+        """
+        phrase = command.phrases[0] if command.phrases else command.id
+        matched = MatchedCommand(command, {}, 100.0, phrase, phrase)
+        with self._lock:
+            started = time.perf_counter()
+            outcome = self._run_command(matched, phrase, source, confirmer)
+            total_ms = (time.perf_counter() - started) * 1000
+        if outcome.reply:
+            self._speaker.say(outcome.reply)
+        match = MatchResult("matched", phrase, [matched])
+        return PipelineResult(phrase, "local", match, [outcome], outcome.reply or "", 0.0, total_ms)
 
     def _handle(self, text: str, source: str, confirmer: Confirmer | None) -> PipelineResult:
         started = time.perf_counter()
@@ -161,6 +196,7 @@ class Pipeline:
             require_confirm=command.confirm,
             question=f"Выполнить «{matched.text}»?",
             confirmer=confirmer,
+            on_step=self.on_command_step,
         )
         if run.status is StepStatus.CANCELLED:
             reply: str | None = "Отменено"

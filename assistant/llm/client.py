@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from assistant.config import LlmConfig, LlmProfile
 
@@ -110,8 +111,12 @@ class ChatClient(Protocol):
     def list_models(self) -> list[str]: ...
 
 
-def create_client(settings: LlmConfig) -> ChatClient:
+def create_client(settings: LlmConfig, api_key: str | None = None) -> ChatClient:
     """Клиент для выбранного профиля.
+
+    Args:
+        settings: раздел llm конфига.
+        api_key: ключ вместо сохранённого в .env (проверка ещё не сохранённого ключа).
 
     Raises:
         LlmError: ключ нужен, но не задан.
@@ -119,8 +124,8 @@ def create_client(settings: LlmConfig) -> ChatClient:
     if settings.active.provider == "anthropic":
         from assistant.llm.anthropic_client import AnthropicClient
 
-        return AnthropicClient(settings)
-    return LlmClient(settings)
+        return AnthropicClient(settings, api_key=api_key)
+    return LlmClient(settings, api_key=api_key)
 
 
 def describe_error(exc: Exception, profile_name: str, profile: LlmProfile) -> str:
@@ -146,6 +151,11 @@ def describe_error(exc: Exception, profile_name: str, profile: LlmProfile) -> st
     if isinstance(exc, openai.APIConnectionError):
         hint = " — запущена ли Ollama?" if "11434" in profile.base_url else ""
         return f"нет связи с {profile.base_url}{hint}"
+    if isinstance(exc, openai.BadRequestError) and "/v1/responses" in detail:
+        return (
+            f"модель {profile.model} вызывает действия только через Responses API — "
+            "выберите в настройках другую модель, например gpt-6-luna"
+        )
     if isinstance(exc, openai.APIStatusError):
         if exc.status_code == 402:
             return "на счёте провайдера закончились деньги (402)"
@@ -227,15 +237,24 @@ def stream_in_background(
         abandoned.set()
 
 
+def uses_completion_tokens(profile: LlmProfile) -> bool:
+    """Предел длины ответа у OpenAI — max_completion_tokens: max_tokens там устарел и не
+    принимается моделями с рассуждениями; остальные OpenAI-совместимые API знают max_tokens."""
+    return urlparse(profile.base_url).hostname == "api.openai.com"
+
+
 class LlmClient:
     """Запросы к OpenAI-совместимому профилю (DeepSeek, ChatGPT, Ollama, Zen).
 
     Args:
         settings: раздел llm конфига.
         factory: конструктор клиента (по умолчанию openai.OpenAI) — подменяется в тестах.
+        api_key: ключ вместо сохранённого в .env.
     """
 
-    def __init__(self, settings: LlmConfig, factory: Callable[..., Any] | None = None) -> None:
+    def __init__(
+        self, settings: LlmConfig, factory: Callable[..., Any] | None = None, api_key: str | None = None
+    ) -> None:
         self._settings = settings
         self.profile_name = settings.profile
         self.profile = settings.active
@@ -245,7 +264,7 @@ class LlmClient:
             factory = OpenAI
         self._client = factory(
             base_url=self.profile.base_url,
-            api_key=resolve_api_key(self.profile_name, self.profile),
+            api_key=api_key or resolve_api_key(self.profile_name, self.profile),
             max_retries=settings.retries,
             timeout=settings.request_timeout,
         )
@@ -285,8 +304,11 @@ class LlmClient:
         }
         if self.profile.temperature is not None:
             request["temperature"] = self.profile.temperature
+        if self.profile.effort is not None:
+            request["reasoning_effort"] = self.profile.effort
         if self.profile.max_tokens is not None:
-            request["max_tokens"] = self.profile.max_tokens
+            limit = "max_completion_tokens" if uses_completion_tokens(self.profile) else "max_tokens"
+            request[limit] = self.profile.max_tokens
         if tools:
             request["tools"] = list(tools)
         if self.profile.extra_body:

@@ -156,3 +156,52 @@ def test_error_text_has_no_key() -> None:
     with pytest.raises(LlmError) as info:
         client.complete([{"role": "user", "content": "привет"}])
     assert "sk-test" not in str(info.value)
+
+
+def test_chatgpt_profile_calls_tools_without_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-key-123456")
+    client, fake = make([text_reply("Готово.")], profile="openai")
+    client.complete([{"role": "user", "content": "привет"}], tools=[{"type": "function"}])
+    assert fake.client_kwargs["base_url"] == "https://api.openai.com/v1"
+    assert fake.client_kwargs["api_key"] == "sk-test-openai-key-123456"
+    request = fake.requests[0]
+    assert request["model"] == "gpt-6-luna"
+    # С GPT-5.4 Chat Completions вызывает инструменты только с reasoning_effort "none".
+    assert request["reasoning_effort"] == "none"
+    # temperature не передаётся: при рассуждениях модели OpenAI её не принимают.
+    assert "temperature" not in request and "extra_body" not in request
+
+
+def test_token_limit_parameter_depends_on_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-key-123456")
+    client, fake = make([text_reply("Да.")], profile="openai", profiles={"openai": {"max_tokens": 500}})
+    client.complete([{"role": "user", "content": "привет"}])
+    assert fake.requests[0]["max_completion_tokens"] == 500 and "max_tokens" not in fake.requests[0]
+    client, fake = make([text_reply("Да.")], profiles={"deepseek": {"max_tokens": 500}})
+    client.complete([{"role": "user", "content": "привет"}])
+    assert fake.requests[0]["max_tokens"] == 500 and "max_completion_tokens" not in fake.requests[0]
+
+
+def test_key_typed_in_settings_is_used_before_saving(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY")
+    fake = FakeOpenAI([])
+    LlmClient(LlmConfig(), factory=factory_for(fake), api_key="sk-new-key-1234567890")
+    assert fake.client_kwargs["api_key"] == "sk-new-key-1234567890"
+
+
+def test_model_that_needs_responses_api_is_explained(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-key-123456")
+    error = status_error(
+        openai.BadRequestError,
+        400,
+        "Function tools with reasoning_effort are not supported for gpt-6-astra in /v1/chat/completions. "
+        "To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+    )
+    client, _ = make([error], profile="openai", profiles={"openai": {"model": "gpt-6-astra"}})
+    with pytest.raises(LlmError, match="gpt-6-astra вызывает действия только через Responses API"):
+        client.complete([{"role": "user", "content": "привет"}], tools=[{"type": "function"}])
+
+
+def test_claude_has_no_effort_none() -> None:
+    with pytest.raises(ValueError, match="у Claude нет effort none"):
+        LlmConfig.model_validate({"profile": "anthropic", "profiles": {"anthropic": {"effort": "none"}}})

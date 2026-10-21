@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -23,11 +24,16 @@ class HotkeyManager:
 
     Колбэки вызываются в потоке библиотеки keyboard, поэтому должны быть быстрыми:
     только передать событие дальше.
+
+    Args:
+        paused: пока установлено, сочетания не срабатывают (в настройках записывают новое
+            сочетание). Одно событие можно передать нескольким менеджерам.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, paused: threading.Event | None = None) -> None:
         self._keyboard: Any = None
         self._removers: list[Callable[[], None]] = []
+        self._paused = paused or threading.Event()
 
     def _kb(self) -> Any:
         if self._keyboard is None:
@@ -48,7 +54,12 @@ class HotkeyManager:
     def add_press(self, combo: str, callback: Callable[[], None]) -> None:
         """Вызывает callback при нажатии сочетания."""
         self._parse(combo)
-        self._removers.append(self._kb().add_hotkey(combo, callback, suppress=False))
+
+        def fire() -> None:
+            if not self._paused.is_set():
+                callback()
+
+        self._removers.append(self._kb().add_hotkey(combo, fire, suppress=False))
         log.info("Горячая клавиша %s", combo)
 
     def add_hold(self, combo: str, on_press: Callable[[], None], on_release: Callable[[], None]) -> None:
@@ -63,7 +74,7 @@ class HotkeyManager:
 
         def handler(event: Any) -> None:
             nonlocal active
-            if event.scan_code not in codes:
+            if event.scan_code not in codes or (self._paused.is_set() and not active):
                 return
             if event.event_type == kb.KEY_DOWN:
                 if not active and kb.is_pressed(combo):

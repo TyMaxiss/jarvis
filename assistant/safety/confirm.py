@@ -1,7 +1,8 @@
 """Подтверждение рискованных действий.
 
 Фразы, введённые текстом, подтверждаются в консоли, голосовые — голосом (Vosk с
-грамматикой «да/нет», молчание — отмена). Кнопки в оверлее появятся на этапе 4.
+грамматикой «да/нет», молчание — отмена). В интерфейсе к голосу добавляются кнопки
+«Да / Нет» (assistant/ui/confirm.py).
 """
 
 from __future__ import annotations
@@ -99,15 +100,27 @@ class VoiceConfirmer:
         return self._listening.is_set()
 
     def confirm(self, question: str) -> bool:
+        return self.answer(question) is True
+
+    def answer(self, question: str, cancel: threading.Event | None = None) -> bool | None:
+        """Спрашивает и слушает ответ.
+
+        Args:
+            question: вопрос.
+            cancel: если установлено — перестать слушать (ответили кнопкой в интерфейсе).
+
+        Returns:
+            True — «да», False — «нет», None — ответа не было.
+        """
         self._listening.set()
         try:
-            answer = self._ask(question)
+            heard = self._ask(question, cancel or threading.Event())
         finally:
             self._listening.clear()
-        log.info("Голосовое подтверждение «%s»: %s", question, answer or "нет ответа")
-        return answer in YES_PHRASES
+        log.info("Голосовое подтверждение «%s»: %s", question, heard or "нет ответа")
+        return None if heard is None else heard in YES_PHRASES
 
-    def _ask(self, question: str) -> str | None:
+    def _ask(self, question: str, cancel: threading.Event) -> str | None:
         """Задаёт вопрос и ждёт ответа; None — ответа не было."""
         self._speech.say(question)
         self._speech.wait_idle(timeout=30)
@@ -116,6 +129,8 @@ class VoiceConfirmer:
         heard_ms = 0
         answer = None
         while heard_ms < self._timeout_ms and answer is None:
+            if cancel.is_set():
+                return None
             block = self._source.read(timeout=0.2)
             if block is None:
                 heard_ms += 200

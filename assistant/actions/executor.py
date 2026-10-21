@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -129,6 +129,7 @@ class ActionExecutor:
         require_confirm: bool = False,
         question: str | None = None,
         confirmer: Confirmer | None = None,
+        on_step: Callable[[int, int, StepResult], None] | None = None,
     ) -> RunResult:
         """Выполняет шаги по порядку; при первой ошибке останавливается.
 
@@ -145,6 +146,7 @@ class ActionExecutor:
             question: текст вопроса; по умолчанию собирается из описаний шагов.
             confirmer: как спросить подтверждение (голосом или в консоли); по умолчанию —
                 способ, заданный при создании исполнителя.
+            on_step: вызывается после каждого шага с его номером, числом шагов и итогом.
         """
         context = {"source": source, "command_id": command_id, "phrase": phrase}
         decisions = [self.policy.evaluate(step.action, step.args) for step in planned]
@@ -171,9 +173,11 @@ class ActionExecutor:
                 return RunResult([], StepStatus.CANCELLED)
 
         result = RunResult()
-        for step in planned:
+        for number, step in enumerate(planned, start=1):
             step_result = self._run_step(step, context)
             result.steps.append(step_result)
+            if on_step is not None:
+                on_step(number, len(planned), step_result)
             if not step_result.ok:
                 result.status = step_result.status
                 break

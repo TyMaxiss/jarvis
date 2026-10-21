@@ -18,8 +18,10 @@ jobs:
       PYTHONUTF8: "1"
       # Тесты, которые создают окна и печатают в них через SendInput.
       JARVIS_DESKTOP_TESTS: "1"
-      # Сам ключ сюда не попадает — только признак, что секрет задан.
+      # Сами ключи сюда не попадают — только признаки, что секреты заданы.
       HAS_DEEPSEEK_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
+      HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -63,4 +65,22 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           JARVIS_LIVE_LLM: "1"
           JARVIS_LIVE_PROFILE: deepseek
+        run: uv run pytest -v -rs tests/test_llm_live.py --log-cli-level=WARNING
+
+      - name: Живая проверка ChatGPT (если в секретах есть OPENAI_API_KEY)
+        if: env.HAS_OPENAI_KEY == 'true'
+        timeout-minutes: 5
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          JARVIS_LIVE_LLM: "1"
+          JARVIS_LIVE_PROFILE: openai
+        run: uv run pytest -v -rs tests/test_llm_live.py --log-cli-level=WARNING
+
+      - name: Живая проверка Claude (если в секретах есть ANTHROPIC_API_KEY)
+        if: env.HAS_ANTHROPIC_KEY == 'true'
+        timeout-minutes: 5
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          JARVIS_LIVE_LLM: "1"
+          JARVIS_LIVE_PROFILE: anthropic
         run: uv run pytest -v -rs tests/test_llm_live.py --log-cli-level=WARNING

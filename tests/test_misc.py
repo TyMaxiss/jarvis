@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,6 +15,7 @@ from assistant.actions.input import parse_hotkey, parse_key
 from assistant.actions.registry import ActionError
 from assistant.actions.system import format_now
 from assistant.config import AppConfig, ConfigError, load_config
+from assistant.hotkeys import HotkeyManager
 from assistant.logging_setup import MaskingFormatter, SecretMasker
 from tests.conftest import ROOT
 
@@ -99,6 +102,43 @@ class TestKeys:
     def test_unknown_keys(self, bad: str) -> None:
         with pytest.raises(ActionError):
             parse_hotkey(bad)
+
+
+class FakeKeyboard:
+    """Вместо библиотеки keyboard: сочетание «нажимается» вызовом press."""
+
+    KEY_DOWN = "down"
+
+    def __init__(self) -> None:
+        self.hotkeys: dict[str, Any] = {}
+        self.hooks: list[Any] = []
+
+    def parse_hotkey(self, combo: str) -> tuple[tuple[tuple[int, ...], ...]]:
+        return (tuple((index,) for index, _ in enumerate(combo.split("+"))),)
+
+    def add_hotkey(self, combo: str, callback: Any, suppress: bool = False) -> Any:
+        self.hotkeys[combo] = callback
+        return lambda: self.hotkeys.pop(combo)
+
+    def press(self, combo: str) -> None:
+        self.hotkeys[combo]()
+
+
+class TestHotkeyManager:
+    def test_paused_hotkeys_do_not_fire(self) -> None:
+        paused = threading.Event()
+        manager = HotkeyManager(paused)
+        manager._keyboard = FakeKeyboard()
+        fired: list[str] = []
+        manager.add_press("ctrl+alt+f9", lambda: fired.append("f9"))
+        paused.set()  # в настройках записывают новое сочетание
+        manager._keyboard.press("ctrl+alt+f9")
+        assert fired == []
+        paused.clear()
+        manager._keyboard.press("ctrl+alt+f9")
+        assert fired == ["f9"]
+        manager.close()
+        assert manager._keyboard.hotkeys == {}
 
 
 class TestUrls:

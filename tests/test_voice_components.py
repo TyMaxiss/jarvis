@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, ArraySource, resample, to_int16
+from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, ArraySource, block_level, resample, to_int16
 from assistant.audio.sounds import SOUND_RATE, listen_chime
 from assistant.audio.vad import SegmenterSettings, SegmentEvent, SileroVAD, SpeechSegmenter
 from assistant.audio.wakeword import SpotResult, parse_result, phrase_spotter, wake_spotter
@@ -407,3 +407,30 @@ def test_download_all_reports_failures(monkeypatch: pytest.MonkeyPatch, tmp_path
     out = io.StringIO()
     assert download_all(AppConfig(), out) is False
     assert "Vosk: ошибка — нет сети" in out.getvalue()
+
+
+def test_voice_confirmer_answer_tells_silence_from_no() -> None:
+    confirmer = VoiceConfirmer(
+        FakeSpeech(), FakeSource(silence(6000)), lambda: AnswerSpotter("да"), timeout=5
+    )
+    assert confirmer.answer("Точно?") is None
+    source = FakeSource(np.concatenate([silence(300), speech(3000, 300)]))
+    confirmer = VoiceConfirmer(FakeSpeech(), source, lambda: AnswerSpotter("нет"), timeout=5)
+    assert confirmer.answer("Точно?") is False
+
+
+def test_voice_confirmer_stops_listening_when_answered_by_button() -> None:
+    cancel = threading.Event()
+    cancel.set()
+    source = FakeSource(np.concatenate([silence(300), speech(3000, 300)]))
+    confirmer = VoiceConfirmer(FakeSpeech(), source, lambda: AnswerSpotter("да"), timeout=5)
+    assert confirmer.answer("Точно?", cancel) is None
+    assert source.reads == 0 and not confirmer.listening
+
+
+def test_block_level() -> None:
+    assert block_level(np.zeros(512, np.int16)) == 0.0
+    assert block_level(np.zeros(0, np.int16)) == 0.0
+    voice = (np.sin(np.linspace(0, 100, 512)) * 3000).astype(np.int16)  # обычная речь
+    assert 0.3 < block_level(voice) < 0.7
+    assert block_level(np.full(512, 32767, np.int16)) == 1.0
