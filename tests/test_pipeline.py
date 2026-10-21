@@ -133,3 +133,51 @@ def test_empty_phrase_is_silent(tmp_path: Path) -> None:
     result = pipeline.handle_text("Джарвис")
     assert result.match.status == "empty"
     assert speaker.said == []
+
+
+class StubAgent:
+    """Агент нейросети, который отвечает заранее заданным результатом."""
+
+    def __init__(self, status: str = "done") -> None:
+        from assistant.llm.agent import AgentResult, AgentStatus
+
+        self.result = AgentResult(text="Ответ нейросети", status=AgentStatus(status))
+        self.calls: list[tuple[str, object]] = []
+        self.forgotten = False
+
+    def run(self, text: str, *, confirmer: object, cancel: object, on_step: object) -> object:
+        self.calls.append((text, cancel))
+        return self.result
+
+    def forget(self) -> None:
+        self.forgotten = True
+
+
+def test_unknown_phrase_goes_to_agent(tmp_path: Path) -> None:
+    pipeline, speaker, calls = build(tmp_path)
+    agent = StubAgent()
+    pipeline._agent = agent  # type: ignore[assignment]
+    result = pipeline.handle_text("расскажи сказку")
+    assert result.route == "llm" and result.handled and result.reply == "Ответ нейросети"
+    assert [text for text, _ in agent.calls] == ["расскажи сказку"]
+    assert calls == [] and speaker.said == []  # ответ озвучивает сам агент
+    pipeline.forget()
+    assert agent.forgotten
+
+
+def test_failed_agent_answer_is_not_handled(tmp_path: Path) -> None:
+    pipeline, _, _ = build(tmp_path)
+    pipeline._agent = StubAgent(status="error")  # type: ignore[assignment]
+    assert not pipeline.handle_text("расскажи сказку").handled
+
+
+def test_cancel_reaches_agent_and_is_reset(tmp_path: Path) -> None:
+    pipeline, _, _ = build(tmp_path)
+    agent = StubAgent()
+    pipeline._agent = agent  # type: ignore[assignment]
+    pipeline.cancel()  # нажали «стоп» до задачи — новая задача не должна сразу прерваться
+    pipeline.handle_text("расскажи сказку")
+    cancel = agent.calls[0][1]
+    assert not cancel.is_set()  # type: ignore[attr-defined]
+    pipeline.cancel()
+    assert cancel.is_set()  # type: ignore[attr-defined]

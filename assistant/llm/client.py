@@ -179,7 +179,7 @@ class LlmClient:
         except (LlmCancelled, LlmError):
             raise
         except openai.OpenAIError as exc:
-            log.warning("Нейросеть %s: %s", self.describe(), exc)
+            log.info("Нейросеть %s: %s", self.describe(), exc)
             raise LlmError(describe_error(exc, self.profile_name, self.profile)) from exc
         log.info(
             "Нейросеть %s: первый токен %s мс, всего %.0f мс, вызовов инструментов %d",

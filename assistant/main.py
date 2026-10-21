@@ -23,6 +23,8 @@ from assistant.commands.loader import CommandStore
 from assistant.config import AppConfig, ConfigError, load_config
 from assistant.console import ConsoleApp, ConsoleSpeaker
 from assistant.journal import ActionJournal
+from assistant.llm.agent import Agent
+from assistant.llm.client import LlmError, resolve_api_key
 from assistant.logging_setup import SecretMasker, setup_logging
 from assistant.nlu.matcher import Matcher
 from assistant.nlu.normalize import Normalizer
@@ -259,6 +261,24 @@ def start_voice(
 # --- Запуск ---------------------------------------------------------------------------
 
 
+def describe_llm(config: AppConfig) -> str:
+    """Строки о нейросети для консоли при старте: профиль и чего не хватает."""
+    llm = config.llm
+    if not llm.enabled:
+        return "Нейросеть выключена (llm.enabled: false): работают только команды.\n"
+    lines = [f"Нейросеть: профиль {llm.profile}, модель {llm.active.model}."]
+    try:
+        resolve_api_key(llm.profile, llm.active)
+    except LlmError as exc:
+        lines.append(f"! {exc}. Пока ключа нет, на фразы вне команд ответ — «Нейросеть недоступна».")
+    if llm.profile == "opencode_zen" and llm.active.model.endswith("-free"):
+        lines.append(
+            "! Бесплатные модели OpenCode Zen с сентября 2026 отвечают 403 FreeTierError всем программам,"
+            " кроме самого OpenCode. Если так и будет — выберите llm.profile: deepseek или ollama."
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     """Запускает ассистента. Возвращает код выхода."""
     started = time.perf_counter()
@@ -311,11 +331,17 @@ def main(argv: list[str] | None = None) -> int:
     store = CommandStore(config.resolve(config.commands.dir), config.commands.user_file, registry)
     loaded = store.reload()
     matcher.set_commands(store.commands)
-    pipeline = Pipeline(matcher, executor, speaker, windows.active_window)
+    agent = None
+    if config.llm.enabled:
+        agent = Agent(
+            config.llm, executor, speaker, name=config.general.name, window_provider=windows.active_window
+        )
+    pipeline = Pipeline(matcher, executor, speaker, windows.active_window, agent=agent)
     console = ConsoleApp(pipeline, console_speaker, matcher, store, index, windows.active_window)
 
     for issue in loaded.issues:
         out.write(f"! Команда пропущена: {issue}\n")
+    out.write(describe_llm(config))
     if dry_run:
         out.write("Режим dry-run: действия только записываются в журнал.\n")
     if sys.platform != "win32":

@@ -286,7 +286,7 @@ class Agent:
         exchange.append({"role": "assistant", "content": reply})
 
     def _unavailable(self, result: AgentResult, reason: str, started: float) -> AgentResult:
-        log.warning("Нейросеть недоступна: %s", reason)
+        log.info("Нейросеть недоступна: %s", reason)
         result.status = AgentStatus.ERROR
         result.error = reason
         self._say(result, UNAVAILABLE)

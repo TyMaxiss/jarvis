@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 from typing import Any
 
 from assistant.console import ConsoleApp
@@ -12,7 +13,8 @@ from tests.conftest import NO_WINDOW
 def test_voice_states_are_shown() -> None:
     out = io.StringIO()
     unused: Any = None
-    console = ConsoleApp(unused, unused, unused, unused, unused, lambda: NO_WINDOW, out=out)
+    pipeline: Any = SimpleNamespace()
+    console = ConsoleApp(pipeline, unused, unused, unused, unused, lambda: NO_WINDOW, out=out)
     console.voice_status("listening")
     console.voice_status("recognized", "Сделай громче.")
     console.voice_status("latency", "950 мс от конца речи")

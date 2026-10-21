@@ -13,6 +13,7 @@ from typing import Any, TextIO
 from assistant.actions import winapi
 from assistant.actions.apps import AppIndex
 from assistant.commands.loader import CommandStore
+from assistant.llm.agent import AgentStatus, AgentStep
 from assistant.nlu.matcher import Matcher, MatchResult
 from assistant.pipeline import Pipeline, PipelineResult
 
@@ -28,8 +29,18 @@ HELP = """\
   :apps [текст]   найденные приложения (можно с фильтром)
   :windows        открытые окна
   :listen         начать слушать голосовую команду (как горячая клавиша)
+  :forget         забыть разговор с нейросетью
   :help           эта справка
+Задачу нейросети можно прервать: Ctrl+C в консоли, Ctrl+Alt+Q или голосом «стоп»
   :q              выход"""
+
+_AGENT_STATUS = {
+    AgentStatus.DONE: "ответила",
+    AgentStatus.CANCELLED: "прервано",
+    AgentStatus.TIMEOUT: "не успела за отведённое время",
+    AgentStatus.STEP_LIMIT: "превышен лимит шагов",
+    AgentStatus.ERROR: "ошибка",
+}
 
 _VOICE_MESSAGES = {
     "idle": "Жду обращения",
@@ -111,6 +122,7 @@ class ConsoleApp:
         self._out = out
         self.on_listen = on_listen
         self._delay = 0.0
+        pipeline.on_agent_step = self._print_agent_step
 
     def run(self) -> None:
         """Читает фразы до :q или Ctrl+C."""
@@ -133,6 +145,9 @@ class ConsoleApp:
             with self._speaker.deferred():
                 try:
                     result = self._pipeline.handle_text(line, source="local")
+                except KeyboardInterrupt:
+                    self._write("  Прервано")
+                    continue
                 except Exception:
                     log.exception("Ошибка при обработке фразы «%s»", line)
                     self._write("  Внутренняя ошибка, подробности в логе")
@@ -170,6 +185,9 @@ class ConsoleApp:
             for entry in entries[:100]:
                 self._write(f"  {entry.name}  [{entry.kind}]")
             self._write(f"  Всего: {len(entries)}")
+        elif name == "forget":
+            self._pipeline.forget()
+            self._write("  Разговор забыт")
         elif name == "listen":
             if self.on_listen is None:
                 self._write("  Голос выключен (запуск с --text или нет моделей)")
@@ -211,12 +229,14 @@ class ConsoleApp:
         for candidate in match.candidates[:3]:
             self._write(f"    кандидат: {candidate.describe()}")
 
+    def _print_agent_step(self, step: AgentStep) -> None:
+        """Шаг агента — сразу, пока задача ещё выполняется."""
+        mark = "✓" if step.status in ("done", "dry_run") else "✗"
+        self._write(f"  [нейросеть] шаг {step.number}: {mark} {step.describe()}")
+
     def _print_result(self, result: PipelineResult) -> None:
         if result.route == "llm":
-            self._write(f"  [→ нейросеть] {result.match.reason or result.match.status}"
-                        " (нейросеть подключается на этапе 3)")  # fmt: skip
-            for candidate in result.match.candidates[:3]:
-                self._write(f"    кандидат: {candidate.describe()}")
+            self._print_agent_result(result)
             return
         for outcome in result.outcomes:
             matched = outcome.matched
@@ -228,6 +248,21 @@ class ConsoleApp:
             if outcome.run.status.value == "cancelled":
                 self._write("    отменено")
         self._write(f"  ({result.total_ms:.0f} мс)")
+
+    def _print_agent_result(self, result: PipelineResult) -> None:
+        """Итог задачи нейросети: статус, число запросов и время."""
+        agent = result.agent
+        if agent is None:
+            if result.match.status != "empty":
+                self._write(f"  [→ нейросеть] {result.match.reason or result.match.status}, но она выключена")
+            return
+        if agent.error:
+            self._write(f"  [нейросеть] недоступна: {agent.error}")
+            return
+        self._write(
+            f"  [нейросеть] {_AGENT_STATUS[agent.status]}: запросов {agent.requests}, "
+            f"нейросеть {agent.llm_ms:.0f} мс, всего {agent.total_ms:.0f} мс"
+        )
 
     def _write(self, text: str) -> None:
         self._out.write(text + "\n")

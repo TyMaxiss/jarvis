@@ -1,7 +1,7 @@
 """Конвейер обработки фразы: локальный матчер → выполнение команды → ответ.
 
-Фразы, которые не нашлись локально, на этапе 3 будут уходить в LLM-агента.
-Пока для них возвращается маршрут "llm" и ответ «Не знаю такой команды».
+Фразы, которые не нашлись локально (или нашлись неоднозначно), уходят агенту
+нейросети. Если нейросеть выключена в конфиге, ответ — «Не знаю такой команды».
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from assistant.actions.executor import ActionExecutor, RunResult, StepStatus
 from assistant.actions.registry import ArgsError, UnknownActionError
 from assistant.actions.winapi import WindowInfo
 from assistant.commands.loader import render_reply, substitute
+from assistant.llm.agent import Agent, AgentResult, AgentStep
 from assistant.nlu.matcher import MatchedCommand, Matcher, MatchResult
 from assistant.safety.confirm import Confirmer
 from assistant.tts.base import Speaker
@@ -46,11 +47,12 @@ class PipelineResult:
     reply: str = ""
     match_ms: float = 0.0
     total_ms: float = 0.0
+    agent: AgentResult | None = None
 
     @property
     def handled(self) -> bool:
-        """Фраза обработана: найдена команда (на этапе 3 — и ответ нейросети)."""
-        return self.route == "local"
+        """Фраза обработана: найдена команда или ответила нейросеть."""
+        return self.route == "local" or (self.agent is not None and self.agent.ok)
 
 
 class Pipeline:
@@ -61,6 +63,7 @@ class Pipeline:
         executor: исполнитель действий.
         speaker: кто произносит ответы.
         window_provider: функция, возвращающая активное окно (для условий when).
+        agent: агент нейросети для фраз, которых нет среди команд; None — нейросеть выключена.
     """
 
     def __init__(
@@ -69,13 +72,26 @@ class Pipeline:
         executor: ActionExecutor,
         speaker: Speaker,
         window_provider: Callable[[], WindowInfo],
+        agent: Agent | None = None,
     ) -> None:
         self._matcher = matcher
         self._executor = executor
         self._speaker = speaker
         self._window_provider = window_provider
+        self._agent = agent
+        self._cancel = threading.Event()
         # Голос и консоль могут прислать фразы одновременно — выполняем по одной.
         self._lock = threading.Lock()
+        self.on_agent_step: Callable[[AgentStep], None] | None = None
+
+    def cancel(self) -> None:
+        """Прерывает задачу нейросети (горячая клавиша или «стоп»). Можно звать из любого потока."""
+        self._cancel.set()
+
+    def forget(self) -> None:
+        """Забывает разговор с нейросетью."""
+        if self._agent is not None:
+            self._agent.forget()
 
     def handle_text(
         self, text: str, source: str = "local", confirmer: Confirmer | None = None
@@ -96,13 +112,20 @@ class Pipeline:
         match_ms = (time.perf_counter() - started) * 1000
 
         if not match.matched:
-            # Этап 3: здесь фраза уйдёт в LLM-агента.
             log.info("«%s» не найдена локально (%s) — маршрут LLM", text, match.reason or match.status)
-            reply = "" if match.status == "empty" else "Не знаю такой команды"
-            if reply:
+            if match.status == "empty":
+                return PipelineResult(text, "llm", match, match_ms=match_ms)
+            if self._agent is None:
+                reply = "Не знаю такой команды"
                 self._speaker.say(reply)
-            return PipelineResult(text, "llm", match, reply=reply, match_ms=match_ms,
-                                  total_ms=(time.perf_counter() - started) * 1000)  # fmt: skip
+                return PipelineResult(text, "llm", match, reply=reply, match_ms=match_ms,
+                                      total_ms=(time.perf_counter() - started) * 1000)  # fmt: skip
+            self._cancel.clear()
+            agent = self._agent.run(
+                text, confirmer=confirmer, cancel=self._cancel, on_step=self.on_agent_step
+            )
+            return PipelineResult(text, "llm", match, reply=agent.text, match_ms=match_ms,
+                                  total_ms=(time.perf_counter() - started) * 1000, agent=agent)  # fmt: skip
 
         outcomes: list[CommandOutcome] = []
         for matched in match.matches:
