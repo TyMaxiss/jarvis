@@ -32,7 +32,14 @@ import pytest
 
 from assistant.audio.capture import ArraySource, resample, to_int16
 from assistant.audio.vad import SegmentEvent, SileroVAD, SpeechSegmenter
-from assistant.audio.wakeword import GrammarSpotter, SpotResult, load_vosk_model, phrase_spotter, wake_spotter
+from assistant.audio.wakeword import (
+    DECOY_WORDS,
+    GrammarSpotter,
+    SpotResult,
+    load_vosk_model,
+    phrase_spotter,
+    wake_spotter,
+)
 from assistant.config import AppConfig
 from assistant.nlu.matcher import Matcher
 from assistant.nlu.normalize import Normalizer
@@ -160,8 +167,12 @@ def stop_spotter(vosk_model: object) -> GrammarSpotter:
     return phrase_spotter(vosk_model, [*STOP_PHRASES, NAME])
 
 
-def stop_heard(audio: np.ndarray, vosk_model: object) -> tuple[bool, list[str]]:
+def stop_heard(
+    audio: np.ndarray, spotter: GrammarSpotter, decide: bool = True
+) -> tuple[bool, list[SpotResult]]:
     """Прерывает ли фраза ассистента, пока он говорит (так же «стоп» слушается во время задачи).
+
+    decide=False — цикл ничего не решает, только собирает услышанное (для калибровки).
 
     Returns:
         Остановил ли цикл речь и что Vosk услышал в каждой фразе.
@@ -180,19 +191,23 @@ def stop_heard(audio: np.ndarray, vosk_model: object) -> tuple[bool, list[str]]:
         normalizer=NORMALIZER,
         wake_names=CONFIG.wake_words,
         settings=VoiceSettings(wake_word=False, wake_confidence=CONFIG.voice.wake_confidence),
-        stop_spotter=stop_spotter(vosk_model),
+        stop_spotter=spotter,
         on_stop=stopped.set,
     )
-    heard: list[str] = []
+    heard: list[SpotResult] = []
     is_stop = loop.is_stop
 
     def remember(result: SpotResult) -> bool:
-        heard.append(result.describe())
-        return is_stop(result)
+        heard.append(result)
+        return decide and is_stop(result)
 
     loop.is_stop = remember  # type: ignore[method-assign]
     loop.run(stop_when_exhausted=True)
     return stopped.is_set(), heard
+
+
+def describe_heard(heard: list[SpotResult]) -> str:
+    return " | ".join(result.describe() for result in heard) or "—"
 
 
 def confirm_by_voice(piper: PiperTTS, vosk_model: object, answer: str) -> bool:
@@ -452,30 +467,85 @@ def test_sapi_voice_synthesizes() -> None:
 
 STOP_SAID = ["Стоп.", "Отмена.", "Хватит.", "Джарвис, стоп."]
 NOT_STOP = ["Сегодня хорошая погода.", "Сделай громче.", "Открываю ютуб.", "Не знаю такой команды."]
-STOP_CALIBRATION = [*STOP_SAID, "Прекрати.", "Отмени.", "Стоп, хватит.", "Отменено.", "Готово.", *NOT_STOP]
+STOP_TRIES = ["Стоп.", "Стоп!", "Стоп", "Стой!", "Отмена.", "Хватит.", "Прекрати.", "Отмени.",
+              "Джарвис, стоп.", "Стоп, хватит."]  # fmt: skip
+ASSISTANT_REPLIES = ["Отменено.", "Готово.", "Открываю ютуб.", "Не знаю такой команды.",
+                     "Громкость пятьдесят процентов.", "Нейросеть недоступна.",
+                     "Выключаю компьютер через пять секунд.", "Хорошо.", "Сейчас посмотрю."]  # fmt: skip
+# Слова-приманки, звучанием похожие на «стоп»: в калибровке они перехватывали короткое «стоп».
+SIMILAR_TO_STOP = ("то", "тот", "это", "этот", "что", "кто", "вот", "сам", "там", "тут", "так", "потом",
+                   "пока")  # fmt: skip
+
+
+def stop_variants(model: object) -> dict[str, tuple[GrammarSpotter, tuple[str, ...]]]:
+    """Варианты грамматики стоп-слов для калибровки: распознаватель и стоп-фразы."""
+    with_stoy = (*STOP_PHRASES, "стой")
+    fewer = [word for word in DECOY_WORDS if word not in SIMILAR_TO_STOP]
+    return {
+        "приманки": (phrase_spotter(model, [*STOP_PHRASES, NAME]), STOP_PHRASES),
+        "без похожих": (GrammarSpotter(model, [*STOP_PHRASES, NAME], decoys=fewer), STOP_PHRASES),
+        "без похожих + стой": (GrammarSpotter(model, [*with_stoy, NAME], decoys=fewer), with_stoy),
+        "без приманок": (GrammarSpotter(model, [*STOP_PHRASES, NAME]), STOP_PHRASES),
+    }
+
+
+def clean_stop(result: SpotResult, phrases: tuple[str, ...]) -> bool:
+    """То же правило, что VoiceLoop.is_stop, но для заданного списка стоп-фраз."""
+    allowed = set(" ".join((*phrases, NAME)).split())
+    words = {word for word, _ in result.words}
+    return bool(words) and words <= allowed and result.find(phrases, CONFIG.voice.wake_confidence) is not None
 
 
 def test_calibration_stop_words(vosk_model: object) -> None:
-    """Какие фразы цикл принимает за «стоп» (все голоса)."""
+    """Сколько стоп-фраз слышно и сколько обычных фраз и ответов ассистента принято за «стоп».
+
+    Для нескольких вариантов грамматики, на всех голосах. Пропуски печатаются с тем,
+    что услышал Vosk, и с длительностью речи по VAD (-1 — детектор речи фразу не заметил).
+    """
     voices = voice_paths()
     if not voices:
         pytest.skip("голоса Piper не скачаны")
+    variants = stop_variants(vosk_model)
+    others = [*WITHOUT_NAME, *ASSISTANT_REPLIES]
+    totals = {name: [0, 0] for name in variants}
     for path in voices:
         piper = PiperTTS(path)
-        lines = []
-        for phrase in STOP_CALIBRATION:
-            stopped, heard = stop_heard(say(piper, phrase), vosk_model)
-            lines.append(f"{'СТОП' if stopped else '    '} «{phrase}» → {' | '.join(heard) or '—'}")
-        log.warning("КАЛИБРОВКА стоп %s:%s", path.stem, "".join(f"\n    {line}" for line in lines))
+        audio = {phrase: say(piper, phrase) for phrase in [*STOP_TRIES, *others]}
+        for name, (spotter, phrases) in variants.items():
+            notes = []
+            found = false = 0
+            for phrase, sound in audio.items():
+                _, heard = stop_heard(sound, spotter, decide=False)
+                stopped = any(clean_stop(result, phrases) for result in heard)
+                if phrase in STOP_TRIES:
+                    found += stopped
+                    if not stopped:
+                        span = speech_span_ms(sound)
+                        notes.append(f"пропуск «{phrase}» ({span} мс): {describe_heard(heard)}")
+                elif stopped:
+                    false += 1
+                    notes.append(f"ложно «{phrase}»: {describe_heard(heard)}")
+            totals[name][0] += found
+            totals[name][1] += false
+            log.warning(
+                "КАЛИБРОВКА стоп %s | %s: услышано %d/%d, ложно %d/%d%s",
+                path.stem, name, found, len(STOP_TRIES), false, len(others),
+                "".join(f"\n    {note}" for note in notes),
+            )  # fmt: skip
+    for name, (found, false) in totals.items():
+        log.warning(
+            "КАЛИБРОВКА стоп ИТОГО %s: услышано %d/%d, ложно %d/%d",
+            name, found, len(STOP_TRIES) * len(voices), false, len(others) * len(voices),
+        )  # fmt: skip
 
 
 @pytest.mark.parametrize("phrase", STOP_SAID)
 def test_stop_word_interrupts(reference_piper: PiperTTS, vosk_model: object, phrase: str) -> None:
-    stopped, heard = stop_heard(say(reference_piper, phrase), vosk_model)
-    assert stopped, heard
+    stopped, heard = stop_heard(say(reference_piper, phrase), stop_spotter(vosk_model))
+    assert stopped, describe_heard(heard)
 
 
 @pytest.mark.parametrize("phrase", NOT_STOP)
 def test_ordinary_speech_does_not_interrupt(piper: PiperTTS, vosk_model: object, phrase: str) -> None:
-    stopped, heard = stop_heard(say(piper, phrase), vosk_model)
-    assert not stopped, heard
+    stopped, heard = stop_heard(say(piper, phrase), stop_spotter(vosk_model))
+    assert not stopped, describe_heard(heard)
