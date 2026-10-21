@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from assistant.autostart import AUTOSTART_ARG, Autostart, launch_command, project_dir
+from assistant import frozen
+from assistant.autostart import AUTOSTART_ARG, Autostart, launch_command
 from assistant.instance import SingleInstance
 from assistant.main import parse_args
 from tests.conftest import ROOT
@@ -23,13 +24,14 @@ def test_source_launch_uses_pythonw_from_project_dir(tmp_path: Path, monkeypatch
     program, arguments, workdir = launch_command(tmp_path / "config.yaml")
     assert program == tmp_path / "pythonw.exe"  # без окна консоли
     assert arguments == f'-m assistant --config "{(tmp_path / "config.yaml").resolve()}" --autostart'
-    assert workdir == ROOT == project_dir()  # отсюда python находит пакет assistant
+    assert workdir == ROOT == frozen.app_dir()  # отсюда python находит пакет assistant
 
 
 def test_frozen_launch_uses_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "Jarvis" / "Jarvis.exe"
     monkeypatch.setattr(sys, "executable", str(exe))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr("assistant.autostart.FROZEN", True)
+    monkeypatch.setattr(frozen, "FROZEN", True)
     program, arguments, workdir = launch_command(tmp_path / "Jarvis" / "config.yaml")
     assert (program, workdir) == (exe.resolve(), exe.resolve().parent)
     assert arguments.endswith(AUTOSTART_ARG) and "-m assistant" not in arguments

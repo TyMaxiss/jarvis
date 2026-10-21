@@ -11,6 +11,7 @@ from pydantic import Field
 
 from assistant.actions.registry import ActionError, ActionRegistry
 from assistant.config import BrowserConfig
+from assistant.frozen import external_launch
 
 _DOMAIN_RE = re.compile(r"^[\w.-]+\.[a-zа-я]{2,}(/.*)?$", re.IGNORECASE)
 
@@ -34,7 +35,9 @@ def normalize_url(url: str) -> str:
 
 def open_in_browser(url: str) -> None:
     """Открывает адрес в браузере по умолчанию."""
-    if not webbrowser.open(url):
+    with external_launch():
+        opened = webbrowser.open(url)
+    if not opened:
         raise ActionError("Не удалось открыть браузер")
 
 

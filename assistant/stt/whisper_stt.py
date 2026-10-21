@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from assistant.config import SttConfig
+from assistant.frozen import FROZEN, app_dir
 
 log = logging.getLogger(__name__)
 
@@ -73,8 +74,24 @@ class Transcript:
     no_speech_prob: float = 0.0
 
 
+def cuda_dirs() -> list[Path]:
+    """Папки с DLL CUDA: из pip-пакетов nvidia-* (uv sync --extra cuda) и папка cuda рядом с программой."""
+    dirs = []
+    try:
+        import nvidia  # type: ignore[import-not-found]
+    except ImportError:
+        pass
+    else:
+        for base in getattr(nvidia, "__path__", []):
+            dirs += sorted(Path(base).glob("*/bin"))
+    own = app_dir() / "cuda"  # в собранный exe CUDA не входит: DLL можно положить сюда
+    if own.is_dir():
+        dirs.append(own)
+    return dirs
+
+
 def register_cuda_dlls() -> None:
-    """Делает видимыми DLL CUDA из pip-пакетов nvidia-* (uv sync --extra cuda).
+    """Делает видимыми DLL CUDA (cuda_dirs).
 
     CTranslate2 загружает cuBLAS и cuDNN при первом распознавании на видеокарте.
     Пакеты nvidia-cublas-cu12 и nvidia-cudnn-cu12 кладут DLL в site-packages/nvidia/*/bin,
@@ -82,15 +99,10 @@ def register_cuda_dlls() -> None:
     """
     if sys.platform != "win32":
         return
-    try:
-        import nvidia  # type: ignore[import-not-found]
-    except ImportError:
-        return
-    for base in getattr(nvidia, "__path__", []):
-        for bin_dir in sorted(Path(base).glob("*/bin")):
-            os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
-            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
-            log.debug("DLL CUDA: %s", bin_dir)
+    for bin_dir in cuda_dirs():
+        os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
+        os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        log.debug("DLL CUDA: %s", bin_dir)
 
 
 def missing_cuda_library() -> str:
@@ -174,9 +186,14 @@ class WhisperSTT:
             missing = missing_cuda_library()
             if missing:
                 # Модель для видеокарты даже не загружаем: без DLL она не заработает.
+                how = (
+                    "положите DLL cuBLAS 12 и cuDNN 9 в папку cuda рядом с Jarvis.exe"
+                    if FROZEN
+                    else "uv sync --extra cuda"
+                )
                 self.cuda_problem = (
                     f"Видеокарта NVIDIA не используется: нет библиотек CUDA ({missing}), распознаю "
-                    "на процессоре — это медленнее. Включить видеокарту: uv sync --extra cuda. "
+                    f"на процессоре — это медленнее. Включить видеокарту: {how}. "
                     "Чтобы не видеть это сообщение, выберите в настройках распознавания «Процессор»."
                 )
             else:

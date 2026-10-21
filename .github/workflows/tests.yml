@@ -96,6 +96,64 @@ jobs:
           JARVIS_LIVE_PROFILE: anthropic
         run: uv run pytest -v -rs tests/test_llm_live.py --log-cli-level=WARNING
 
+  exe:
+    name: Сборка exe (PyInstaller)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Зависимости и PyInstaller
+        run: uv sync --locked --group build
+
+      - name: WebView2 Runtime для окон (если его нет на раннере)
+        shell: pwsh
+        run: |
+          $client = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path "HKLM:\$client" -Name pv -ErrorAction SilentlyContinue).pv
+          if ($version -and $version -ne '0.0.0.0') { "WebView2 $version уже есть"; exit 0 }
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile "$env:RUNNER_TEMP\webview2.exe"
+          Start-Process "$env:RUNNER_TEMP\webview2.exe" -ArgumentList '/silent', '/install' -Wait
+
+      - name: Сборка
+        run: uv run --no-sync pyinstaller --noconfirm --clean packaging/jarvis.spec
+
+      - name: Проверка сборки (на копии — dist остаётся чистым)
+        shell: pwsh
+        run: |
+          $app = "$env:RUNNER_TEMP\Jarvis"
+          Copy-Item dist\Jarvis $app -Recurse
+          # Нативные части: Vosk, Whisper, VAD, Piper, звук, .NET и WebView2, UI Automation, SAPI.
+          & "$app\JarvisConsole.exe" --self-check
+          if ($LASTEXITCODE) { Get-Content "$app\logs\assistant.log" -Tail 80; exit $LASTEXITCODE }
+          "который час`nсделай громче`n:q" | & "$app\JarvisConsole.exe" --console --text --dry-run
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Test-Path "$app\config.yaml")) { throw "config.yaml не создан рядом с exe" }
+          if (-not (Test-Path "$app\commands\my.yaml")) { throw "my.yaml не создан из образца" }
+          # Окна: консольный exe с той же папкой _internal (у Jarvis.exe ошибка открыла бы диалог).
+          $p = Start-Process "$app\JarvisConsole.exe" -ArgumentList '--text', '--dry-run' -PassThru -NoNewWindow
+          Start-Sleep 25
+          $log = "$app\logs\assistant.log"
+          if ($p.HasExited) { Get-Content $log -Tail 80; throw "окна закрылись, код $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          if (Select-String $log -Pattern 'No module named|ModuleNotFoundError|DLL load failed' -Quiet) {
+            Get-Content $log -Tail 80; throw "в сборке чего-то не хватает"
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-win-x64
+          path: dist/
+          include-hidden-files: true  # .env.example
+          if-no-files-found: error
+          retention-days: 14
+
   ui:
     name: Интерфейс (React) и сквозная проверка с Python
     runs-on: ubuntu-latest

@@ -27,10 +27,19 @@ from assistant.actions.registry import ActionRegistry
 from assistant.actions.screen import Screen
 from assistant.audio.sounds import SOUND_RATE, alarm_chime
 from assistant.autostart import AUTOSTART_ARG, Autostart
-from assistant.commands.loader import CommandStore, LoadResult
+from assistant.commands.loader import CommandStore, LoadResult, ensure_user_pack
 from assistant.commands.watcher import CommandWatcher
-from assistant.config import ENV_FILE, TIMERS_FILE, AppConfig, ConfigError, LlmConfig, load_config
+from assistant.config import (
+    CONFIG_FILE,
+    ENV_FILE,
+    TIMERS_FILE,
+    AppConfig,
+    ConfigError,
+    LlmConfig,
+    load_config,
+)
 from assistant.console import ConsoleApp, ConsoleSpeaker
+from assistant.frozen import CONSOLE_EXE, FROZEN, RESET_ENV, app_dir, external_launch
 from assistant.instance import RESTART_ENV, RESTART_WAIT, SingleInstance
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent
@@ -55,13 +64,18 @@ log = logging.getLogger("assistant")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Разбирает аргументы командной строки."""
     parser = argparse.ArgumentParser(prog="python -m assistant", description="Голосовой ассистент")
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"), help="путь к config.yaml")
+    # Собранный exe ищет config.yaml рядом с собой: его запускают ярлыком из любой папки.
+    default_config = app_dir() / CONFIG_FILE if FROZEN else Path(CONFIG_FILE)
+    parser.add_argument("--config", type=Path, default=default_config, help="путь к config.yaml")
     parser.add_argument("--dry-run", action="store_true", help="только логировать действия")
     parser.add_argument("--debug", action="store_true", help="подробный лог и вывод в консоль")
     parser.add_argument("--text", action="store_true", help="только ввод текстом, без микрофона и озвучки")
     parser.add_argument("--console", action="store_true", help="консольный режим вместо окон")
     parser.add_argument("--download-models", action="store_true", help="скачать модели Vosk, Piper, Whisper")
     parser.add_argument("--list-devices", action="store_true", help="показать микрофоны и выйти")
+    parser.add_argument(
+        "--self-check", action="store_true", help="проверить, что загружаются все части программы, и выйти"
+    )
     parser.add_argument(
         AUTOSTART_ARG, action="store_true", help="запуск вместе с Windows: сразу свернуться в трей"
     )
@@ -416,7 +430,9 @@ def build_core(
     )
     normalizer = Normalizer(config.wake_words, config.matcher.filler_words)
     matcher = Matcher(normalizer, config.matcher, debug=debug)
-    store = CommandStore(config.resolve(config.commands.dir), config.commands.user_file, registry)
+    commands_dir = config.resolve(config.commands.dir)
+    ensure_user_pack(commands_dir, config.commands.user_file)
+    store = CommandStore(commands_dir, config.commands.user_file, registry)
     loaded = store.reload()
     matcher.set_commands(store.commands)
     agent = (
@@ -442,7 +458,8 @@ def ui_problem() -> str:
             "Открыть страницу загрузки? Пока его нет, ассистент работает в консоли."
         )
         if win32.ask_yes_no("Джарвис", question):
-            webbrowser.open(win32.WEBVIEW2_DOWNLOAD)
+            with external_launch():
+                webbrowser.open(win32.WEBVIEW2_DOWNLOAD)
         return f"нет Microsoft Edge WebView2 Runtime — установите его: {win32.WEBVIEW2_DOWNLOAD}"
     try:
         import webview  # noqa: F401
@@ -458,7 +475,32 @@ def relaunch(argv: list[str] | None) -> None:
     """
     args = sys.argv[1:] if argv is None else argv
     log.info("Перезапуск")
-    subprocess.Popen([sys.executable, "-m", "assistant", *args], env={**os.environ, RESTART_ENV: "1"})
+    env = {**os.environ, RESTART_ENV: "1"}
+    if FROZEN:
+        # Новый Jarvis.exe — самостоятельный экземпляр, а не дочерний процесс этого.
+        command, env[RESET_ENV] = [sys.executable, *args], "1"
+    else:
+        command = [sys.executable, "-m", "assistant", *args]
+    with external_launch():
+        subprocess.Popen(command, env=env)
+
+
+def open_console(argv: list[str] | None) -> int:
+    """Консоль нужна, а её нет (Jarvis.exe --console): JarvisConsole.exe в новом окне консоли."""
+    console = app_dir() / CONSOLE_EXE
+    if not FROZEN or not console.exists():
+        log.error("Консольному режиму нужна консоль: запустите python -m assistant --console из терминала")
+        return 2
+    args = sys.argv[1:] if argv is None else list(argv)
+    if "--console" not in args:
+        args.append("--console")
+    with external_launch():
+        subprocess.Popen(
+            [str(console), *args],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,  # type: ignore[attr-defined]
+            env={**os.environ, RESET_ENV: "1"},
+        )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -502,6 +544,17 @@ def main(argv: list[str] | None = None) -> int:
         from assistant.models import download_all
 
         return 0 if download_all(config, out) else 1
+    if args.self_check:
+        from assistant.selfcheck import run_self_check
+
+        return run_self_check(out)
+
+    use_ui = config.ui.enabled and not args.console and sys.platform == "win32"
+    if use_ui and (problem := ui_problem()):
+        out.write(f"! Окна недоступны: {problem}. Работаю в консоли.\n")
+        use_ui = False
+    if not use_ui and sys.stdin is None:  # Jarvis.exe и pythonw — без консоли
+        return open_console(argv)
 
     instance = SingleInstance()
     if not instance.acquire(RESTART_WAIT if os.environ.pop(RESTART_ENV, "") else 0.0):
@@ -511,11 +564,8 @@ def main(argv: list[str] | None = None) -> int:
         out.write(f"Ассистент уже запущен{': показываю его окно' if shown else ''}. Второй не запускаю.\n")
         return 0
     try:
-        if config.ui.enabled and not args.console and sys.platform == "win32":
-            problem = ui_problem()
-            if not problem:
-                return run_ui(config, args, argv, masker, dry_run, debug, started, instance)
-            out.write(f"! Окна недоступны: {problem}. Работаю в консоли.\n")
+        if use_ui:
+            return run_ui(config, args, argv, masker, dry_run, debug, started, instance)
         return run_console(config, args, out, masker, dry_run, debug, started, instance)
     finally:
         instance.release()

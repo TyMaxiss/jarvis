@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -259,6 +260,27 @@ def load_file(path: Path, registry: ActionRegistry) -> LoadResult:
             continue
         result.commands.append(command)
     return result
+
+
+USER_TEMPLATE_SUFFIX = ".example"  # my.yaml.example — не пак (не *.yaml), а образец my.yaml
+
+
+def ensure_user_pack(directory: Path, user_file: str) -> None:
+    """Создаёт свой пак из образца, если его ещё нет.
+
+    В собранной программе my.yaml не поставляется (только my.yaml.example): иначе новая
+    версия, распакованная поверх старой, затёрла бы команды пользователя.
+    """
+    path = directory / user_file
+    template = directory / f"{user_file}{USER_TEMPLATE_SUFFIX}"
+    if path.exists() or not template.is_file():
+        return
+    try:
+        shutil.copyfile(template, path)
+    except OSError as exc:
+        log.warning("Не удалось создать %s из образца: %s", user_file, exc)
+    else:
+        log.info("Создан %s из %s", user_file, template.name)
 
 
 def pack_files(directory: Path, user_file: str) -> list[Path]:

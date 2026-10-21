@@ -12,6 +12,7 @@ import subprocess
 
 from assistant.actions import winapi
 from assistant.actions.registry import ActionError, ActionRegistry, Risk
+from assistant.frozen import external_launch
 
 log = logging.getLogger(__name__)
 
@@ -36,9 +37,10 @@ class PowerControl:
     def shutdown(self, restart: bool) -> None:
         mode = "/r" if restart else "/s"
         try:
-            subprocess.run(
-                ["shutdown", mode, "/t", str(SHUTDOWN_DELAY)], check=True, capture_output=True, timeout=10
-            )
+            with external_launch():
+                subprocess.run(
+                    ["shutdown", mode, "/t", str(SHUTDOWN_DELAY)], check=True, capture_output=True, timeout=10
+                )
         except (OSError, subprocess.SubprocessError) as exc:
             raise ActionError(f"Не удалось {'перезагрузить' if restart else 'выключить'} компьютер") from exc
 

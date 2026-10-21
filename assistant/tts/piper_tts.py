@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from assistant.frozen import run_hint
 from assistant.tts.base import TTSError
 
 log = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class PiperTTS:
         if not model_path.is_file() or not Path(f"{model_path}.json").is_file():
             raise TTSError(
                 f"Голос Piper не найден: {model_path} (и .onnx.json рядом). "
-                "Скачайте его: uv run python -m assistant --download-models"
+                f"Скачайте его: {run_hint('--download-models')}"
             )
         from piper import PiperVoice, SynthesisConfig
 

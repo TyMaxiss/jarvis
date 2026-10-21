@@ -24,6 +24,7 @@ from assistant.autostart import Autostart
 from assistant.commands.editor import CommandEditor, EditorError, action_catalog
 from assistant.commands.loader import Command, CommandStore
 from assistant.config import AppConfig, LlmConfig, LlmProfile
+from assistant.frozen import external_launch
 from assistant.history import FILTERS, PAGE, History
 from assistant.llm.client import LlmError, resolve_api_key
 from assistant.llm.providers import (
@@ -101,7 +102,8 @@ def _first_error(exc: ValidationError) -> str:
 def open_in_shell(path: Path) -> None:
     """Открывает файл или папку программой по умолчанию."""
     if sys.platform == "win32":
-        os.startfile(path)  # type: ignore[attr-defined]
+        with external_launch():
+            os.startfile(path)  # type: ignore[attr-defined]
     else:
         log.info("Открыть %s можно только в Windows", path)
 
@@ -703,7 +705,8 @@ class UiController:
         """Страница провайдера, где создают ключ (адрес — из списка, а не из окна)."""
         url = provider_info(name, self.config.llm.profiles.get(name)).key_url
         if url:
-            webbrowser.open(url)
+            with external_launch():
+                webbrowser.open(url)
 
     # --- Озвучка ---------------------------------------------------------------------
 

@@ -27,6 +27,7 @@ from assistant.actions import winapi
 from assistant.actions.registry import ActionError, ActionRegistry
 from assistant.actions.windows import window_score
 from assistant.config import AppsConfig
+from assistant.frozen import external_launch
 from assistant.nlu.names import best_matches, name_score
 
 log = logging.getLogger(__name__)
@@ -66,10 +67,11 @@ class AppEntry:
         Raises:
             OSError: Windows не смог открыть ярлык или приложение.
         """
-        if self.kind == "start_app":
-            os.startfile(f"shell:AppsFolder\\{self.target}")  # type: ignore[attr-defined]
-        else:
-            os.startfile(self.target)  # type: ignore[attr-defined]
+        with external_launch():
+            if self.kind == "start_app":
+                os.startfile(f"shell:AppsFolder\\{self.target}")  # type: ignore[attr-defined]
+            else:
+                os.startfile(self.target)  # type: ignore[attr-defined]
 
 
 def _fallback_folders() -> list[Path]:
@@ -91,11 +93,12 @@ def _query_powershell(timeout: float = 30.0) -> tuple[list[Path], list[AppEntry]
     # -EncodedCommand (UTF-16LE в base64) избавляет от проблем с кавычками и переводами строк.
     encoded = base64.b64encode(_POWERSHELL_SCRIPT.encode("utf-16-le")).decode("ascii")
     try:
-        completed = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-             "-EncodedCommand", encoded],
-            capture_output=True, timeout=timeout, creationflags=_CREATE_NO_WINDOW, check=False,
-        )  # fmt: skip
+        with external_launch():
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                 "-EncodedCommand", encoded],
+                capture_output=True, timeout=timeout, creationflags=_CREATE_NO_WINDOW, check=False,
+            )  # fmt: skip
         data = json.loads(completed.stdout.decode("utf-8-sig", errors="replace") or "{}")
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         log.exception("Не удалось получить список приложений через PowerShell")

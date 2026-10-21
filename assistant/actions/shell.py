@@ -15,6 +15,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from assistant.actions.registry import ActionError, ActionRegistry, Risk
+from assistant.frozen import external_launch
 
 log = logging.getLogger(__name__)
 
@@ -52,15 +53,16 @@ def register(registry: ActionRegistry, runner: Callable[..., Any] = subprocess.r
         command: Annotated[str, Field(min_length=1, max_length=2000, description="Команда PowerShell")],
     ) -> str:
         try:
-            result = runner(
-                powershell_args(command),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=TIMEOUT,
-                creationflags=_CREATE_NO_WINDOW,
-            )
+            with external_launch():
+                result = runner(
+                    powershell_args(command),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=TIMEOUT,
+                    creationflags=_CREATE_NO_WINDOW,
+                )
         except subprocess.TimeoutExpired as exc:
             raise ActionError(f"Команда не завершилась за {TIMEOUT} секунд") from exc
         except OSError as exc:

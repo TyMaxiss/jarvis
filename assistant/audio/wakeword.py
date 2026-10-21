@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from assistant.audio.capture import SAMPLE_RATE
+from assistant.frozen import run_hint
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +59,7 @@ def load_vosk_model(path: Path) -> Any:
         VoskModelError: папки модели нет или она повреждена.
     """
     if not path.is_dir():
-        raise VoskModelError(
-            f"Модель Vosk не найдена: {path}. Скачайте её: uv run python -m assistant --download-models"
-        )
+        raise VoskModelError(f"Модель Vosk не найдена: {path}. Скачайте её: {run_hint('--download-models')}")
     import vosk
 
     vosk.SetLogLevel(-1)

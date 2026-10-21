@@ -9,6 +9,7 @@ import pytest
 from assistant.actions.registry import ActionRegistry
 from assistant.commands.loader import (
     CommandStore,
+    ensure_user_pack,
     load_commands,
     load_file,
     pack_files,
@@ -182,3 +183,16 @@ def test_substitute_keeps_types_for_whole_placeholders() -> None:
 def test_render_reply() -> None:
     assert render_reply("Громкость {percent}%", {"percent": 30}, "") == "Громкость 30%"
     assert render_reply("{result}", {}, "Сейчас 12:00") == "Сейчас 12:00"
+
+
+def test_user_pack_is_created_from_template_once(tmp_path: Path) -> None:
+    # В собранной программе my.yaml нет: он создаётся из образца и потом не перезаписывается.
+    template = tmp_path / "my.yaml.example"
+    template.write_text("# образец\n", encoding="utf-8")
+    ensure_user_pack(tmp_path, "my.yaml")
+    assert (tmp_path / "my.yaml").read_text(encoding="utf-8") == "# образец\n"
+    (tmp_path / "my.yaml").write_text("- id: mine\n", encoding="utf-8")
+    ensure_user_pack(tmp_path, "my.yaml")
+    assert (tmp_path / "my.yaml").read_text(encoding="utf-8") == "- id: mine\n"
+    assert [p.name for p in pack_files(tmp_path, "my.yaml")] == ["my.yaml"]  # образец — не пак
+    ensure_user_pack(tmp_path / "нет", "my.yaml")  # нет ни папки, ни образца — ничего не делает

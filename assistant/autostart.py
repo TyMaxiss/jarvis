@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from assistant.actions.files import known_folder
+from assistant.frozen import FROZEN, app_dir
 
 log = logging.getLogger(__name__)
 
@@ -24,13 +25,6 @@ AUTOSTART_ARG = "--autostart"
 _COM_TIMEOUT = 15.0
 
 
-def project_dir() -> Path:
-    """Папка проекта (в ней пакет assistant) или папка Jarvis.exe в сборке."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
-
-
 def launch_command(config_path: Path) -> tuple[Path, str, Path]:
     """Чем запустить ассистента при входе в Windows: программа, аргументы и рабочая папка.
 
@@ -38,11 +32,11 @@ def launch_command(config_path: Path) -> tuple[Path, str, Path]:
     устанавливается в окружение, его находит python в текущей папке.
     """
     config = f'--config "{config_path.resolve()}" {AUTOSTART_ARG}'
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve(), config, project_dir()
+    if FROZEN:
+        return Path(sys.executable).resolve(), config, app_dir()
     python = Path(sys.executable)
     pythonw = python.with_name("pythonw.exe")
-    return (pythonw if pythonw.exists() else python), f"-m assistant {config}", project_dir()
+    return (pythonw if pythonw.exists() else python), f"-m assistant {config}", app_dir()
 
 
 class Autostart:

@@ -21,6 +21,7 @@ from typing import Annotated
 from pydantic import Field
 
 from assistant.actions.registry import ActionError, ActionRegistry
+from assistant.frozen import external_launch
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +141,8 @@ def register(
         if opener is not None:
             opener(path)
         elif os.name == "nt":
-            os.startfile(path)  # type: ignore[attr-defined]
+            with external_launch():
+                os.startfile(path)  # type: ignore[attr-defined]
         else:
             raise ActionError("Открывать папки можно только в Windows")
 
