@@ -78,6 +78,10 @@ if sys.platform == "win32":
     user32.DefWindowProcW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
     user32.RegisterClassW.restype = wintypes.ATOM
     user32.RegisterClassW.argtypes = (ctypes.POINTER(WNDCLASSW),)
+    user32.UnregisterClassW.argtypes = (wintypes.LPCWSTR, wintypes.HINSTANCE)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    kernel32.GetModuleHandleW.argtypes = (wintypes.LPCWSTR,)
     user32.SendMessageW.restype = LRESULT
     user32.SendMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
@@ -337,22 +341,28 @@ class TestDesktop:
 
 
 class Form:
-    """Окно с настоящими кнопками Windows; нажатия (WM_COMMAND от кнопок) записываются."""
+    """Окно с настоящими кнопками Windows; нажатия (WM_COMMAND от кнопок) записываются.
 
-    CLASS = "JarvisScreenTest"
+    У каждого окна свой класс: процедура окна — метод этого объекта, и класс, оставшийся от
+    прошлого теста, вызывал бы процедуру уже удалённого объекта.
+    """
+
     SAVE, CANCEL, REMEMBER = 101, 102, 103
 
     def __init__(self) -> None:
         self.clicked: list[int] = []
         # Ссылка на процедуру окна держится, пока окно живо: иначе её соберёт сборщик мусора.
         self._proc = WNDPROC(self._window_proc)
-        instance = ctypes.WinDLL("kernel32").GetModuleHandleW(None)
-        window_class = WNDCLASSW(lpfnWndProc=self._proc, hInstance=instance, lpszClassName=self.CLASS)
+        self.instance = kernel32.GetModuleHandleW(None)
+        self.class_name = f"JarvisScreenTest{id(self)}"
+        window_class = WNDCLASSW(
+            lpfnWndProc=self._proc, hInstance=self.instance, lpszClassName=self.class_name
+        )
         window_class.hbrBackground = 6  # COLOR_WINDOW + 1
-        user32.RegisterClassW(ctypes.byref(window_class))  # повторная регистрация — не ошибка для теста
+        assert user32.RegisterClassW(ctypes.byref(window_class)), f"RegisterClassW: {ctypes.get_last_error()}"
         self.hwnd = user32.CreateWindowExW(
-            0, self.CLASS, "Проверка экрана", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 200, 200, 640, 260,
-            None, None, None, None,
+            0, self.class_name, "Проверка экрана", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 200, 200, 640, 260,
+            None, None, self.instance, None,
         )  # fmt: skip
         assert self.hwnd, f"CreateWindowExW: ошибка {ctypes.get_last_error()}"
         self.save = self._control("BUTTON", "Сохранить", 0, 20, 20, self.SAVE)
@@ -362,8 +372,9 @@ class Form:
 
     def _control(self, kind: str, text: str, style: int, x: int, y: int, control_id: int) -> int:
         hwnd = user32.CreateWindowExW(
-            0, kind, text, WS_CHILD | WS_VISIBLE | style, x, y, 130, 32, self.hwnd, control_id, None, None
-        )
+            0, kind, text, WS_CHILD | WS_VISIBLE | style, x, y, 130, 32, self.hwnd, control_id, self.instance,
+            None,
+        )  # fmt: skip
         assert hwnd, f"CreateWindowExW({text}): ошибка {ctypes.get_last_error()}"
         return hwnd
 
@@ -374,6 +385,11 @@ class Form:
 
     def checked(self) -> bool:
         return user32.SendMessageW(self.remember, BM_GETCHECK, 0, 0) == 1
+
+    def close(self) -> None:
+        user32.DestroyWindow(self.hwnd)
+        pump(0.1)
+        user32.UnregisterClassW(self.class_name, self.instance)
 
 
 def while_pumping[T](work: Callable[[], T], timeout: float = 30) -> T:
@@ -407,8 +423,7 @@ def form() -> Iterator[Form]:
         activate_or_skip(window.hwnd)
         yield window
     finally:
-        user32.DestroyWindow(window.hwnd)
-        pump(0.1)
+        window.close()
 
 
 @pytest.mark.skipif(
