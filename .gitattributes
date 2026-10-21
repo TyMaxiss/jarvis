@@ -2,3 +2,6 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+
+# Готовая сборка интерфейса хранится байт в байт: CI сверяет её со свежей сборкой.
+ui/dist/** -text
