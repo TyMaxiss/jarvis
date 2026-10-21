@@ -1,9 +1,9 @@
-"""Клавиатурный ввод через SendInput: сочетания клавиш и печать текста (в том числе кириллицы)."""
+"""Ввод через SendInput: сочетания клавиш, печать текста (в том числе кириллицы), мышь."""
 
 from __future__ import annotations
 
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -144,3 +144,28 @@ def register(registry: ActionRegistry) -> None:
     ) -> str:
         type_unicode(text)
         return "Текст напечатан"
+
+    @registry.action(
+        "mouse_click", "Щёлкнуть мышью в точке экрана (координаты в пикселях от левого верхнего угла)"
+    )
+    def mouse_click(
+        x: Annotated[int, Field(ge=0, le=20000, description="Координата X в пикселях")],
+        y: Annotated[int, Field(ge=0, le=20000, description="Координата Y в пикселях")],
+        button: Annotated[Literal["left", "right", "middle"], Field(description="Кнопка мыши")] = "left",
+        double: Annotated[bool, Field(description="Двойной щелчок")] = False,
+    ) -> str:
+        winapi.wait_modifiers_released()
+        if not winapi.api().SetCursorPos(x, y):
+            raise ActionError(f"Не удалось переместить курсор в точку {x}, {y}")
+        winapi.send_inputs(winapi.mouse_button_events(button, double=double))
+        kind = "Двойной щелчок" if double else "Щелчок"
+        return f"{kind} ({button}) в точке {x}, {y}"
+
+    @registry.action("scroll", "Прокрутить колесо мыши там, где курсор: плюс — вверх, минус — вниз")
+    def scroll(
+        amount: Annotated[int, Field(ge=-50, le=50, description="Сколько щелчков колеса; плюс — вверх")],
+    ) -> str:
+        if amount == 0:
+            return "Прокручивать нечего"
+        winapi.send_inputs([winapi.wheel_event(amount)])
+        return f"Прокрутил {'вверх' if amount > 0 else 'вниз'} на {abs(amount)}"

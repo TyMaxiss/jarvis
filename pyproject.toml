@@ -20,6 +20,7 @@ dependencies = [
     "piper-tts>=1.8.0",
     "keyboard>=0.13.5 ; sys_platform == 'win32'",
     "openai>=3.35.1,<4",
+    "pyperclip>=1.11",
 ]
 
 [project.optional-dependencies]

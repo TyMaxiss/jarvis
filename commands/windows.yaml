@@ -84,3 +84,41 @@
   reply: "{result}"
   steps:
     - get_time: {}
+
+# Питание. Сон, выключение и перезагрузка всегда спрашивают подтверждение.
+- id: lock
+  phrases: ["заблокируй компьютер", "заблокируй экран", "блокировка экрана"]
+  steps:
+    - lock: {}
+
+- id: sleep
+  phrases: ["спящий режим", "переведи компьютер в сон", "усыпи компьютер"]
+  steps:
+    - sleep: {}
+
+- id: shutdown
+  phrases: ["выключи компьютер", "выключение компьютера"]
+  steps:
+    - shutdown: {}
+
+- id: restart
+  phrases: ["перезагрузи компьютер", "перезагрузка компьютера"]
+  steps:
+    - restart: {}
+
+# Папки и буфер обмена.
+- id: open_downloads
+  phrases: ["открой загрузки", "открой папку загрузки"]
+  steps:
+    - open_folder: {path: "Загрузки"}
+
+- id: open_documents
+  phrases: ["открой документы", "открой папку документы"]
+  steps:
+    - open_folder: {path: "Документы"}
+
+- id: clipboard_read
+  phrases: ["что в буфере обмена", "прочитай буфер обмена"]
+  reply: "{result}"
+  steps:
+    - clipboard_get: {}

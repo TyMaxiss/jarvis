@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
-from assistant.actions import apps, browser, media, system, volume, windows
+from assistant.actions import apps, browser, files, media, power, shell, system, volume, windows
 from assistant.actions import input as input_actions
 from assistant.actions.apps import AppIndex, looks_like_path
 from assistant.actions.executor import ActionExecutor
@@ -61,6 +61,9 @@ def build_registry(config: AppConfig, index: AppIndex, speaker: Speaker) -> Acti
     volume.register(registry)
     browser.register(registry, config.browser)
     system.register(registry, speaker)
+    power.register(registry)
+    files.register(registry)
+    shell.register(registry)
     return registry
 
 

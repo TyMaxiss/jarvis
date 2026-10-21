@@ -33,6 +33,10 @@ KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 MAPVK_VK_TO_VSC = 0
+MOUSEEVENTF_WHEEL = 0x0800
+WHEEL_DELTA = 120
+# Флаги нажатия и отпускания кнопок мыши.
+MOUSE_BUTTONS = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010), "middle": (0x0020, 0x0040)}
 
 SW_MAXIMIZE = 3
 SW_MINIMIZE = 6
@@ -105,6 +109,9 @@ class _Api:
             return func
 
         self.SendInput = fn(user32, "SendInput", uint, uint, ctypes.POINTER(INPUT), ctypes.c_int)
+        self.SetCursorPos = fn(user32, "SetCursorPos", boolean, ctypes.c_int, ctypes.c_int)
+        self.GetCursorPos = fn(user32, "GetCursorPos", boolean, ctypes.POINTER(wintypes.POINT))
+        self.LockWorkStation = fn(user32, "LockWorkStation", boolean)
         self.MapVirtualKeyW = fn(user32, "MapVirtualKeyW", uint, uint, uint)
         self.GetAsyncKeyState = fn(user32, "GetAsyncKeyState", ctypes.c_short, ctypes.c_int)
         self.GetForegroundWindow = fn(user32, "GetForegroundWindow", hwnd)
@@ -322,6 +329,33 @@ def unicode_event(code_unit: int, *, up: bool) -> INPUT:
     event = INPUT(type=INPUT_KEYBOARD)
     event.ki = KEYBDINPUT(wVk=0, wScan=code_unit, dwFlags=flags, time=0, dwExtraInfo=0)
     return event
+
+
+def mouse_button_events(button: str, *, double: bool = False) -> list[INPUT]:
+    """Нажатие и отпускание кнопки мыши (дважды — для двойного щелчка)."""
+    down, up = MOUSE_BUTTONS[button]
+    events = []
+    for flags in (down, up) * (2 if double else 1):
+        event = INPUT(type=INPUT_MOUSE)
+        event.mi = MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0)
+        events.append(event)
+    return events
+
+
+def wheel_event(clicks: int) -> INPUT:
+    """Прокрутка колеса: плюс — от себя (вверх), минус — к себе (вниз)."""
+    event = INPUT(type=INPUT_MOUSE)
+    # mouseData — DWORD, а Windows читает его как знаковое число: минус передаётся дополнением.
+    delta = (clicks * WHEEL_DELTA) & 0xFFFFFFFF
+    event.mi = MOUSEINPUT(dx=0, dy=0, mouseData=delta, dwFlags=MOUSEEVENTF_WHEEL, time=0, dwExtraInfo=0)
+    return event
+
+
+def cursor_position() -> tuple[int, int]:
+    """Где сейчас курсор мыши."""
+    point = wintypes.POINT()
+    api().GetCursorPos(ctypes.byref(point))
+    return point.x, point.y
 
 
 def send_inputs(events: Sequence[INPUT]) -> int:

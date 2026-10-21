@@ -40,6 +40,7 @@ if sys.platform == "win32":
         wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
     )  # fmt: skip
     user32.DestroyWindow.argtypes = (wintypes.HWND,)
+    user32.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
     user32.IsWindow.argtypes = (wintypes.HWND,)
     user32.IsZoomed.argtypes = (wintypes.HWND,)
     user32.IsIconic.argtypes = (wintypes.HWND,)
@@ -143,6 +144,18 @@ def test_key_events_have_scan_codes_and_extended_flag() -> None:
     assert letter.ki.wScan != 0 and not letter.ki.dwFlags & winapi.KEYEVENTF_EXTENDEDKEY
     arrow = winapi.key_event(0x25, up=True)
     assert arrow.ki.dwFlags & winapi.KEYEVENTF_EXTENDEDKEY and arrow.ki.dwFlags & winapi.KEYEVENTF_KEYUP
+
+
+def test_powershell_output_keeps_cyrillic(registry: ActionRegistry) -> None:
+    action = registry.get("run_shell")
+    assert action.run(action.parse_args({"command": "Write-Output 'Привет, мир'"})) == "Привет, мир"
+
+
+def test_known_folders_exist() -> None:
+    from assistant.actions.files import known_folder
+
+    for key in ("desktop", "documents", "downloads"):
+        assert known_folder(key).is_dir(), key
 
 
 def test_installed_apps_are_found() -> None:
@@ -253,6 +266,20 @@ class TestDesktop:
             assert up.wait(3), "отпускание ctrl+alt+f10 не дошло"
         finally:
             manager.close()
+
+    def test_clipboard_round_trip(self, registry: ActionRegistry) -> None:
+        put, get = registry.get("clipboard_set"), registry.get("clipboard_get")
+        put.run(put.parse_args({"text": "Проверка буфера 😀"}))
+        assert get.run(get.parse_args({})) == "Проверка буфера 😀"
+
+    def test_mouse_click_moves_cursor(self, edit_window: int, registry: ActionRegistry) -> None:
+        rect = wintypes.RECT()
+        user32.GetWindowRect(edit_window, ctypes.byref(rect))
+        x, y = (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+        action = registry.get("mouse_click")
+        action.run(action.parse_args({"x": x, "y": y}))
+        pump(0.1)
+        assert winapi.cursor_position() == (x, y)
 
     def test_close_app_closes_notepad(self, registry: ActionRegistry) -> None:
         process = subprocess.Popen(["notepad.exe"])
