@@ -243,12 +243,23 @@ def list_windows() -> list[WindowInfo]:
     return windows
 
 
+# Оболочка Windows: из неё запускаются ярлыки, автозапуск и терминал, но её окна — не наши.
+SHELL_PROCESSES = frozenset({"explorer.exe", "sihost.exe", "svchost.exe", "userinit.exe", "winlogon.exe"})
+
+
 def own_process_tree() -> set[int]:
-    """PID нашего процесса и всех его родителей (консоль, терминал, uv)."""
+    """PID нашего процесса и его родителей до оболочки Windows: консоль, терминал, uv.
+
+    Проводник, из которого запущен ярлык или терминал, сюда не входит: иначе его окна
+    считались бы окнами ассистента («закрой окно» в папке отказывалось бы закрывать её).
+    """
     me = psutil.Process()
     pids = {me.pid}
     with contextlib.suppress(psutil.Error):
-        pids.update(parent.pid for parent in me.parents())
+        for parent in me.parents():
+            if parent.name().lower() in SHELL_PROCESSES:
+                break
+            pids.add(parent.pid)
     return pids
 
 
