@@ -32,13 +32,24 @@ jobs:
       - name: Установка зависимостей
         run: uv sync --locked
 
-      - name: Тесты
+      - name: WebView2 Runtime для окон (если его нет на раннере)
+        shell: pwsh
+        run: |
+          $client = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path "HKLM:\$client" -Name pv -ErrorAction SilentlyContinue).pv
+          if ($version -and $version -ne '0.0.0.0') { "WebView2 $version уже есть"; exit 0 }
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile "$env:RUNNER_TEMP\webview2.exe"
+          Start-Process "$env:RUNNER_TEMP\webview2.exe" -ArgumentList '/silent', '/install' -Wait
+          "WebView2 $((Get-ItemProperty -Path "HKLM:\$client" -Name pv).pv) установлен"
+
+      - name: Тесты (вместе с окнами интерфейса на рабочем столе раннера)
+        timeout-minutes: 15
         run: uv run pytest -v -rs
 
       - name: Запуск консольного режима (dry-run, без голоса)
         shell: pwsh
         run: |
-          "сделай громче`nкоторый час`n:apps power`n:q" | uv run python -m assistant --text --dry-run
+          "сделай громче`nкоторый час`n:apps power`n:q" | uv run python -m assistant --console --text --dry-run
 
       - name: Кэш моделей
         uses: actions/cache@v5
@@ -84,3 +95,53 @@ jobs:
           JARVIS_LIVE_LLM: "1"
           JARVIS_LIVE_PROFILE: anthropic
         run: uv run pytest -v -rs tests/test_llm_live.py --log-cli-level=WARNING
+
+  ui:
+    name: Интерфейс (React) и сквозная проверка с Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Зависимости интерфейса
+        run: npm ci
+
+      - name: Проверка типов
+        run: npm run typecheck
+
+      - name: Тесты интерфейса (vitest)
+        run: npm test
+
+      - name: Сборка
+        run: npm run build
+
+      - name: Сборка в репозитории совпадает со свежей (ui/dist)
+        run: |
+          git status --porcelain -- dist
+          if [ -n "$(git status --porcelain -- dist)" ]; then
+            echo "::error::ui/dist устарел: выполните npm --prefix ui run build и закоммитьте ui/dist"
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Python и Chromium для сквозной проверки
+        run: |
+          uv sync --locked
+          npx playwright install --with-deps chromium
+
+      - name: Интерфейс в Chromium с настоящим Python за мостом
+        env:
+          JARVIS_UI_E2E: "1"
+        run: uv run pytest -v -rs ../tests/test_ui_e2e.py

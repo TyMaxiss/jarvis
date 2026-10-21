@@ -6,8 +6,8 @@
 самого pywebview: настройки нейросети, ключ в .env, config.yaml, проверка связи с
 OpenAI-совместимым сервером (локальным), команда из быстрого чата.
 
-Нужны Node.js и Playwright с Chromium (PLAYWRIGHT_MODULE — путь к пакету playwright, если
-он установлен глобально).
+Нужны Node.js, зависимости интерфейса (npm ci в папке ui) и Chromium для Playwright
+(npx playwright install chromium).
 """
 
 from __future__ import annotations

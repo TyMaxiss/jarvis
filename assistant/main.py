@@ -24,6 +24,7 @@ from assistant.actions.apps import AppIndex, looks_like_path
 from assistant.actions.executor import ActionExecutor
 from assistant.actions.registry import ActionRegistry
 from assistant.commands.loader import CommandStore, LoadResult
+from assistant.commands.watcher import CommandWatcher
 from assistant.config import ENV_FILE, AppConfig, ConfigError, LlmConfig, load_config
 from assistant.console import ConsoleApp, ConsoleSpeaker
 from assistant.journal import ActionJournal
@@ -512,9 +513,19 @@ def run_console(
         "вкл" if runtime else "выкл",
     )  # fmt: skip
 
+    def reload_commands() -> None:
+        result = core.store.reload()
+        core.pipeline.reload_commands(core.store.commands)
+        out.write(f"Команды перечитаны: {len(result.commands)}\n")
+        for issue in result.issues:
+            out.write(f"! Команда пропущена: {issue}\n")
+
+    watcher = CommandWatcher(core.store.directory, reload_commands)
+    watcher.start()
     try:
         console.run()
     finally:
+        watcher.stop()
         if runtime is not None:
             runtime.close()
         if speech is not None:
