@@ -258,8 +258,8 @@ def test_overlay_page_learns_when_overlay_shows_and_hides(world: SimpleNamespace
     assert world.host.calls == [("show", "overlay"), ("hide", "overlay")]
 
 
-def test_voice_command_result_stays_until_next_phrase(world: SimpleNamespace) -> None:
-    controller, host = world.controller, world.host
+def voice_command(controller: UiController) -> None:
+    """Голосовая команда от «Джарвис» до конца ожидания продолжения."""
     status = VoiceStatus(controller.activity, controller.on_voice_state, controller.overlay.command_done)
     for state in ("listening", "capturing", "recognizing", "processing"):
         status.voice_status(state)
@@ -267,6 +267,20 @@ def test_voice_command_result_stays_until_next_phrase(world: SimpleNamespace) ->
     status.voice_result(controller.pipeline.handle_text("сделай громче", "voice"))
     status.voice_status("listening")  # продолжение без имени
     status.voice_status("idle")
+
+
+def test_overlay_hides_after_voice_command_by_default(world: SimpleNamespace) -> None:
+    # «Иногда после 5 секунд сфера не пропадает, а висит» — по умолчанию итог не держится.
+    controller = world.controller
+    assert controller.config.ui.overlay_keep is False
+    voice_command(controller)
+    assert controller.overlay.visible and controller.overlay._timer is not None  # уйдёт через 3 с
+
+
+def test_voice_command_result_stays_until_next_phrase(world: SimpleNamespace) -> None:
+    controller, host = world.controller, world.host
+    assert controller.save_settings({"ui": {"overlay_keep": True}})["ok"]
+    voice_command(controller)
     assert controller.overlay.visible and host.calls == [("show", "overlay")]  # итог на экране
     assert controller.overlay._timer is None  # и прятать его никто не собирается
     # Выключили в настройках — итог больше не держится: оверлей уйдёт через 3 с.

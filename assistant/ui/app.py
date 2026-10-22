@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -62,6 +63,10 @@ class UiApp:
         debug: инструменты разработчика в окнах (F12).
         dev_url: адрес сервера разработки Vite вместо собранного ui/dist.
         start_hidden: сразу в трей, без главного окна (автозапуск или ui.start_minimized).
+        voice_retries: через сколько секунд снова пробовать запустить голос, если он не запустился
+            (после обновления: первый запуск только что установленной программы, её может
+            придерживать антивирус, а следующий запуск проходит).
+        wait: пауза между попытками (тестам — без ожидания).
     """
 
     def __init__(
@@ -73,9 +78,13 @@ class UiApp:
         debug: bool = False,
         dev_url: str | None = None,
         start_hidden: bool = False,
+        voice_retries: tuple[float, ...] = (),
+        wait: Callable[[float], None] = time.sleep,
     ) -> None:
         self._controller = controller
         self._voice_starter = voice_starter
+        self._voice_retries = voice_retries
+        self._wait = wait
         self._voice_problem = voice_problem
         self._debug = debug
         self._dev_url = dev_url
@@ -144,15 +153,24 @@ class UiApp:
             ).start()
 
     def _start_voice(self, starter: Callable[[Any], VoiceHandle]) -> None:
-        """Загружает голос и сообщает окнам, получилось ли."""
+        """Загружает голос и сообщает окнам, получилось ли (не получилось — ещё попытки voice_retries)."""
         controller = self._controller
-        try:
-            voice = starter(UiOut(controller))
-        except Exception as exc:
-            log.warning("Голос недоступен: %s", exc, exc_info=not isinstance(exc, RuntimeError))
-            controller.voice_failed(f"Голос недоступен: {exc}")
+        retries = list(self._voice_retries)
+        while True:
+            try:
+                voice = starter(UiOut(controller))
+            except Exception as exc:
+                log.warning("Голос недоступен: %s", exc, exc_info=not isinstance(exc, RuntimeError))
+                if not retries:
+                    controller.voice_failed(f"Голос недоступен: {exc}")
+                    return
+                pause = retries.pop(0)
+                log.info("Пробую запустить голос ещё раз через %.0f с", pause)
+                controller.voice_progress(f"Голос не запустился — пробую ещё раз через {pause:.0f} с")
+                self._wait(pause)
+                continue
+            controller.attach_voice(voice)
             return
-        controller.attach_voice(voice)
 
     # --- Трей ------------------------------------------------------------------------
 

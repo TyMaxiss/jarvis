@@ -248,9 +248,10 @@ class Updater:
             if self._log_file is not None:
                 self._log_file.parent.mkdir(parents=True, exist_ok=True)
             with external_launch():
-                # Новую версию запустит установщик со своим окружением: она должна быть
-                # самостоятельным экземпляром, а не дочерним процессом этого exe (RESET_ENV),
-                # и получить PATH без папок, которые добавил себе этот процесс (external_launch).
+                # Новую версию запустит установщик — через Проводник, как с ярлыка (packaging/jarvis.iss),
+                # а если Проводника нет, сам: тогда она должна быть самостоятельным экземпляром,
+                # а не дочерним процессом этого exe (RESET_ENV), и получить PATH без папок, которые
+                # добавил себе этот процесс (external_launch).
                 env = {**os.environ, RESET_ENV: "1", UPDATED_ENV: "1"}
                 subprocess.Popen(arguments, creationflags=_DETACHED_PROCESS, close_fds=True, env=env)
         except OSError as exc:

@@ -55,3 +55,23 @@ def test_run_program_is_like_subprocess_run() -> None:
         frozen.run_program([sys.executable, "-c", "raise SystemExit(3)"], check=True, timeout=30)
     with pytest.raises(subprocess.TimeoutExpired):
         frozen.run_program([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.5)
+
+
+def test_update_mark_is_taken_once(tmp_path: os.PathLike[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    # Отметку оставляет установщик, запуская программу после обновления (packaging/jarvis.iss).
+    from pathlib import Path
+
+    monkeypatch.setattr(frozen, "app_dir", lambda: Path(tmp_path))
+    assert not frozen.take_update_mark()
+    (Path(tmp_path) / frozen.UPDATED_MARK).write_text("2026-10-22", encoding="utf-8")
+    assert frozen.take_update_mark()
+    assert not (Path(tmp_path) / frozen.UPDATED_MARK).exists()
+    assert not frozen.take_update_mark()  # следующий запуск — обычный
+
+
+def test_installer_leaves_the_mark_it_is_named_after() -> None:
+    # Имя отметки в установщике и в программе одно и то же.
+    from tests.conftest import ROOT
+
+    script = (ROOT / "packaging" / "jarvis.iss").read_text(encoding="utf-8-sig")
+    assert "{app}\\" + frozen.UPDATED_MARK in script

@@ -460,3 +460,63 @@ def test_window_urls_carry_view_and_theme() -> None:
     dev = ui_urls("dark", "#7c6cff", "http://localhost:5173")
     assert dev["chat"] == "http://localhost:5173/?view=chat&theme=dark&accent=%237c6cff"
     assert set(urls) == {"main", "overlay", "chat"}
+
+
+# --- Запуск голоса в окнах ---------------------------------------------------------------
+
+
+class VoiceStartWorld:
+    """UiApp с подделкой контроллера: что сообщили окнам о запуске голоса."""
+
+    def __init__(self, failures: int, retries: tuple[float, ...]) -> None:
+        from assistant.ui.app import UiApp
+
+        self.events: list[tuple[str, object]] = []
+        self.waits: list[float] = []
+        self.starts = 0
+        self.failures = failures
+        world = self
+
+        class Controller:
+            def voice_failed(self, problem: str) -> None:
+                world.events.append(("failed", problem))
+
+            def voice_progress(self, text: str, fraction: float | None = None) -> None:
+                world.events.append(("progress", text))
+
+            def attach_voice(self, voice: object) -> None:
+                world.events.append(("attached", voice))
+
+        self.app = UiApp(
+            Controller(), voice_starter=self.start, voice_retries=retries, wait=self.waits.append
+        )  # type: ignore[arg-type]
+
+    def start(self, out: object) -> object:
+        self.starts += 1
+        if self.starts <= self.failures:
+            raise RuntimeError("не удалось загрузить Whisper (Unable to open file)")
+        return "голос"
+
+
+def test_voice_start_is_retried_after_update() -> None:
+    world = VoiceStartWorld(failures=1, retries=(20.0, 60.0))
+    world.app._start_voice(world.start)
+    assert world.starts == 2 and world.waits == [20.0]
+    assert world.events == [
+        ("progress", "Голос не запустился — пробую ещё раз через 20 с"),
+        ("attached", "голос"),
+    ]
+
+
+def test_voice_failure_is_shown_after_last_retry() -> None:
+    world = VoiceStartWorld(failures=5, retries=(20.0, 60.0))
+    world.app._start_voice(world.start)
+    assert world.starts == 3 and world.waits == [20.0, 60.0]
+    assert world.events[-1] == (
+        "failed",
+        "Голос недоступен: не удалось загрузить Whisper (Unable to open file)",
+    )
+
+    world = VoiceStartWorld(failures=1, retries=())  # обычный запуск — без повторов
+    world.app._start_voice(world.start)
+    assert world.starts == 1 and world.events[-1][0] == "failed"

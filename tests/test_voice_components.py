@@ -575,12 +575,13 @@ def fake_cache(folder: Path, model: str = "small") -> Path:
 def fake_whisper_model(
     monkeypatch: pytest.MonkeyPatch, fail_on: str = "", error: str = ""
 ) -> list[tuple[Path, str]]:
-    """Вместо faster_whisper.WhisperModel: запоминает (папка, устройство); на fail_on — error."""
+    """Вместо faster_whisper.WhisperModel: запоминает (папка, устройство); на fail_on — error
+    (any — на любом устройстве)."""
     loaded: list[tuple[Path, str]] = []
 
     def create(path: str, *, device: str, **options: object) -> object:
         loaded.append((Path(path), device))
-        if device == fail_on:
+        if fail_on in (device, "any"):
             raise RuntimeError(error)
         return object()
 
@@ -698,7 +699,7 @@ def test_model_file_that_did_not_open_is_tried_again(monkeypatch: pytest.MonkeyP
         return object()
 
     monkeypatch.setattr("faster_whisper.WhisperModel", create)
-    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSE", 0)
+    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSES", (0, 0, 0))
     no_downloads(monkeypatch)
     stt = WhisperSTT(SttConfig(device="cpu"), tmp_path)
     stt.load()
@@ -710,7 +711,7 @@ def test_model_file_that_never_opens_names_the_reason(
 ) -> None:
     fake_cache(tmp_path)
     fake_whisper_model(monkeypatch, fail_on="cpu", error="Unable to open file 'model.bin'")
-    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSE", 0)
+    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSES", (0, 0, 0))
     monkeypatch.setattr("assistant.stt.whisper_stt.open_problem", lambda folder: "занят другой программой")
     no_downloads(monkeypatch)
     with pytest.raises(RuntimeError, match="'model.bin'; model.bin занят другой программой"):
@@ -813,8 +814,41 @@ def test_offline_download_without_model_bin_is_a_download_error(
     snapshot = fake_cache(tmp_path)
     (snapshot / "model.bin").unlink()
     monkeypatch.setattr("faster_whisper.utils.download_model", lambda model, cache_dir: str(snapshot))
-    with pytest.raises(ModelDownloadError, match=r"model.bin не скачался"):
+    asked: list[str] = []
+
+    def hub_problem(repo: str) -> str:
+        asked.append(repo)
+        return "нет связи с Hugging Face: ConnectError: getaddrinfo failed"
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.hub_problem", hub_problem)
+    # Причину, которую snapshot_download проглотил, видно в сообщении.
+    with pytest.raises(ModelDownloadError, match=r"model.bin не скачался — нет связи с Hugging Face"):
         fetch_model("small", tmp_path, None)
+    assert asked == ["Systran/faster-whisper-small"]
+
+
+def test_failure_names_every_attempt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Так было у пользователя после обновления: видеокарта не запустилась, большая модель на процессоре
+    # тоже, а small не скачалась — в окне была только последняя причина и «Нужен интернет…».
+    fake_cache(tmp_path, "large-v3-turbo")
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "")
+    fake_whisper_model(monkeypatch, fail_on="any", error="CUDA failed with error unknown error")
+
+    def fetch(model: str, folder: Path, out: object) -> str:
+        raise ModelDownloadError(f"не удалось скачать модель Whisper {model} (model.bin не скачался)")
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.fetch_model", fetch)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    with pytest.raises(ModelDownloadError) as caught:
+        stt.load()
+    text = stt.failure(caught.value)
+    assert text.startswith("не удалось скачать модель Whisper small (model.bin не скачался); до этого — ")
+    assert "видеокарта: CUDA failed" in text and "large-v3-turbo на процессоре: CUDA failed" in text
+    assert "Нужен интернет" not in text  # модель на диске была — дело не в первой загрузке
+    first = WhisperSTT(SttConfig(device="cpu"), tmp_path / "empty")
+    message = first.failure(ModelDownloadError("не удалось скачать модель Whisper small (нет сети)"))
+    assert message.endswith("(нет сети). Нужен интернет для первой загрузки")
 
 
 def test_gpu_work_waits_for_program_launches() -> None:

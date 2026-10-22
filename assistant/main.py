@@ -40,7 +40,16 @@ from assistant.config import (
     load_config,
 )
 from assistant.console import ConsoleApp, ConsoleSpeaker
-from assistant.frozen import CONSOLE_EXE, FROZEN, RESET_ENV, UPDATED_ENV, app_dir, cuda_dir, external_launch
+from assistant.frozen import (
+    CONSOLE_EXE,
+    FROZEN,
+    RESET_ENV,
+    UPDATED_ENV,
+    app_dir,
+    cuda_dir,
+    external_launch,
+    take_update_mark,
+)
 from assistant.instance import RESTART_ENV, RESTART_WAIT, SingleInstance
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent
@@ -60,6 +69,10 @@ if TYPE_CHECKING:
     from assistant.voice import StatusSink, VoiceLoop
 
 log = logging.getLogger("assistant")
+
+# Голос не запустился у программы, которую только что запустил установщик после обновления, — ещё
+# попытки через столько секунд: её первый запуск может придерживать антивирус, а следующий проходит.
+VOICE_RETRIES_AFTER_UPDATE = (20.0, 60.0)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -335,7 +348,7 @@ def start_voice(
     from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
     from assistant.audio.wakeword import Dictation, phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
-    from assistant.stt.whisper_stt import ModelDownloadError, WhisperSTT
+    from assistant.stt.whisper_stt import WhisperSTT
     from assistant.voice import STOP_PHRASES, STOP_SOUNDALIKES, VoiceLoop, VoiceSettings
 
     voice = config.voice
@@ -372,13 +385,9 @@ def start_voice(
         )
         try:
             stt.load()
-        except ModelDownloadError as exc:
-            log.warning("%s", exc, exc_info=True)
-            raise VoiceSetupError(f"{exc}. Нужен интернет для первой загрузки") from exc
         except Exception as exc:
-            log.exception("Не удалось загрузить Whisper")
-            gpu = f"; видеокарта: {stt.gpu_error}" if stt.gpu_error else ""
-            raise VoiceSetupError(f"не удалось загрузить Whisper ({exc}{gpu})") from exc
+            log.warning("Whisper не загрузился: %s", exc, exc_info=True)
+            raise VoiceSetupError(stt.failure(exc)) from exc
         if stt.cuda_problem:
             out.write(f"! {stt.cuda_problem}\n")
         where = "видеокарте" if stt.device == "cuda" else "процессоре"
@@ -671,8 +680,10 @@ def main(argv: list[str] | None = None) -> int:
         console_level="DEBUG" if debug else "WARNING",
     )
     # Как запущен: установщиком после обновления, после «Перезапустить» или как обычно.
+    # Отметку установщика убрать в любом случае — поэтому |, а не or.
+    updated = bool(os.environ.pop(UPDATED_ENV, "")) | take_update_mark()
     launch = (
-        "после обновления" if os.environ.pop(UPDATED_ENV, "")
+        "после обновления" if updated
         else "после «Перезапустить»" if os.environ.get(RESTART_ENV) else "обычный"
     )  # fmt: skip
     python, system = platform.python_version(), platform.platform()
@@ -713,7 +724,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         if use_ui:
-            return run_ui(config, args, argv, masker, dry_run, debug, started, instance)
+            return run_ui(config, args, argv, masker, dry_run, debug, started, instance, updated)
         return run_console(config, args, out, masker, dry_run, debug, started, instance)
     finally:
         instance.release()
@@ -797,9 +808,13 @@ def run_console(
 
 def run_ui(
     config: AppConfig, args: argparse.Namespace, argv: list[str] | None, masker: SecretMasker, dry_run: bool,
-    debug: bool, started: float, instance: SingleInstance | None = None,
+    debug: bool, started: float, instance: SingleInstance | None = None, updated: bool = False,
 ) -> int:  # fmt: skip
-    """Режим с окнами: главное окно, оверлей, быстрый чат и значок в трее."""
+    """Режим с окнами: главное окно, оверлей, быстрый чат и значок в трее.
+
+    updated — программу только что запустил установщик после обновления: если голос не запустится,
+    ещё попытки (VOICE_RETRIES_AFTER_UPDATE).
+    """
     from assistant.actions.volume import VolumeController
     from assistant.ui.activity import Activity, UiSpeaker, VoiceStatus
     from assistant.ui.app import UiApp
@@ -878,6 +893,7 @@ def run_ui(
         debug=debug,
         dev_url=os.environ.get("JARVIS_UI_URL"),
         start_hidden=config.ui.start_minimized or args.autostart,
+        voice_retries=VOICE_RETRIES_AFTER_UPDATE if updated else (),
     )
     if instance is not None:
         instance.listen(controller.show_main)

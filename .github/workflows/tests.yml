@@ -243,6 +243,15 @@ jobs:
           }
           if (-not $relaunched) { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 60; throw "после обновления программа не запустилась" }
           "После обновления запущен $($relaunched.Path)"
+          # Запущенная после обновления программа знает об этом (отметка установщика) и убирает отметку.
+          $log = "$dir\logs\assistant.log"
+          $marked = $false
+          for ($i = 0; $i -lt 30 -and -not $marked; $i++) {
+            Start-Sleep 1
+            $marked = (Test-Path $log) -and (Select-String $log -Pattern 'Запуск \(после обновления\)' -Quiet)
+          }
+          if (-not $marked) { Get-Content $log -Tail 40 -ErrorAction SilentlyContinue; throw "в логе нет «Запуск (после обновления)»" }
+          if (Test-Path "$dir\updated.mark") { throw "отметка обновления осталась" }
           $relaunched | Stop-Process
 
           # Удаление: тихое оставляет настройки; ярлык и запись в «Приложениях» уходят.

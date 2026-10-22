@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import logging
 import os
 import subprocess
 import sys
@@ -21,10 +22,13 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
+log = logging.getLogger(__name__)
+
 FROZEN = bool(getattr(sys, "frozen", False))
 CONSOLE_EXE = "JarvisConsole.exe"  # та же сборка с окном консоли (Jarvis.exe — без него)
 RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"  # новый экземпляр exe — не дочерний процесс этого
 UPDATED_ENV = "JARVIS_UPDATED"  # запуск установщиком после обновления (для лога)
+UPDATED_MARK = "updated.mark"  # отметка установщика: программу после обновления запустил он
 CUDA_DIR = "cuda"  # DLL CUDA для Whisper на видеокарте — рядом с программой
 SILERO_DIR = "silero"  # PyTorch для голоса Silero — рядом с программой
 # Поиск DLL и PATH — общие для всего процесса: запуски из разных потоков идут по очереди, а пока
@@ -37,6 +41,19 @@ def app_dir() -> Path:
     if FROZEN:
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
+
+
+def take_update_mark() -> bool:
+    """Программу запустил установщик после обновления (packaging/jarvis.iss оставляет отметку
+    в её папке): отметка убирается — следующий запуск уже обычный."""
+    mark = app_dir() / UPDATED_MARK
+    try:
+        mark.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        log.debug("Не удалось убрать %s", mark, exc_info=True)
+    return True
 
 
 def cuda_dir() -> Path:

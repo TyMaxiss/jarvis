@@ -274,7 +274,7 @@ function makeState(): AppState {
       accent: '#7c6cff',
       overlay: true,
       overlay_style: params.get('style') === 'orb' ? 'orb' : 'classic',
-      overlay_keep: true,
+      overlay_keep: false,
       quick_chat_key: 'ctrl+alt+enter',
     },
   }

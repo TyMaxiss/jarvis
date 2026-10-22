@@ -53,7 +53,9 @@ WHISPER_FILES = ("config.json", "preprocessor_config.json", "model.bin", "tokeni
 _PAD_SECONDS = 0.3
 # Файл модели есть, но не открылся (его держит другая программа, например антивирус): через
 # столько секунд — ещё одна попытка.
-OPEN_RETRY_PAUSE = 3.0
+# Паузы перед новыми попытками открыть файл модели, который не открылся (с): сразу после обновления
+# его может долго проверять антивирус.
+OPEN_RETRY_PAUSES = (3.0, 6.0, 12.0)
 
 
 def is_hallucination(text: str) -> bool:
@@ -227,8 +229,8 @@ def whisper_download_size(repo: str) -> int:
         from huggingface_hub import HfApi
 
         info = HfApi().model_info(repo, files_metadata=True, timeout=10)
-    except Exception:
-        log.debug("Размер модели %s неизвестен", repo, exc_info=True)
+    except Exception as exc:
+        log.info("Размер модели %s неизвестен: %s: %s", repo, type(exc).__name__, exc)
         return 0
     files = info.siblings or []
     return sum(f.size or 0 for f in files if any(fnmatch(f.rfilename, pattern) for pattern in WHISPER_FILES))
@@ -312,10 +314,32 @@ def fetch_model(model: str, download_dir: Path, out: Any) -> str:
             path = str(download_model(model, cache_dir=str(download_dir)))
     except Exception as exc:
         raise ModelDownloadError(f"не удалось скачать модель Whisper {model} ({exc})") from exc
-    # Без связи с Hugging Face snapshot_download не падает, а отдаёт то, что есть на диске.
+    # Без связи с Hugging Face snapshot_download не падает, а отдаёт то, что есть на диске, и причину
+    # проглатывает — её узнаёт hub_problem.
     if not os.path.isfile(os.path.join(path, "model.bin")):
-        raise ModelDownloadError(f"не удалось скачать модель Whisper {model} (model.bin не скачался)")
+        problem = hub_problem(whisper_repo(model))
+        log.warning(
+            "Модель Whisper %s не скачалась: %s. Папка модели: %s",
+            model, problem or "Hugging Face отвечает, причина неизвестна", model_files(path),
+        )  # fmt: skip
+        detail = f"model.bin не скачался — {problem}" if problem else "model.bin не скачался"
+        raise ModelDownloadError(f"не удалось скачать модель Whisper {model} ({detail})")
     return path
+
+
+def hub_problem(repo: str) -> str:
+    """Почему Hugging Face не отвечает ('' — отвечает или репозиторий неизвестен)."""
+    if not repo:
+        return ""
+    try:
+        from huggingface_hub import HfApi, constants
+
+        if constants.HF_HUB_OFFLINE:
+            return "загрузки с Hugging Face выключены (HF_HUB_OFFLINE)"
+        HfApi().repo_info(repo, timeout=15)
+    except Exception as exc:
+        return f"нет связи с Hugging Face: {type(exc).__name__}: {exc}"[:300]
+    return ""
 
 
 def fetch_cuda_libraries(fetch: Callable[[], None]) -> str:
@@ -381,6 +405,7 @@ class WhisperSTT:
         self.device = ""
         self.cuda_problem = ""  # почему не на видеокарте, хотя она есть ('' — всё в порядке)
         self.gpu_error = ""  # то же коротко — для сообщения, если не загрузился и процессор
+        self.attempts: list[str] = []  # что не вышло по дороге — для сообщения, если не вышло ничего
 
     def load(self) -> None:
         """Загружает модель: видеокарта, а если она не запускается — процессор (cuda_problem — почему).
@@ -391,16 +416,19 @@ class WhisperSTT:
         register_cuda_dlls()
         model, device, compute = resolve_settings(self._config, cuda_available())
         self.cuda_problem = self.gpu_error = ""
+        self.attempts = []
         gpu_model = resolve_settings(self._config.model_copy(update={"device": "cuda"}), True)[0]
         if device == "cpu":
             chosen = self._config.device == "cpu"
             if not chosen and (driver := nvidia_driver_status()):
                 log.warning("CTranslate2 не видит видеокарту (%s) — распознаю на процессоре", driver)
+                self.attempts.append(f"видеокарта не видна ({driver})")
             self._load_on_cpu(model, gpu_model, compute, prefer_on_disk=not chosen)
             return
         self.gpu_error = self._gpu_problem(model, compute)
         if not self.gpu_error:
             return
+        self.attempts.append(f"видеокарта: {self.gpu_error}")
         cpu_model = resolve_settings(self._config.model_copy(update={"device": "cpu"}), False)[0]
         self._load_on_cpu(cpu_model, model, "int8", prefer_on_disk=True)
 
@@ -449,6 +477,7 @@ class WhisperSTT:
             except Exception as exc:
                 if index == len(candidates) - 1:
                     raise
+                self.attempts.append(f"{name} на процессоре: {exc}")
                 log.warning(
                     "Whisper %s на процессоре не загрузился (%s) — пробую %s",
                     name, exc, candidates[index + 1], exc_info=True,
@@ -473,22 +502,43 @@ class WhisperSTT:
         except RuntimeError as exc:
             if "Unable to open file" not in str(exc):
                 raise
-            # Файл модели есть, но не открылся — обычно его в этот миг держит другая программа
-            # (антивирус проверяет): ещё одна попытка чуть позже, а в лог — что лежит в папке.
-            log.warning(
-                "Whisper %s: %s — пробую ещё раз через %.0f с. Папка модели: %s",
-                model, exc, OPEN_RETRY_PAUSE, model_files(path),
-            )  # fmt: skip
-            time.sleep(OPEN_RETRY_PAUSE)
-            try:
-                self._model = WhisperModel(path, **options)
-            except RuntimeError as again:
-                problem = open_problem(path)
-                raise RuntimeError(f"{again}; model.bin {problem}" if problem else str(again)) from again
+            self._model = self._open_again(model, path, options, exc)
         self.model_name, self.device = model, device
         log.info(
             "Whisper %s (%s, %s) загружен за %.1f с", model, device, compute, time.perf_counter() - started
         )
+
+    @staticmethod
+    def _open_again(model: str, path: str, options: dict[str, Any], error: RuntimeError) -> Any:
+        """Файл модели есть, но не открылся — обычно его в этот миг держит другая программа (антивирус
+        проверяет только что обновлённую программу): ещё несколько попыток с растущими паузами,
+        а в лог — что лежит в папке.
+        """
+        from faster_whisper import WhisperModel
+
+        for pause in OPEN_RETRY_PAUSES:
+            log.warning(
+                "Whisper %s: %s — пробую ещё раз через %.0f с. Папка модели: %s",
+                model, error, pause, model_files(path),
+            )  # fmt: skip
+            time.sleep(pause)
+            try:
+                return WhisperModel(path, **options)
+            except RuntimeError as again:
+                if "Unable to open file" not in str(again):
+                    raise
+                error = again
+        problem = open_problem(path)
+        raise RuntimeError(f"{error}; model.bin {problem}" if problem else str(error)) from error
+
+    def failure(self, error: BaseException) -> str:
+        """Почему Whisper не загрузился — для окна: последняя ошибка и всё, что не вышло до неё
+        (видеокарта, другие модели на процессоре)."""
+        download = isinstance(error, ModelDownloadError)
+        text = str(error) if download else f"не удалось загрузить Whisper ({error})"
+        if self.attempts:
+            return f"{text}; до этого — {'; '.join(self.attempts)}"
+        return f"{text}. Нужен интернет для первой загрузки" if download else text
 
     def _warm_up(self) -> None:
         segments, _ = self._model.transcribe(np.zeros(16_000, dtype=np.float32), language="ru", beam_size=1)
