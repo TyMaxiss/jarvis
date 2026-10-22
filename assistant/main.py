@@ -75,6 +75,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--download-cuda", action="store_true", help="скачать библиотеки CUDA для Whisper в папку cuda"
     )
+    parser.add_argument(
+        "--download-silero",
+        action="store_true",
+        help="скачать голос Silero (PyTorch и модель) и проверить его",
+    )
+    parser.add_argument(
+        "--test-voice",
+        choices=("piper", "silero", "edge", "sapi"),
+        help="озвучить пробную фразу этим голосом (без воспроизведения) и выйти",
+    )
+    # Процесс синтеза Silero запускается из __main__ раньше main(); здесь — чтобы ключ был известен.
+    parser.add_argument("--silero-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--list-devices", action="store_true", help="показать микрофоны и выйти")
     parser.add_argument(
         "--self-check", action="store_true", help="проверить, что загружаются все части программы, и выйти"
@@ -143,54 +155,104 @@ class VoiceRuntime:
 
 
 def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
-    """Озвучка: Piper, при ошибке — голоса Windows (SAPI); None — озвучки нет.
+    """Озвучка: выбранный голос и запасной; None — озвучки нет.
 
-    Голоса Piper ещё нет (первый запуск) — пока говорит SAPI, а голос скачивает fetch_piper_voice.
+    Запасной — Piper, если его голос скачан, иначе голоса Windows (SAPI). Если выбранного
+    голоса ещё нет (первый запуск: Piper или Silero не скачаны), пока говорит запасной,
+    а выбранный скачивает fetch_voice при запуске голоса.
     """
-    from assistant.models import piper_voice_ready
+    from assistant.models import piper_voice_ready, silero_runtime
+    from assistant.tts.edge_tts import EdgeTTS
     from assistant.tts.piper_tts import PiperTTS
     from assistant.tts.player import SoundDevicePlayer
     from assistant.tts.sapi_tts import SapiTTS
+    from assistant.tts.silero_tts import silero_engine
 
-    sapi = SapiTTS(config.tts.sapi_voice, config.tts.rate) if sys.platform == "win32" else None
-    primary: TTSEngine | None = sapi
-    if config.tts.engine == "piper":
-        voice = config.resolve(config.tts.piper_voice)
-        if not piper_voice_ready(voice) and sapi is not None:
+    tts = config.tts
+    sapi = SapiTTS(tts.sapi_voice, tts.rate) if sys.platform == "win32" else None
+    piper: TTSEngine | None = None
+    voice = config.resolve(tts.piper_voice)
+    if tts.engine != "sapi" and (piper_voice_ready(voice) or (tts.engine == "piper" and sapi is None)):
+        try:
+            piper = PiperTTS(voice, tts.rate)
+        except Exception as exc:
+            if not isinstance(exc, TTSError):
+                log.exception("Не удалось загрузить голос Piper")
+            out.write(f"! {exc}\n")
+            if sapi is not None and tts.engine == "piper":
+                out.write("  Пока буду говорить голосом Windows (SAPI).\n")
+    chosen: TTSEngine | None = None
+    if tts.engine == "piper":
+        chosen = piper
+        if piper is None and not piper_voice_ready(voice):
             out.write("Голос Piper скачаю при запуске голоса, а пока говорю голосом Windows (SAPI).\n")
+    elif tts.engine == "edge":
+        chosen = EdgeTTS(tts.edge_voice, tts.rate)
+    elif tts.engine == "silero":
+        if silero_runtime()[0] and config.resolve(tts.silero_model).is_file():
+            silero = silero_engine(config)
+            silero.start()  # модель грузится в фоне, пока голос не нужен
+            chosen = silero
         else:
-            try:
-                primary = PiperTTS(voice, config.tts.rate)
-            except Exception as exc:
-                if not isinstance(exc, TTSError):
-                    log.exception("Не удалось загрузить голос Piper")
-                out.write(f"! {exc}\n")
-                if sapi is not None:
-                    out.write("  Пока буду говорить голосом Windows (SAPI).\n")
-    if primary is None:
+            out.write("Голос Silero скачаю при запуске голоса, а пока говорю запасным голосом.\n")
+    else:
+        chosen = sapi
+    engines = list(dict.fromkeys(e for e in (chosen, piper, sapi) if e is not None))
+    if not engines:
         out.write("! Озвучка недоступна — ответы будут только в консоли.\n")
         return None
-    fallback = sapi if primary is not sapi else None
-    return SpeechQueue(primary, SoundDevicePlayer(), fallback, config.tts.volume)
+    fallback = engines[1] if len(engines) > 1 else None
+    return SpeechQueue(engines[0], SoundDevicePlayer(), fallback, tts.volume)
 
 
-def fetch_piper_voice(config: AppConfig, speech: SpeechQueue | None, out: Any) -> None:
-    """Голоса Piper ещё нет (первый запуск): скачивает его и переключает озвучку на него."""
-    from assistant.models import ensure_piper, piper_voice_ready
+def fetch_voice(config: AppConfig, speech: SpeechQueue | None, out: Any) -> None:
+    """Выбранного голоса ещё нет (первый запуск): скачивает его и переключает озвучку на него.
+
+    Piper — голос (60 МБ), Silero — PyTorch и модель (около 300 МБ). Пока они скачиваются,
+    ассистент говорит запасным голосом.
+    """
+    from assistant.models import ensure_piper, ensure_silero, piper_voice_ready
     from assistant.tts.piper_tts import PiperTTS
+    from assistant.tts.silero_tts import SileroTTS, silero_engine
 
-    voice = config.resolve(config.tts.piper_voice)
-    if speech is None or config.tts.engine != "piper" or piper_voice_ready(voice):
+    tts = config.tts
+    if speech is None:
         return
     try:
-        ensure_piper(voice, out)
-        speech.switch(PiperTTS(voice, config.tts.rate))
+        if tts.engine == "piper" and not piper_voice_ready(config.resolve(tts.piper_voice)):
+            ensure_piper(config.resolve(tts.piper_voice), out)
+            speech.switch(PiperTTS(config.resolve(tts.piper_voice), tts.rate))
+        elif tts.engine == "silero" and not isinstance(speech.engine, SileroTTS):
+            ensure_silero(config.resolve(tts.silero_model), out)
+            silero = silero_engine(config)
+            silero.start()
+            speech.switch(silero)
     except Exception as exc:
-        log.warning("Не удалось скачать голос Piper", exc_info=True)
+        name = "голос Silero" if tts.engine == "silero" else "голос Piper"
+        log.warning("Не удалось скачать %s", name, exc_info=True)
         out.write(
-            f"! Не удалось скачать голос Piper ({exc}). Пока говорю голосом Windows, "
+            f"! Не удалось скачать {name} ({exc}). Пока говорю запасным голосом, "
             "скачать попробую при следующем запуске.\n"
         )
+
+
+def test_voice(config: AppConfig, engine: str, out: Any) -> int:
+    """--test-voice: синтезирует пробную фразу выбранным голосом и пишет, сколько это заняло."""
+    tts = config.tts.model_copy(update={"engine": engine})
+    speech = create_speech(config.model_copy(update={"tts": tts}), out)
+    if speech is None:
+        return 1
+    started = time.perf_counter()
+    try:
+        audio, rate = speech.engine.synthesize("Проверка голоса: сейчас 14:35, 21 октября, громкость 50%.")
+    except Exception as exc:
+        out.write(f"{speech.engine.name}: голос не работает — {exc}\n")
+        return 1
+    finally:
+        speech.close()
+    seconds, spent = len(audio) / rate, time.perf_counter() - started
+    out.write(f"{speech.engine.name}: {seconds:.1f} с речи за {spent:.1f} с\n")
+    return 0 if speech.engine.name == engine and seconds > 1 else 1
 
 
 def load_wake_model(path: Path, out: Any) -> Any:
@@ -613,6 +675,12 @@ def main(argv: list[str] | None = None) -> int:
         from assistant.models import download_cuda
 
         return 0 if download_cuda(out) else 1
+    if args.download_silero:
+        from assistant.models import download_silero
+
+        return 0 if download_silero(config, out) else 1
+    if args.test_voice:
+        return test_voice(config, args.test_voice, out)
     if args.self_check:
         from assistant.selfcheck import run_self_check
 
@@ -664,7 +732,7 @@ def run_console(
 
     runtime = None
     if voice_wanted:
-        fetch_piper_voice(config, speech, out)
+        fetch_voice(config, speech, out)
         try:
             runtime = start_voice(
                 config, core.pipeline, core.normalizer, console, speech, core.store, core.index, out
@@ -773,7 +841,7 @@ def run_ui(
         return core.pipeline.handle_text(text, "voice", confirmer.for_source("voice"))
 
     def voice_starter(progress: Any) -> VoiceRuntime:
-        fetch_piper_voice(config, speech, progress)
+        fetch_voice(config, speech, progress)
         return start_voice(
             config, core.pipeline, core.normalizer, status, speech, core.store, core.index, progress,
             handle_text=handle_voice, hotkeys_paused=hotkeys_paused,

@@ -14,6 +14,7 @@ from assistant.config import AppConfig
 from assistant.frozen import cuda_dir
 from assistant.logging_setup import SecretMasker
 from assistant.main import build_masker, describe_llm
+from assistant.tts.silero_tts import SileroTTS
 
 
 def test_keys_of_all_profiles_are_masked(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,9 +53,11 @@ class FakeSpeech:
 
     def __init__(self) -> None:
         self.engines: list[Any] = []
+        self.engine: Any = FakeTts()
 
     def switch(self, engine: Any) -> None:
         self.engines.append(engine)
+        self.engine = engine
 
 
 class FakeTts:
@@ -89,9 +92,9 @@ def test_piper_voice_is_downloaded_and_replaces_windows_voice(
     monkeypatch.setattr("assistant.models.ensure_piper", download)
     monkeypatch.setattr("assistant.tts.piper_tts.PiperTTS", lambda path, rate: ("piper", path, rate))
     speech = FakeSpeech()
-    main.fetch_piper_voice(config, speech, io.StringIO())  # type: ignore[arg-type]
+    main.fetch_voice(config, speech, io.StringIO())  # type: ignore[arg-type]
     assert speech.engines == [("piper", voice, 1.0)]
-    main.fetch_piper_voice(config, speech, io.StringIO())  # type: ignore[arg-type]
+    main.fetch_voice(config, speech, io.StringIO())  # type: ignore[arg-type]
     assert len(speech.engines) == 1  # уже скачан
 
 
@@ -101,12 +104,12 @@ def test_piper_download_failure_keeps_windows_voice(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr("assistant.models.ensure_piper", offline)
     speech, out = FakeSpeech(), io.StringIO()
-    main.fetch_piper_voice(piper_config(tmp_path), speech, out)  # type: ignore[arg-type]
+    main.fetch_voice(piper_config(tmp_path), speech, out)  # type: ignore[arg-type]
     assert speech.engines == []
     assert out.getvalue().startswith(
-        "! Не удалось скачать голос Piper (нет сети). Пока говорю голосом Windows"
+        "! Не удалось скачать голос Piper (нет сети). Пока говорю запасным голосом"
     )
-    main.fetch_piper_voice(piper_config(tmp_path, engine="sapi"), speech, out)  # type: ignore[arg-type]
+    main.fetch_voice(piper_config(tmp_path, engine="sapi"), speech, out)  # type: ignore[arg-type]
     assert out.getvalue().count("!") == 1  # голос Windows выбран сам — Piper не нужен
 
 
@@ -157,3 +160,94 @@ def test_only_exe_downloads_cuda_libraries(monkeypatch: pytest.MonkeyPatch) -> N
     assert fetch is not None
     fetch()
     assert targets == [cuda_dir()]
+
+
+def tts_config(tmp_path: Path, engine: str, **tts: Any) -> AppConfig:
+    voice = tmp_path / "piper" / "ru_RU-dmitri-medium.onnx"
+    model = tmp_path / "silero" / "v5_6_ru.pt"
+    return AppConfig.model_validate(
+        {"tts": {"engine": engine, "piper_voice": str(voice), "silero_model": str(model), **tts}}
+    )
+
+
+@pytest.fixture
+def windows_voices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Как в Windows: голоса SAPI есть (подделка), проигрыватель — подделка."""
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    monkeypatch.setattr("assistant.tts.sapi_tts.SapiTTS", FakeTts)
+    monkeypatch.setattr("assistant.tts.player.SoundDevicePlayer", FakePlayer)
+
+
+def test_edge_voice_with_windows_voice_as_fallback(tmp_path: Path, windows_voices: None) -> None:
+    config = tts_config(tmp_path, "edge", edge_voice="ru-RU-SvetlanaNeural")
+    speech = main.create_speech(config, io.StringIO())
+    assert speech is not None
+    assert (speech.engine.name, speech.engine.voice) == ("edge", "ru-RU-SvetlanaNeural")  # type: ignore[attr-defined]
+    assert speech._fallback is not None and speech._fallback.name == "sapi"
+    speech.close()
+
+
+def test_silero_is_downloaded_then_replaces_fallback_voice(
+    tmp_path: Path, windows_voices: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tts_config(tmp_path, "silero")
+    out = io.StringIO()
+    speech = main.create_speech(config, out)
+    assert speech is not None and speech.engine.name == "sapi"
+    assert "Голос Silero скачаю при запуске голоса" in out.getvalue()
+
+    downloads: list[Path] = []
+    silero = SileroTTS(config.resolve(config.tts.silero_model), "aidar", command=["unused"])
+    started: list[bool] = []
+    monkeypatch.setattr(silero, "start", lambda: started.append(True))
+    monkeypatch.setattr("assistant.models.ensure_silero", lambda model, out: downloads.append(model))
+    monkeypatch.setattr("assistant.tts.silero_tts.silero_engine", lambda config: silero)
+    main.fetch_voice(config, speech, out)
+    assert downloads == [config.resolve(config.tts.silero_model)] and started == [True]
+    assert speech.engine is silero and speech._fallback is not None and speech._fallback.name == "sapi"
+    main.fetch_voice(config, speech, out)  # уже Silero — ничего не скачивается
+    assert len(downloads) == 1
+    speech.close()
+
+
+def test_ready_silero_starts_with_assistant(
+    tmp_path: Path, windows_voices: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tts_config(tmp_path, "silero")
+    model = config.resolve(config.tts.silero_model)
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"model")
+    silero = SileroTTS(model, "aidar", command=["unused"])
+    started: list[bool] = []
+    monkeypatch.setattr(silero, "start", lambda: started.append(True))
+    monkeypatch.setattr("assistant.models.silero_runtime", lambda: (True, None))
+    monkeypatch.setattr("assistant.tts.silero_tts.silero_engine", lambda config: silero)
+    speech = main.create_speech(config, io.StringIO())
+    assert speech is not None and speech.engine is silero and started == [True]
+    speech.close()
+
+
+def test_voice_check_reports_seconds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import numpy as np
+
+    class Engine:
+        def __init__(self, name: str, seconds: float) -> None:
+            self.name, self.seconds = name, seconds
+
+        def synthesize(self, text: str) -> tuple[Any, int]:
+            return np.zeros(int(self.seconds * 100)), 100
+
+    class Speech:
+        def __init__(self, name: str, seconds: float) -> None:
+            self.engine = Engine(name, seconds)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(main, "create_speech", lambda config, out: Speech("edge", 2.5))
+    out = io.StringIO()
+    assert main.test_voice(AppConfig(), "edge", out) == 0
+    assert out.getvalue().startswith("edge: 2.5 с речи за ")
+    # Выбранный голос не заработал — говорил запасной: проверка не пройдена.
+    monkeypatch.setattr(main, "create_speech", lambda config, out: Speech("sapi", 2.5))
+    assert main.test_voice(AppConfig(), "edge", io.StringIO()) == 1

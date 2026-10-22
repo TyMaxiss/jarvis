@@ -732,26 +732,43 @@ class UiController:
         try:
             rate = float(tts.get("rate") or 1.0)
             volume = float(tts.get("volume") or 1.0)
-            if tts.get("engine") == "sapi":
-                from assistant.tts.sapi_tts import SapiTTS
-
-                engine: Any = SapiTTS(str(tts.get("sapi_voice") or ""), rate)
-            else:
-                from assistant.tts.piper_tts import PiperTTS
-
-                path = self.config.resolve(str(tts.get("piper_voice") or ""))
-                if path.suffix != ".onnx" or not path.exists():
-                    raise ValueError(f"нет файла голоса {path.name}")
-                engine = PiperTTS(path, rate)
-            audio, samplerate = engine.synthesize(
-                PREVIEW_TEXT.format(name=self.config.general.name.capitalize())
-            )
+            text = PREVIEW_TEXT.format(name=self.config.general.name.capitalize())
+            audio, samplerate = self._preview_engine(tts, rate, text)
         except Exception as exc:
             log.warning("Не удалось озвучить пример: %s", exc)
             self.bus.emit("toast", {"kind": "error", "text": f"Не удалось озвучить: {exc}"})
             return
         # Очередь сама умножит на свою громкость — пример звучит с выбранной.
         self.speech.play_sound(audio * (volume / max(self.speech.volume, 0.01)), samplerate)
+
+    def _preview_engine(self, tts: dict[str, Any], rate: float, text: str) -> tuple[Any, int]:
+        """Звук примера выбранным в настройках голосом (ещё не сохранённым)."""
+        engine = tts.get("engine")
+        if engine == "sapi":
+            from assistant.tts.sapi_tts import SapiTTS
+
+            return SapiTTS(str(tts.get("sapi_voice") or ""), rate).synthesize(text)
+        if engine == "edge":
+            from assistant.tts.edge_tts import EdgeTTS
+
+            return EdgeTTS(str(tts.get("edge_voice") or ""), rate).synthesize(text)
+        if engine == "silero":
+            from assistant.tts.silero_tts import SileroTTS
+
+            silero = self.speech.engine if self.speech is not None else None
+            if not isinstance(silero, SileroTTS):
+                # Процесс Silero запускается вместе с ассистентом: до перезапуска его ещё нет.
+                raise ValueError(
+                    "Silero заработает после перезапуска ассистента (при первом запуске "
+                    "скачается около 300 МБ)"
+                )
+            return silero.speak(text, str(tts.get("silero_speaker") or silero.speaker), rate)
+        from assistant.tts.piper_tts import PiperTTS
+
+        path = self.config.resolve(str(tts.get("piper_voice") or ""))
+        if path.suffix != ".onnx" or not path.exists():
+            raise ValueError(f"нет файла голоса {path.name}")
+        return PiperTTS(path, rate).synthesize(text)
 
     # --- Окна ------------------------------------------------------------------------
 

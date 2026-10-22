@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { HotkeyInput, LevelMeter, Segmented, Swatches } from '../components/controls'
 import { Button, Card, CardTitle, Field, Select, Slider, TextInput, Toggle } from '../components/ui'
 import { call } from '../lib/bridge'
-import type { SaveResult, Settings, SettingsPatch } from '../lib/types'
+import type { SaveResult, Settings, SettingsPatch, TtsEngine } from '../lib/types'
 import { LlmSection } from './LlmSection'
 
 type Section = 'general' | 'voice' | 'stt' | 'tts' | 'ui'
@@ -237,26 +237,45 @@ export function SettingsPage() {
 
       <Card>
         <CardTitle icon={<Volume2 size={16} />} title="Голос ассистента" />
-        <Field label="Синтез речи">
-          <Segmented
+        <Field label="Синтез речи" hint={engineHint(tts.engine, settings.choices.silero_ready)}>
+          <Segmented<TtsEngine>
             label="Синтез речи"
             value={tts.engine}
             options={[
               { value: 'piper', title: 'Piper' },
+              { value: 'silero', title: 'Silero' },
+              { value: 'edge', title: 'Microsoft' },
               { value: 'sapi', title: 'Windows' },
             ]}
             onChange={(engine) => update('tts', { engine })}
           />
         </Field>
         <Field label="Голос">
-          {tts.engine === 'piper' ? (
+          {tts.engine === 'piper' && (
             <Select
               label="Голос Piper"
               value={tts.piper_voice}
               options={settings.choices.piper_voices}
               onChange={(piper_voice) => update('tts', { piper_voice })}
             />
-          ) : (
+          )}
+          {tts.engine === 'silero' && (
+            <Select
+              label="Голос Silero"
+              value={tts.silero_speaker}
+              options={settings.choices.silero_speakers}
+              onChange={(silero_speaker) => update('tts', { silero_speaker })}
+            />
+          )}
+          {tts.engine === 'edge' && (
+            <Select
+              label="Голос Microsoft"
+              value={tts.edge_voice}
+              options={settings.choices.edge_voices}
+              onChange={(edge_voice) => update('tts', { edge_voice })}
+            />
+          )}
+          {tts.engine === 'sapi' && (
             <Select
               label="Голос Windows"
               value={tts.sapi_voice}
@@ -381,4 +400,20 @@ function NameInput({ value, onSave }: { value: string; onSave: (value: string) =
       }}
     />
   )
+}
+
+/** Что нужно знать о движке озвучки: офлайн ли он и что скачивается. */
+export function engineHint(engine: TtsEngine, sileroReady: boolean): string {
+  switch (engine) {
+    case 'piper':
+      return 'Офлайн и быстро'
+    case 'silero':
+      return sileroReady
+        ? 'Офлайн, нейросеть. Только для некоммерческого использования'
+        : 'Офлайн, нейросеть. После перезапуска скачается около 300 МБ. Только для некоммерческого использования'
+    case 'edge':
+      return 'Голоса Microsoft через интернет. Без интернета говорит запасной голос'
+    case 'sapi':
+      return 'Голоса, установленные в Windows'
+  }
 }

@@ -168,8 +168,15 @@ class SttConfig(_Section):
 class TtsConfig(_Section):
     """Озвучка ответов."""
 
-    engine: Literal["piper", "sapi"] = "piper"
+    engine: Literal["piper", "silero", "edge", "sapi"] = Field(
+        "piper", description="piper, silero (офлайн, нейросеть), edge (онлайн, Microsoft) или sapi (Windows)"
+    )
     piper_voice: Path = Path("models/piper/ru_RU-dmitri-medium.onnx")
+    silero_model: Path = Path("models/silero/v5_6_ru.pt")
+    silero_speaker: Literal["aidar", "eugene", "baya", "kseniya", "xenia"] = "aidar"
+    edge_voice: str = Field(
+        "ru-RU-DmitryNeural", pattern=r"^[a-z]{2}-[A-Z]{2}-\w+Neural$", description="Голос Microsoft"
+    )
     sapi_voice: str = Field("", description="Часть названия голоса SAPI; пусто — первый русский")
     rate: float = Field(1.0, ge=0.5, le=2.0, description="Скорость речи")
     volume: float = Field(1.0, ge=0.1, le=2.0)

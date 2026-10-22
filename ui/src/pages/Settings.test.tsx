@@ -6,7 +6,7 @@ import type { AssistantApi } from '../lib/types'
 const { call } = vi.hoisted(() => ({ call: vi.fn() }))
 vi.mock('../lib/bridge', () => ({ call, onEvent: () => () => {} }))
 
-import { SettingsPage } from './Settings'
+import { SettingsPage, engineHint } from './Settings'
 
 let api: AssistantApi
 
@@ -46,5 +46,27 @@ describe('SettingsPage', () => {
     }
     await renderPage()
     expect(screen.queryByRole('switch', { name: 'Запускать вместе с Windows' })).toBeNull()
+  })
+
+  it('Silero: свой список голосов, подсказка про загрузку, «Прослушать» с выбранным голосом', async () => {
+    await renderPage()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Silero' }))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect(call).toHaveBeenCalledWith('save_settings', { tts: { engine: 'silero' } })
+    expect(screen.getByText(/скачается около 300 МБ/)).toBeTruthy()
+    const voice = screen.getByRole('combobox', { name: 'Голос Silero' }) as HTMLSelectElement
+    expect(voice.value).toBe('aidar')
+    fireEvent.click(screen.getByRole('button', { name: 'Прослушать' }))
+    expect(call).toHaveBeenCalledWith('preview_voice', expect.objectContaining({ engine: 'silero', silero_speaker: 'aidar' }))
+  })
+})
+
+describe('engineHint', () => {
+  it('говорит, что скачивается и нужен ли интернет', () => {
+    expect(engineHint('silero', true)).not.toMatch(/скачается/)
+    expect(engineHint('edge', false)).toMatch(/через интернет/)
+    expect(engineHint('piper', false)).toMatch(/Офлайн/)
   })
 })

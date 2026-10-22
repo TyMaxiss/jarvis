@@ -1,5 +1,5 @@
 """Скачивание того, что нужно голосу: модель Vosk (обращение по имени), голос Piper, модель
-Whisper и — для Whisper на видеокарте NVIDIA — библиотеки CUDA.
+Whisper, библиотеки CUDA для Whisper на видеокарте NVIDIA и PyTorch с моделью для голоса Silero.
 
 Недостающее скачивается само при запуске голоса; всё сразу — --download-models.
 Скачанное повторно не загружается, а прерванная загрузка продолжается с того же места.
@@ -8,19 +8,22 @@ Whisper и — для Whisper на видеокарте NVIDIA — библио�
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import logging
 import os
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from assistant.config import AppConfig
-from assistant.frozen import FROZEN, cuda_dir
+from assistant.frozen import FROZEN, cuda_dir, silero_dir
 from assistant.progress import Progress, megabytes
 from assistant.stt.whisper_stt import (
     cuda_available,
@@ -35,7 +38,10 @@ log = logging.getLogger(__name__)
 
 VOSK_BASE_URL = "https://alphacephei.com/vosk/models/"
 PYPI_FILES = "https://files.pythonhosted.org/packages/"
-CUDA_INSTALLED = "wheels.txt"  # в папке cuda: из каких колёс там DLL
+INSTALLED = "wheels.txt"  # в папке cuda и silero/lib: какие колёса туда уже разложены
+SILERO_MODEL_URL = "https://models.silero.ai/models/tts/ru/"
+# Модели Silero, которые программа умеет скачать: имя файла → sha256 ('' — без проверки).
+SILERO_MODELS = {"v5_6_ru.pt": ""}
 _CHUNK = 1 << 20
 _TIMEOUT = 60  # секунд ожидания ответа сервера
 
@@ -85,6 +91,86 @@ CUDA_WHEELS = (
         "nvidia_cudnn_cu12-9.27.0.42-py3-none-win_amd64.whl",
         "06e9b0026f3bad97d2b58666330fabec04fe1672f776661ecb0ce0029c27f142",
         743_068_852,
+    ),
+)
+
+
+# PyTorch для процесса синтеза Silero (CPU, только Windows) со всеми зависимостями — те же колёса,
+# что ставит uv sync --extra silero (тест сверяет их с uv.lock).
+SILERO_WHEELS = (
+    Wheel(
+        "torch",
+        "2.14.1",
+        "ad/1a/b9648b0d228e513f69f8453ec3f90a8d436d78ff6d85a2773e539f0c07cf/"
+        "torch-2.14.1-cp312-cp312-win_amd64.whl",
+        "38bee9f2a2ccfc6898172a5075e4ba52522fbe143eeb099674fc67ab390e858d",
+        124_113_906,
+    ),
+    Wheel(
+        "sympy",
+        "1.14.0",
+        "a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl",
+        "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+        6_299_353,
+    ),
+    Wheel(
+        "mpmath",
+        "1.3.0",
+        "43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl",
+        "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+        536_198,
+    ),
+    Wheel(
+        "networkx",
+        "3.7",
+        "7e/cd/fe58041e9011f307c490e3e17dd48cc516448f7c698a3f2d9d9d65d7e6a8/networkx-3.7-py3-none-any.whl",
+        "e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0",
+        2_142_205,
+    ),
+    Wheel(
+        "jinja2",
+        "3.1.6",
+        "62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl",
+        "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+        134_899,
+    ),
+    Wheel(
+        "markupsafe",
+        "3.0.4",
+        "3f/bf/62495e180b7000aaf30000fff849e933f74264638057176cf46852500adc/"
+        "markupsafe-3.0.4-cp312-cp312-win_amd64.whl",
+        "11935df9bf455ed0c04eb87bcd720f02b1fe5e02128a9430f23aed6f93336fc7",
+        14_303,
+    ),
+    Wheel(
+        "setuptools",
+        "84.2.1",
+        "ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/"
+        "setuptools-84.2.1-py3-none-any.whl",
+        "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+        876_263,
+    ),
+    Wheel(
+        "fsspec",
+        "2026.9.0",
+        "6c/c0/a98505f18594f1bce828bb159cec0fcf9860562f1a2c85913409fc8f3d9e/fsspec-2026.9.0-py3-none-any.whl",
+        "8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f",
+        221_738,
+    ),
+    Wheel(
+        "filelock",
+        "4.2.4",
+        "e0/1b/5e74289a1878e666bb4b65fe5805a04cafcac2aa5f519ef1ead67ef91c56/filelock-4.2.4-py3-none-any.whl",
+        "301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e",
+        162_475,
+    ),
+    Wheel(
+        "typing-extensions",
+        "4.16.0",
+        "49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/"
+        "typing_extensions-4.16.0-py3-none-any.whl",
+        "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        45_571,
     ),
 )
 
@@ -264,41 +350,76 @@ def extract_dlls(wheel: Path, folder: Path) -> list[str]:
     return names
 
 
+def extract_wheel(wheel: Path, folder: Path) -> None:
+    """Раскладывает колесо в folder, как pip в site-packages: пакеты и *.data/purelib, platlib.
+
+    Raises:
+        ValueError: путь в колесе выходит за пределы folder.
+    """
+    root = folder.resolve()
+    with zipfile.ZipFile(wheel) as archive:
+        for member in archive.infolist():
+            parts = PurePosixPath(member.filename).parts
+            if parts and parts[0].endswith(".data"):
+                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                    continue  # scripts, headers, data программе не нужны
+                parts = parts[2:]
+            if not parts or member.is_dir():
+                continue
+            path = root.joinpath(*parts).resolve()
+            if not path.is_relative_to(root):
+                raise ValueError(f"Подозрительный путь в колесе: {member.filename}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, path.open("wb") as target:
+                shutil.copyfileobj(source, target, _CHUNK)
+
+
 def installed_wheels(target: Path) -> set[str]:
-    """Колёса, чьи DLL уже лежат в папке target (файл CUDA_INSTALLED)."""
+    """Колёса, которые уже разложены в папку target (файл INSTALLED)."""
     try:
-        return set((target / CUDA_INSTALLED).read_text(encoding="utf-8").split())
+        return set((target / INSTALLED).read_text(encoding="utf-8").split())
     except FileNotFoundError:
         return set()
 
 
-def ensure_cuda(target: Path, out: Any = sys.stdout) -> None:
-    """Скачивает DLL cuBLAS 12 и cuDNN 9 для Whisper на видеокарте в папку target.
+def install_wheels(
+    wheels: Sequence[Wheel],
+    target: Path,
+    out: Any,
+    *,
+    label: str,
+    unpack: Callable[[Path, Path], None],
+    space_factor: float,
+) -> None:
+    """Скачивает колёса (sha256 из uv.lock) и раскладывает их в target функцией unpack(колесо, target).
 
-    Колёса nvidia-* с PyPI (около 1,3 ГБ) проверяются по sha256 из uv.lock, из них берутся
-    только DLL (около 2 ГБ). Колесо качается в папку <target>.download рядом: прерванная
-    загрузка продолжается с того же места, а колёса, чьи DLL уже в target, не скачиваются.
-    Файлы, которые в target уже есть, не заменяются.
+    Колесо качается в папку <target>.download рядом: прерванная загрузка продолжается с того
+    же места, а колёса, которые уже разложены (файл INSTALLED), не скачиваются.
+
+    Args:
+        label: что скачивается — для сообщений («библиотеки CUDA для видеокарты»).
+        space_factor: во сколько раз колесо вместе с распакованным больше самого колеса.
 
     Raises:
         OSError: нет сети, мало места на диске или файл скачался с ошибкой.
     """
     staging = target.with_name(f"{target.name}.download")
+    title = label[:1].upper() + label[1:]
     done = installed_wheels(target)
-    pending = [wheel for wheel in CUDA_WHEELS if wheel.filename not in done]
+    pending = [wheel for wheel in wheels if wheel.filename not in done]
     if not pending:
         shutil.rmtree(staging, ignore_errors=True)
-        out.write(f"CUDA: библиотеки уже есть ({target})\n")
+        out.write(f"{title}: уже есть ({target})\n")
         return
     staging.mkdir(parents=True, exist_ok=True)
     left = sum(wheel.size for wheel in pending)
-    need = 2 * left + (200 << 20)  # колесо и распакованные из него DLL, с запасом
+    need = int(space_factor * left) + (200 << 20)  # с запасом
     free = shutil.disk_usage(staging).free
     if free < need:
         raise OSError(f"мало места на диске: нужно {megabytes(need)}, свободно {megabytes(free)}")
-    total = sum(wheel.size for wheel in CUDA_WHEELS)
-    out.write(f"Скачиваю библиотеки CUDA для видеокарты ({megabytes(left)}, один раз)\n")
-    progress = Progress(out, "Скачиваю библиотеки CUDA", total, done=total - left)
+    total = sum(wheel.size for wheel in wheels)
+    out.write(f"Скачиваю {label} ({megabytes(left)}, один раз)\n")
+    progress = Progress(out, f"Скачиваю {label}", total, done=total - left)
     target.mkdir(parents=True, exist_ok=True)
     for wheel in pending:
         path = staging / wheel.filename
@@ -307,17 +428,36 @@ def ensure_cuda(target: Path, out: Any = sys.stdout) -> None:
         else:
             download_file(wheel.url, path, progress, sha256=wheel.sha256)
         out.write(f"Распаковываю {wheel.package}\n")
-        unpacked = staging / "bin"
-        for name in extract_dlls(path, unpacked):
-            if (target / name).exists():
-                (unpacked / name).unlink()
-            else:
-                os.replace(unpacked / name, target / name)
-        with (target / CUDA_INSTALLED).open("a", encoding="utf-8") as file:
+        unpack(path, target)
+        with (target / INSTALLED).open("a", encoding="utf-8") as file:
             file.write(f"{wheel.filename}\n")
         path.unlink()
     shutil.rmtree(staging, ignore_errors=True)
-    out.write(f"Библиотеки CUDA: готово ({target})\n")
+    out.write(f"{title}: готово ({target})\n")
+
+
+def _unpack_cuda(wheel: Path, target: Path) -> None:
+    """DLL колеса — прямо в target; файлы, которые там уже есть, не заменяются."""
+    unpacked = wheel.parent / "bin"
+    for name in extract_dlls(wheel, unpacked):
+        if (target / name).exists():
+            (unpacked / name).unlink()
+        else:
+            os.replace(unpacked / name, target / name)
+
+
+def ensure_cuda(target: Path, out: Any = sys.stdout) -> None:
+    """Скачивает DLL cuBLAS 12 и cuDNN 9 для Whisper на видеокарте в папку target.
+
+    Колёса nvidia-* с PyPI (около 1,3 ГБ) проверяются по sha256 из uv.lock, из них берутся
+    только DLL (около 2 ГБ). Файлы, которые в target уже есть, не заменяются.
+
+    Raises:
+        OSError: нет сети, мало места на диске или файл скачался с ошибкой.
+    """
+    install_wheels(
+        CUDA_WHEELS, target, out, label="библиотеки CUDA для видеокарты", unpack=_unpack_cuda, space_factor=2
+    )
 
 
 def download_cuda(out: Any = sys.stdout) -> bool:
@@ -336,16 +476,89 @@ def download_cuda(out: Any = sys.stdout) -> bool:
     return True
 
 
+def silero_lib() -> Path:
+    """Папка, куда раскладывается PyTorch для процесса синтеза Silero."""
+    return silero_dir() / "lib"
+
+
+def silero_runtime() -> tuple[bool, Path | None]:
+    """Есть ли PyTorch для Silero и откуда его брать процессу синтеза.
+
+    Возвращает (готов, папка): папка — скачанный PyTorch; None — torch из окружения Python
+    (из исходников его ставит uv sync --extra silero).
+    """
+    lib = silero_lib()
+    if {wheel.filename for wheel in SILERO_WHEELS} <= installed_wheels(lib):
+        return True, lib
+    if not FROZEN and importlib.util.find_spec("torch") is not None:
+        return True, None
+    return False, None
+
+
+def ensure_silero(model: Path, out: Any = sys.stdout) -> None:
+    """Голос Silero: PyTorch (если его ещё нет, ~130 МБ) и модель.
+
+    Raises:
+        OSError: нет сети, мало места на диске, файл скачался с ошибкой или модель неизвестна.
+    """
+    if not silero_runtime()[0]:
+        install_wheels(
+            SILERO_WHEELS, silero_lib(), out, label="PyTorch для голоса Silero", unpack=extract_wheel,
+            space_factor=5,
+        )  # fmt: skip
+    if model.is_file():
+        return
+    if model.name not in SILERO_MODELS:
+        raise OSError(f"неизвестная модель Silero {model.name}: скачать можно {', '.join(SILERO_MODELS)}")
+    out.write(f"Скачиваю модель Silero {model.stem} (один раз)\n")
+    download_file(
+        SILERO_MODEL_URL + model.name, model, Progress(out, "Скачиваю модель Silero"),
+        sha256=SILERO_MODELS[model.name],
+    )  # fmt: skip
+    out.write("Модель Silero: готово\n")
+
+
+def download_silero(config: AppConfig, out: Any = sys.stdout) -> bool:
+    """--download-silero: скачивает PyTorch и модель Silero и проверяет голос пробной фразой."""
+    from assistant.tts.base import TTSError
+    from assistant.tts.silero_tts import silero_engine
+
+    model = config.resolve(config.tts.silero_model)
+    try:
+        ensure_silero(model, out)
+    except Exception as exc:
+        log.exception("Не удалось скачать Silero")
+        out.write(f"Silero: ошибка — {exc}\n")
+        return False
+    out.write(f"Модель Silero {model.name}: sha256 {file_sha256(model)}\n")
+    engine = silero_engine(config)
+    started = time.perf_counter()
+    try:
+        audio, rate = engine.synthesize("Проверка голоса: сейчас 14:35, 21 октября, громкость 50%.")
+    except TTSError as exc:
+        out.write(f"Silero: голос не работает — {exc}\n")
+        return False
+    finally:
+        engine.close()
+    seconds = len(audio) / rate
+    out.write(
+        f"Silero: {seconds:.1f} с речи за {time.perf_counter() - started:.1f} с (с запуском процесса)\n"
+    )
+    return seconds > 1
+
+
 def download_all(config: AppConfig, out: Any = sys.stdout) -> bool:
     """Скачивает всё для голоса. Возвращает False, если что-то не удалось.
 
     Библиотеки CUDA — только собранному exe и только для видеокарты NVIDIA: из исходников
-    их ставит uv sync --extra cuda.
+    их ставит uv sync --extra cuda. Silero — если он выбран голосом ассистента.
     """
     steps = [
         ("Vosk", lambda: ensure_vosk(config.resolve(config.voice.vosk_model), out)),
         ("Piper", lambda: ensure_piper(config.resolve(config.tts.piper_voice), out)),
     ]
+    if config.tts.engine == "silero":
+        steps.append(("Silero", lambda: ensure_silero(config.resolve(config.tts.silero_model), out)))
     if FROZEN and cuda_libraries_needed(config.stt):
         steps.append(("CUDA", lambda: ensure_cuda(cuda_dir(), out)))
     steps.append(("Whisper", lambda: ensure_whisper(config, out)))

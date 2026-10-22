@@ -187,9 +187,20 @@ def test_settings_view_matches_interface(settings: SettingsStore) -> None:
         "enabled", "wake_word", "push_to_talk", "push_to_talk_key", "push_to_talk_mode", "stop_key",
         "input_device", "wake_confidence", "followup_seconds", "min_silence_ms", "sounds",
     }  # fmt: skip
-    assert set(view["tts"]) == {"engine", "piper_voice", "sapi_voice", "rate", "volume"}
+    assert set(view["tts"]) == {
+        "engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "rate", "volume",
+    }  # fmt: skip
     assert set(view["ui"]) == {"theme", "accent", "overlay", "quick_chat_key"}
-    assert set(view["choices"]) == {"microphones", "piper_voices", "sapi_voices", "stt_models"}
+    assert set(view["choices"]) == {
+        "microphones", "piper_voices", "sapi_voices", "stt_models", "silero_speakers", "edge_voices",
+        "silero_ready",
+    }  # fmt: skip
+    assert [c["value"] for c in view["choices"]["edge_voices"]] == [
+        "ru-RU-DmitryNeural",
+        "ru-RU-SvetlanaNeural",
+    ]
+    assert view["choices"]["silero_speakers"][0] == {"value": "aidar", "title": "Айдар"}
+    assert view["choices"]["silero_ready"] is False
     assert view["voice"]["input_device"] == ""
     assert [c["value"] for c in view["choices"]["microphones"]] == ["", "Микрофон (Realtek)", "USB Audio"]
     assert view["tts"]["piper_voice"] == "models/piper/ru_RU-dmitri-medium.onnx"

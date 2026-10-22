@@ -24,6 +24,8 @@ from ruamel.yaml.error import YAMLError
 from assistant.config import DEFAULT_LLM_PROFILES, AppConfig, LlmProfile, format_validation_error
 from assistant.llm.keys import clean_key, format_problem
 from assistant.llm.providers import CUSTOM_KEY_ENV, CUSTOM_PROFILE, CUSTOM_TITLE, provider_info
+from assistant.tts.edge_tts import EDGE_VOICES
+from assistant.tts.silero_tts import SILERO_SPEAKERS
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +48,9 @@ UI_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "stt": frozenset({"model", "device"}),
-    "tts": frozenset({"engine", "piper_voice", "sapi_voice", "rate", "volume"}),
+    "tts": frozenset(
+        {"engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "rate", "volume"}
+    ),
     "ui": frozenset({"theme", "accent", "overlay", "quick_chat_key"}),
     "llm": frozenset({"enabled"}),
 }
@@ -424,6 +428,8 @@ def settings_view(config: AppConfig, store: SettingsStore, choices: Choices) -> 
         "tts": {
             "engine": tts.engine,
             "piper_voice": piper_value,
+            "silero_speaker": tts.silero_speaker,
+            "edge_voice": tts.edge_voice,
             "sapi_voice": tts.sapi_voice,
             "rate": tts.rate,
             "volume": tts.volume,
@@ -444,9 +450,19 @@ def settings_view(config: AppConfig, store: SettingsStore, choices: Choices) -> 
                 {"value": "", "title": "Первый русский голос"},
                 *_choices(choices.sapi_voices, tts.sapi_voice),
             ],
+            "silero_speakers": _choices(list(SILERO_SPEAKERS), tts.silero_speaker),
+            "edge_voices": _choices(list(EDGE_VOICES), tts.edge_voice),
+            "silero_ready": silero_ready(config),
             "stt_models": _choices(choices.stt_models, stt.model),
         },
     }
+
+
+def silero_ready(config: AppConfig) -> bool:
+    """Голос Silero уже скачан: PyTorch и модель есть — выбор сработает без загрузки."""
+    from assistant.models import silero_runtime
+
+    return silero_runtime()[0] and config.resolve(config.tts.silero_model).is_file()
 
 
 def ui_view(config: AppConfig) -> dict[str, Any]:

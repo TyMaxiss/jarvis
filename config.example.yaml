@@ -81,8 +81,13 @@ stt:
   prompt_app_names: 30           # сколько названий программ подсказывать распознавателю
 
 tts:
-  engine: piper                  # piper (офлайн, по умолчанию) или sapi (голоса Windows)
+  engine: piper                  # piper — офлайн, по умолчанию;
+                                 # silero — офлайн, нейросеть (при первом выборе скачивается ~300 МБ);
+                                 # edge — голоса Microsoft через интернет; sapi — голоса Windows
   piper_voice: models/piper/ru_RU-dmitri-medium.onnx  # ещё есть irina, denis, ruslan
+  silero_speaker: aidar          # голос Silero: aidar, eugene (мужские), baya, kseniya, xenia (женские)
+  silero_model: models/silero/v5_6_ru.pt
+  edge_voice: ru-RU-DmitryNeural # или ru-RU-SvetlanaNeural
   sapi_voice: ""                 # часть названия голоса Windows; пусто — первый русский
   rate: 1.0                      # скорость речи
   volume: 1.0

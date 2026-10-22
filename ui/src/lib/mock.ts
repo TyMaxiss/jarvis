@@ -275,7 +275,15 @@ function makeSettings(state: AppState): Settings {
       sounds: true,
     },
     stt: { model: 'auto', device: 'auto' },
-    tts: { engine: 'piper', piper_voice: 'models/piper/ru_RU-dmitri-medium.onnx', sapi_voice: '', rate: 1, volume: 1 },
+    tts: {
+      engine: 'piper',
+      piper_voice: 'models/piper/ru_RU-dmitri-medium.onnx',
+      silero_speaker: 'aidar',
+      edge_voice: 'ru-RU-DmitryNeural',
+      sapi_voice: '',
+      rate: 1,
+      volume: 1,
+    },
     llm: { enabled: true, profile: state.llm.profile, profiles },
     ui: state.ui,
     choices: {
@@ -297,6 +305,18 @@ function makeSettings(state: AppState): Settings {
         { value: 'small', title: 'small — для процессора' },
         { value: 'large-v3-turbo', title: 'large-v3-turbo — для видеокарты' },
       ],
+      silero_speakers: [
+        { value: 'aidar', title: 'Айдар' },
+        { value: 'eugene', title: 'Евгений' },
+        { value: 'baya', title: 'Бая' },
+        { value: 'kseniya', title: 'Ксения' },
+        { value: 'xenia', title: 'Ксения (xenia)' },
+      ],
+      edge_voices: [
+        { value: 'ru-RU-DmitryNeural', title: 'Дмитрий' },
+        { value: 'ru-RU-SvetlanaNeural', title: 'Светлана' },
+      ],
+      silero_ready: false,
     },
     restart_pending: false,
   }

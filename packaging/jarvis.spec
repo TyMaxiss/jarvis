@@ -3,6 +3,7 @@
 #   uv run --no-sync pyinstaller --noconfirm --clean packaging/jarvis.spec
 # Результат — dist/Jarvis: Jarvis.exe (окна, без консоли) и JarvisConsole.exe (консольный режим,
 # --download-models) с общей папкой _internal; рядом — то, что правит пользователь.
+import importlib.util
 import shutil
 import sys
 from pathlib import Path
@@ -35,6 +36,25 @@ datas += collect_data_files("piper", includes=["espeak-ng-data/**/*"])
 # vosk и ctranslate2 загружают свои DLL сами (через cffi и при импорте), анализ их не видит.
 binaries = collect_dynamic_libs("vosk") + collect_dynamic_libs("ctranslate2")
 hiddenimports = collect_submodules("comtypes.gen") if sys.platform == "win32" else []
+
+# Голос Silero: процесс синтеза (JarvisConsole.exe --silero-worker) импортирует PyTorch из
+# скачанной папки silero/lib, а PyTorch — модули стандартной библиотеки, которых анализ сборки
+# не видит. Поэтому стандартная библиотека входит в сборку целиком, кроме ненужного.
+STDLIB_SKIP = {
+    "__phello__", "_tkinter", "antigravity", "curses", "_curses", "_curses_panel", "ensurepip", "idlelib",
+    "lib2to3", "msilib", "_msi", "pydoc_data", "readline", "test", "this", "tkinter", "turtle", "turtledemo",
+    "venv",
+}  # fmt: skip
+for name in sorted(sys.stdlib_module_names - STDLIB_SKIP):
+    if name.startswith(("_test", "_xx")):
+        continue
+    spec = importlib.util.find_spec(name)
+    if spec is None:
+        continue  # модули других систем (posix, termios…)
+    if spec.submodule_search_locations is None:
+        hiddenimports.append(name)
+    else:
+        hiddenimports += collect_submodules(name, filter=lambda module: ".test" not in module)
 
 a = Analysis(
     [str(ROOT / "packaging" / "jarvis_entry.py")],

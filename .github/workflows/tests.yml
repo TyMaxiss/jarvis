@@ -144,6 +144,18 @@ jobs:
                              'whisper\models--Systran--faster-whisper-small') {
             if (-not (Test-Path "$app\models\$model")) { throw "не скачалось: models\$model" }
           }
+          # Голоса: Piper, edge-tts (через интернет) и Silero — PyTorch и модель скачиваются,
+          # синтез идёт в отдельном процессе JarvisConsole.exe --silero-worker.
+          foreach ($voice in 'piper', 'edge') {
+            & "$app\JarvisConsole.exe" --test-voice $voice
+            if ($LASTEXITCODE) { Get-Content "$app\logs\assistant.log" -Tail 80; exit $LASTEXITCODE }
+          }
+          & "$app\JarvisConsole.exe" --download-silero
+          if ($LASTEXITCODE) {
+            Get-Content "$app\logs\assistant.log" -Tail 80
+            if (Test-Path "$app\logs\silero.log") { Get-Content "$app\logs\silero.log" -Tail 80 }
+            exit $LASTEXITCODE
+          }
           "который час`nсделай громче`n:q" | & "$app\JarvisConsole.exe" --console --text --dry-run
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if (-not (Test-Path "$app\config.yaml")) { throw "config.yaml не создан рядом с exe" }

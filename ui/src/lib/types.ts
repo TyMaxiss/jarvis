@@ -236,6 +236,9 @@ export interface Choice {
   title: string
 }
 
+// piper и silero — офлайн, edge — голоса Microsoft через интернет, sapi — голоса Windows.
+export type TtsEngine = 'piper' | 'silero' | 'edge' | 'sapi'
+
 export interface Settings {
   general: { name: string; dry_run: boolean; autostart: boolean | null } // null — автозапуск недоступен
   voice: {
@@ -252,10 +255,26 @@ export interface Settings {
     sounds: boolean
   }
   stt: { model: string; device: 'auto' | 'cuda' | 'cpu' }
-  tts: { engine: 'piper' | 'sapi'; piper_voice: string; sapi_voice: string; rate: number; volume: number }
+  tts: {
+    engine: TtsEngine
+    piper_voice: string
+    silero_speaker: string
+    edge_voice: string
+    sapi_voice: string
+    rate: number
+    volume: number
+  }
   llm: { enabled: boolean; profile: string; profiles: LlmProfileInfo[] }
   ui: UiSettings
-  choices: { microphones: Choice[]; piper_voices: Choice[]; sapi_voices: Choice[]; stt_models: Choice[] }
+  choices: {
+    microphones: Choice[]
+    piper_voices: Choice[]
+    sapi_voices: Choice[]
+    stt_models: Choice[]
+    silero_speakers: Choice[]
+    edge_voices: Choice[]
+    silero_ready: boolean // PyTorch и модель Silero уже скачаны
+  }
   restart_pending: boolean // есть изменения, которые применятся после перезапуска
 }
 

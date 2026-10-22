@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-assistant"
-version = "0.1.0"
+version = "0.6.0.dev0"
 description = "Голосовой ассистент для Windows 11: локальные команды из YAML и LLM-агент"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -26,6 +26,7 @@ dependencies = [
     "pythonnet>=3.0.5,<3.1 ; sys_platform == 'win32'",
     "pystray==0.19.5 ; sys_platform == 'win32'",
     "pillow>=11",
+    "edge-tts>=7.3.1,<8",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,11 @@ dependencies = [
 cuda = [
     "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
     "nvidia-cudnn-cu12>=9,<10; sys_platform == 'win32'",
+]
+# Голос Silero: PyTorch (CPU) для отдельного процесса синтеза — uv sync --extra silero.
+# Сборка exe скачивает те же колёса сама, когда выбирают Silero.
+silero = [
+    "torch>=2.14.1; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

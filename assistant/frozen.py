@@ -25,6 +25,7 @@ FROZEN = bool(getattr(sys, "frozen", False))
 CONSOLE_EXE = "JarvisConsole.exe"  # та же сборка с окном консоли (Jarvis.exe — без него)
 RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"  # новый экземпляр exe — не дочерний процесс этого
 CUDA_DIR = "cuda"  # DLL CUDA для Whisper на видеокарте — рядом с программой
+SILERO_DIR = "silero"  # PyTorch для голоса Silero — рядом с программой
 # Поиск DLL и PATH — общие для всего процесса: запуски из разных потоков идут по очереди.
 _LAUNCH_LOCK = threading.Lock()
 
@@ -39,6 +40,11 @@ def app_dir() -> Path:
 def cuda_dir() -> Path:
     """Папка с DLL CUDA рядом с программой: собранный exe скачивает их туда сам (models.ensure_cuda)."""
     return app_dir() / CUDA_DIR
+
+
+def silero_dir() -> Path:
+    """Папка с PyTorch для голоса Silero: скачивается, когда Silero выбирают (models.ensure_silero)."""
+    return app_dir() / SILERO_DIR
 
 
 def run_hint(arguments: str) -> str:

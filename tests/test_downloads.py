@@ -21,7 +21,16 @@ import pytest
 
 from assistant import models
 from assistant.config import AppConfig
-from assistant.models import Wheel, download_file, ensure_cuda, ensure_piper, ensure_vosk, extract_dlls
+from assistant.models import (
+    Wheel,
+    download_file,
+    ensure_cuda,
+    ensure_piper,
+    ensure_silero,
+    ensure_vosk,
+    extract_dlls,
+    extract_wheel,
+)
 from assistant.progress import Progress, folder_size, megabytes, watch_folder
 from tests.conftest import ROOT, wait_until
 
@@ -302,21 +311,33 @@ def lock_packages() -> dict[str, dict[str, Any]]:
     return {package["name"]: package for package in lock["package"]}
 
 
-def test_cuda_wheels_match_uv_lock() -> None:
-    packages = lock_packages()
-    # Все пакеты extra cuda с зависимостями — те же колёса, что ставит uv sync --extra cuda.
-    wanted = [dep["name"] for dep in packages["jarvis-assistant"]["optional-dependencies"]["cuda"]]
+def extra_closure(packages: dict[str, dict[str, Any]], extra: str) -> set[str]:
+    """Пакеты extra вместе с зависимостями для Windows (зависимости только для Linux — нет)."""
+    wanted = [dep["name"] for dep in packages["jarvis-assistant"]["optional-dependencies"][extra]]
     closure: set[str] = set()
     while wanted:
         name = wanted.pop()
         if name not in closure:
             closure.add(name)
-            wanted += [dep["name"] for dep in packages[name].get("dependencies", [])]
-    assert {wheel.package for wheel in models.CUDA_WHEELS} == closure
-    for wheel in models.CUDA_WHEELS:
+            deps = packages[name].get("dependencies", [])
+            wanted += [dep["name"] for dep in deps if "linux" not in dep.get("marker", "").lower()]
+    return closure
+
+
+@pytest.mark.parametrize(
+    ("extra", "wheels"), [("cuda", models.CUDA_WHEELS), ("silero", models.SILERO_WHEELS)]
+)
+def test_wheel_tables_match_uv_lock(extra: str, wheels: tuple[Wheel, ...]) -> None:
+    packages = lock_packages()
+    # Те же колёса, что ставит uv sync --extra cuda / --extra silero.
+    assert {wheel.package for wheel in wheels} == extra_closure(packages, extra)
+    for wheel in wheels:
         package = packages[wheel.package]
         assert package["version"] == wheel.version
-        locked = next(w for w in package["wheels"] if w["url"].endswith("win_amd64.whl"))
+        locked = next(
+            w for w in package["wheels"]
+            if w["url"].endswith(("cp312-cp312-win_amd64.whl", "-none-win_amd64.whl", "-none-any.whl"))
+        )  # fmt: skip
         assert (locked["url"], locked["hash"], locked["size"]) == (
             wheel.url,
             f"sha256:{wheel.sha256}",
@@ -376,12 +397,14 @@ def test_ensure_cuda_puts_dlls_next_to_program(
     assert (target / "cublasLt64_12.dll").read_bytes() == payload(2 * MB)
     assert (target / "wheels.txt").read_text().split() == [w.filename for w in fake_wheels]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["cuda"]  # cuda.download убрана
-    assert window.steps[-1][1] == 1.0 and window.steps[-1][0].startswith("Скачиваю библиотеки CUDA: 100%")
+    assert window.steps[-1][1] == 1.0 and window.steps[-1][0].startswith(
+        "Скачиваю библиотеки CUDA для видеокарты: 100%"
+    )
     # Второй раз ничего не скачивается.
     requests = len(server.requests)
     ensure_cuda(target, window)
     assert len(server.requests) == requests
-    assert "CUDA: библиотеки уже есть" in window.getvalue()
+    assert "Библиотеки CUDA для видеокарты: уже есть" in window.getvalue()
 
 
 def test_ensure_cuda_continues_where_it_stopped(
@@ -442,13 +465,14 @@ def test_download_cuda_checks_that_dlls_load(monkeypatch: pytest.MonkeyPatch) ->
     assert "CUDA: ошибка — нет сети" in out.getvalue()
 
 
-@pytest.mark.parametrize(("frozen", "needed", "steps"), [
-    (True, True, ["Vosk", "Piper", "CUDA", "Whisper"]),
-    (True, False, ["Vosk", "Piper", "Whisper"]),
-    (False, True, ["Vosk", "Piper", "Whisper"]),  # из исходников — uv sync --extra cuda
+@pytest.mark.parametrize(("frozen", "needed", "engine", "steps"), [
+    (True, True, "piper", ["Vosk", "Piper", "CUDA", "Whisper"]),
+    (True, False, "piper", ["Vosk", "Piper", "Whisper"]),
+    (False, True, "piper", ["Vosk", "Piper", "Whisper"]),  # из исходников — uv sync --extra cuda
+    (False, False, "silero", ["Vosk", "Piper", "Silero", "Whisper"]),
 ])  # fmt: skip
 def test_download_all_adds_cuda_only_to_exe(
-    monkeypatch: pytest.MonkeyPatch, frozen: bool, needed: bool, steps: list[str]
+    monkeypatch: pytest.MonkeyPatch, frozen: bool, needed: bool, engine: str, steps: list[str]
 ) -> None:
     done: list[str] = []
     monkeypatch.setattr(models, "FROZEN", frozen)
@@ -456,6 +480,71 @@ def test_download_all_adds_cuda_only_to_exe(
     monkeypatch.setattr(models, "ensure_vosk", lambda *a: done.append("Vosk"))
     monkeypatch.setattr(models, "ensure_piper", lambda *a: done.append("Piper"))
     monkeypatch.setattr(models, "ensure_cuda", lambda *a: done.append("CUDA"))
+    monkeypatch.setattr(models, "ensure_silero", lambda *a: done.append("Silero"))
     monkeypatch.setattr(models, "ensure_whisper", lambda *a: done.append("Whisper"))
-    assert models.download_all(AppConfig(), io.StringIO()) is True
+    config = AppConfig.model_validate({"tts": {"engine": engine}})
+    assert models.download_all(config, io.StringIO()) is True
     assert done == steps
+
+
+# --- Silero ---------------------------------------------------------------------------
+
+
+def test_extract_wheel_like_pip(tmp_path: Path) -> None:
+    wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
+    wheel.write_bytes(
+        zip_bytes(
+            {
+                "pkg/__init__.py": b"VALUE = 1",
+                "pkg/lib/native.dll": b"MZ",
+                "pkg-1.0.dist-info/RECORD": b"",
+                "pkg-1.0.data/purelib/extra.py": b"",
+                "pkg-1.0.data/scripts/tool.exe": b"",
+            }
+        )
+    )
+    lib = tmp_path / "lib"
+    extract_wheel(wheel, lib)
+    files = sorted(p.relative_to(lib).as_posix() for p in lib.rglob("*") if p.is_file())
+    assert files == ["extra.py", "pkg-1.0.dist-info/RECORD", "pkg/__init__.py", "pkg/lib/native.dll"]
+    evil = tmp_path / "evil.whl"
+    evil.write_bytes(zip_bytes({"../outside.py": b""}))
+    with pytest.raises(ValueError, match="Подозрительный путь"):
+        extract_wheel(evil, lib)
+
+
+def test_ensure_silero_installs_torch_and_model(
+    server: Files, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheels = []
+    for package, files in (
+        ("torch", {"torch/__init__.py": b"__version__ = '0.0'", "torch/lib/torch_cpu.dll": payload(MB)}),
+        ("sympy", {"sympy/__init__.py": b""}),
+    ):
+        data = zip_bytes({**files, f"{package}-1.0.dist-info/RECORD": b""})
+        path = f"aa/bb/{package}-1.0-py3-none-any.whl"
+        server.add(f"/packages/{path}", data)
+        wheels.append(Wheel(package, "1.0", path, hashlib.sha256(data).hexdigest(), len(data)))
+    model_data = payload(2 * MB)
+    server.add("/silero/test_ru.pt", model_data)
+    monkeypatch.setattr(models, "PYPI_FILES", f"{server.url}/packages/")
+    monkeypatch.setattr(models, "SILERO_WHEELS", tuple(wheels))
+    monkeypatch.setattr(models, "SILERO_MODEL_URL", f"{server.url}/silero/")
+    monkeypatch.setattr(models, "SILERO_MODELS", {"test_ru.pt": hashlib.sha256(model_data).hexdigest()})
+    monkeypatch.setattr(models, "silero_dir", lambda: tmp_path / "silero")
+    assert models.silero_runtime() == (False, None)
+
+    model = tmp_path / "models" / "silero" / "test_ru.pt"
+    window = Window()
+    ensure_silero(model, window)
+    lib = tmp_path / "silero" / "lib"
+    assert (lib / "torch" / "lib" / "torch_cpu.dll").read_bytes() == payload(MB)
+    assert (lib / "sympy" / "__init__.py").exists() and model.read_bytes() == model_data
+    assert models.silero_runtime() == (True, lib)
+    assert "Скачиваю PyTorch для голоса Silero" in window.getvalue()
+    assert window.steps[-1][0] == "Скачиваю модель Silero: 100% (2 МБ из 2 МБ)"
+    requests = len(server.requests)
+    ensure_silero(model, window)  # всё на месте — ничего не скачивается
+    assert len(server.requests) == requests
+    with pytest.raises(OSError, match="неизвестная модель Silero other.pt"):
+        ensure_silero(model.with_name("other.pt"), window)

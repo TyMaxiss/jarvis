@@ -168,11 +168,12 @@ def test_speech_queue_stop_drops_pending() -> None:
     time.sleep(0.1)
     queue.stop()
     assert queue.wait_idle(timeout=5)
-    assert engine.texts == ["Первая."]  # остальные не синтезировались
+    # Пока звучала первая, вторая синтезировалась впрок; третья — уже нет.
+    assert engine.texts == ["Первая.", "Вторая."] and len(player.played) == 1
     queue.say("Новая.")
     release.set()
     assert queue.wait_idle(timeout=5)
-    assert engine.texts == ["Первая.", "Новая."]
+    assert engine.texts[-1] == "Новая." and len(player.played) == 2  # «Вторая» не прозвучала
     queue.close()
 
 
