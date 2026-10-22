@@ -1,4 +1,4 @@
-"""WinAPI для окон интерфейса: оверлей без фокуса, скругление, глобальная клавиша, WebView2.
+"""WinAPI для окон интерфейса: оверлей без фокуса и его движение, скругление, глобальная клавиша, WebView2.
 
 Вне Windows функции ничего не делают (интерфейс там не запускается, а модуль импортируется
 в тестах).
@@ -9,7 +9,9 @@ from __future__ import annotations
 import ctypes
 import functools
 import logging
+import sys
 import threading
+import time
 from collections.abc import Callable
 from ctypes import wintypes
 from typing import Any
@@ -32,12 +34,15 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 SW_SHOWNOACTIVATE = 4
 MONITOR_DEFAULTTONEAREST = 2
+RGN_AND = 1
+SPI_GETCLIENTAREAANIMATION = 0x1042
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x8, 0x4000
 MB_ICONWARNING, MB_YESNO, IDYES = 0x30, 0x4, 6
+FRAME_TIME = 1 / 60  # с: кадр, если не удалось дождаться его у Windows
 # Модификаторы для RegisterHotKey по виртуальным кодам клавиш из parse_hotkey.
 _MODIFIERS = {0x11: MOD_CONTROL, 0x12: MOD_ALT, 0x10: MOD_SHIFT, 0x5B: MOD_WIN, 0x5C: MOD_WIN}
 
@@ -60,8 +65,9 @@ class _Win32:
 
     def __init__(self) -> None:
         user32 = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+        gdi32 = ctypes.WinDLL("gdi32")  # type: ignore[attr-defined]
         dwmapi = ctypes.WinDLL("dwmapi")  # type: ignore[attr-defined]
-        hwnd, uint, boolean = wintypes.HWND, wintypes.UINT, wintypes.BOOL
+        hwnd, uint, boolean, rgn = wintypes.HWND, wintypes.UINT, wintypes.BOOL, wintypes.HRGN
 
         def fn(dll: Any, name: str, restype: Any, *argtypes: Any) -> Any:
             func = getattr(dll, name)
@@ -86,6 +92,14 @@ class _Win32:
             uint,
         )
         self.ShowWindowAsync = fn(user32, "ShowWindowAsync", boolean, hwnd, ctypes.c_int)
+        self.SetWindowRgn = fn(user32, "SetWindowRgn", ctypes.c_int, hwnd, rgn, boolean)
+        self.CreateRectRgn = fn(gdi32, "CreateRectRgn", rgn, *[ctypes.c_int] * 4)
+        self.CreateRoundRectRgn = fn(gdi32, "CreateRoundRectRgn", rgn, *[ctypes.c_int] * 6)
+        self.CombineRgn = fn(gdi32, "CombineRgn", ctypes.c_int, rgn, rgn, rgn, ctypes.c_int)
+        self.DeleteObject = fn(gdi32, "DeleteObject", boolean, wintypes.HGDIOBJ)
+        self.SystemParametersInfoW = fn(
+            user32, "SystemParametersInfoW", boolean, uint, uint, ctypes.c_void_p, uint
+        )
         self.GetDpiForWindow = fn(user32, "GetDpiForWindow", uint, hwnd)
         self.GetWindowRect = fn(user32, "GetWindowRect", boolean, hwnd, ctypes.POINTER(wintypes.RECT))
         self.MonitorFromPoint = fn(
@@ -112,6 +126,7 @@ class _Win32:
             ctypes.c_void_p,
             wintypes.DWORD,
         )
+        self.DwmFlush = fn(dwmapi, "DwmFlush", ctypes.c_long)
 
 
 @functools.cache
@@ -145,6 +160,63 @@ def show_without_focus(hwnd: int, x: int, y: int) -> None:
         return
     api.SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE)
     api.ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE)
+
+
+def move_window(hwnd: int, x: int, y: int) -> None:
+    """Сдвигает окно в точку (x, y) физических пикселей, не меняя порядок окон и фокус."""
+    api = _api()
+    if api is not None and hwnd:
+        api.SetWindowPos(hwnd, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+
+
+def clip_window(hwnd: int, width: int, height: int | None, radius: int = 0) -> None:
+    """Оставляет видной только верхнюю полосу окна высотой height физических пикселей.
+
+    Верхние углы полосы скруглены радиусом radius, нижний край прямой. None — окно видно
+    целиком: регион снят, углы снова скругляет Windows.
+    """
+    api = _api()
+    if api is None or not hwnd:
+        return
+    if height is None:
+        api.SetWindowRgn(hwnd, None, True)
+        return
+    clip = api.CreateRectRgn(0, 0, width, height)
+    if radius and height:
+        # Скруглённый прямоугольник выше края полосы: его нижние углы срезает прямоугольник полосы.
+        rounded = api.CreateRoundRectRgn(0, 0, width + 1, height + 2 * radius + 1, 2 * radius, 2 * radius)
+        api.CombineRgn(clip, clip, rounded, RGN_AND)
+        api.DeleteObject(rounded)
+    if not api.SetWindowRgn(hwnd, clip, True):
+        api.DeleteObject(clip)  # принятым регионом владеет система, непринятый удаляем сами
+
+
+def wait_frame() -> None:
+    """Ждёт, пока Windows выведет следующий кадр экрана (DwmFlush): окно двигается в такт с ним.
+
+    Если кадра ждать не пришлось (экран выключен, DwmFlush вернулся сразу) — обычная пауза в кадр.
+    """
+    api = _api()
+    started = time.perf_counter()
+    if api is not None and api.DwmFlush() == 0 and time.perf_counter() - started > 0.002:
+        return
+    time.sleep(FRAME_TIME)
+
+
+def animations_enabled() -> bool:
+    """Включены ли в Windows «Эффекты анимации» (Параметры → Специальные возможности → Визуальные эффекты)."""
+    api = _api()
+    if api is None:
+        return False
+    enabled = wintypes.BOOL(True)
+    if not api.SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(enabled), 0):
+        return True
+    return bool(enabled.value)
+
+
+def rounds_corners() -> bool:
+    """Windows скругляет углы окон: Windows 11 (сборка 22000 и новее)."""
+    return winapi.IS_WINDOWS and sys.getwindowsversion().build >= 22000  # type: ignore[attr-defined]
 
 
 def window_rect(hwnd: int) -> tuple[int, int, int, int]:

@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import sys
 import threading
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,29 @@ def wait(condition: Any, timeout: float) -> bool:
     return True
 
 
+def follow(hwnd: int, seconds: float) -> list[tuple[int, int]]:
+    """Путь видимого окна: верх окна и тип его региона (0 — региона нет, 1 — пустой, 2–3 — обрезан)."""
+    from assistant.actions import winapi
+    from assistant.ui import win32
+
+    user32 = ctypes.WinDLL("user32")
+    user32.GetWindowRgn.restype = ctypes.c_int
+    user32.GetWindowRgn.argtypes = (wintypes.HWND, wintypes.HRGN)
+    api = win32._api()
+    assert api is not None
+    path: list[tuple[int, int]] = []
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if winapi.api().IsWindowVisible(hwnd):
+            region = api.CreateRectRgn(0, 0, 0, 0)
+            sample = (win32.window_rect(hwnd)[1], user32.GetWindowRgn(hwnd, region))
+            api.DeleteObject(region)
+            if not path or path[-1] != sample:
+                path.append(sample)
+        time.sleep(0.002)
+    return path
+
+
 def test_windows_load_interface_and_talk_to_python(
     tmp_path: Path, registry: ActionRegistry, store: CommandStore, matcher: Matcher
 ) -> None:
@@ -89,7 +114,10 @@ def test_windows_load_interface_and_talk_to_python(
     )  # fmt: skip
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
     apis = {name: Api(controller, name) for name in WINDOWS}
-    windows = Windows(webview, ui_urls("dark", "#7c6cff"), apis, "dark", start_hidden=False)
+    # Оверлей двигается, даже если на сервере CI анимации Windows выключены.
+    windows = Windows(
+        webview, ui_urls("dark", "#7c6cff"), apis, "dark", start_hidden=False, animate=lambda: True
+    )
     controller.host = windows
     results: dict[str, Any] = {}
 
@@ -101,12 +129,12 @@ def test_windows_load_interface_and_talk_to_python(
             results["heading"] = main.evaluate_js("document.querySelector('h1')?.textContent")
             results["renderer"] = getattr(webview, "renderer", None)
 
-            # Оверлей появляется внизу экрана и не забирает фокус.
+            # Оверлей выезжает снизу из-за края рабочей области и не забирает фокус.
             before = winapi.api().GetForegroundWindow()
             controller.overlay.voice_state("listening")
             overlay = windows._handle("overlay")
-            results["overlay_visible"] = wait(lambda: bool(winapi.api().IsWindowVisible(overlay)), 5)
-            time.sleep(0.5)
+            results["overlay_rise"] = follow(overlay, 0.6)
+            results["overlay_visible"] = bool(winapi.api().IsWindowVisible(overlay))
             results["focus_kept"] = winapi.api().GetForegroundWindow() == before
             style = win32._api().GetWindowLongPtrW(overlay, win32.GWL_EXSTYLE)
             results["overlay_no_activate"] = bool(style & win32.WS_EX_NOACTIVATE)
@@ -115,7 +143,9 @@ def test_windows_load_interface_and_talk_to_python(
             results["overlay_bottom"] = (
                 abs(left + (right - left - width) // 2 - x) <= 2 and bottom - (y + height) > 0
             )
+            results["overlay_place"] = (y, bottom)
             controller.overlay.hide_now()
+            results["overlay_fall"] = follow(overlay, 0.6)
             results["overlay_hidden"] = wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
 
             # Быстрый чат: окно показывается, команда из него проходит через js_api в конвейер.
@@ -164,6 +194,18 @@ def test_windows_load_interface_and_talk_to_python(
     assert results["overlay_visible"] and results["overlay_no_activate"] and results["overlay_bottom"]
     assert results["focus_kept"], "оверлей забрал фокус"
     assert results["overlay_hidden"]
+    # Появление: только вверх, сначала низ обрезан краем, на месте региона нет.
+    place, edge = results["overlay_place"]
+    rise = [y for y, _ in results["overlay_rise"]]
+    assert len(set(rise)) >= 3 and rise == sorted(rise, reverse=True), results["overlay_rise"]
+    assert rise[0] > place and rise[-1] == place, results["overlay_rise"]
+    assert any(kind for _, kind in results["overlay_rise"]), "низ оверлея не обрезался"
+    assert results["overlay_rise"][-1][1] == 0, "на месте оверлей должен быть виден целиком"
+    # Уход: только вниз до края рабочей области, низ обрезан.
+    fall = [y for y, _ in results["overlay_fall"]]
+    assert len(set(fall)) >= 3 and fall == sorted(fall), results["overlay_fall"]
+    assert place <= fall[0] and fall[-1] <= edge, results["overlay_fall"]
+    assert any(kind for _, kind in results["overlay_fall"]), "уходя, оверлей не обрезался"
     assert results["chat_visible"] and results["chat_hidden"]
     assert results["chat_command"] == "сделай громче"
     width, height = results["resized"]
