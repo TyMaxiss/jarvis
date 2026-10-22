@@ -14,7 +14,7 @@ from assistant.actions.browser import normalize_url
 from assistant.actions.input import parse_hotkey, parse_key
 from assistant.actions.registry import ActionError
 from assistant.actions.system import format_now
-from assistant.config import AppConfig, ConfigError, load_config
+from assistant.config import OLD_EXAMPLE_LINES, AppConfig, ConfigError, load_config
 from assistant.hotkeys import HotkeyManager
 from assistant.logging_setup import MaskingFormatter, SecretMasker
 from tests.conftest import ROOT
@@ -38,6 +38,25 @@ class TestConfig:
         defaults = AppConfig()
         for section in ("general", "matcher", "commands", "browser", "voice", "stt", "tts", "llm", "logging"):
             assert getattr(example, section) == getattr(defaults, section), section
+
+    def test_overlay_keep_from_old_example_is_turned_off(self, tmp_path: Path) -> None:
+        # В 0.8.0 пример включал overlay_keep, и оверлей «висел» после команды.
+        comment = "# итог голосовой команды виден до следующей фразы (клик — спрятать)"
+        old = f"  overlay_keep: true{' ' * 13}{comment}"
+        path = tmp_path / "config.yaml"
+        path.write_bytes(f"ui:\r\n  overlay: true\r\n{old}\r\n".encode())
+        assert load_config(path).ui.overlay_keep is False
+        text = path.read_bytes().decode()
+        assert old not in text and "  overlay_keep: false" in text
+        assert text.startswith("ui:\r\n  overlay: true\r\n") and text.endswith("\r\n")  # остальное как было
+        example = (ROOT / "config.example.yaml").read_text(encoding="utf-8").splitlines()
+        assert [line for line in example if "overlay_keep" in line] == [*OLD_EXAMPLE_LINES.values()]
+
+    def test_own_overlay_keep_stays(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text("ui:\n  overlay_keep: true\n", encoding="utf-8")  # включено в настройках
+        assert load_config(path).ui.overlay_keep is True
+        assert path.read_text(encoding="utf-8") == "ui:\n  overlay_keep: true\n"
 
     def test_defaults_without_files(self, tmp_path: Path) -> None:
         config = load_config(tmp_path / "config.yaml")

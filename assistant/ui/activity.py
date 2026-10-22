@@ -112,6 +112,7 @@ class VoiceStatus:
         activity: текущая команда.
         on_state: состояние голоса изменилось (idle, listening… paused).
         on_result: голосовая команда выполнена (оверлей держит её итог).
+        on_phrase: распознана новая фраза (оверлей больше не держит прежний итог).
     """
 
     def __init__(
@@ -119,13 +120,17 @@ class VoiceStatus:
         activity: Activity,
         on_state: Callable[[str], None],
         on_result: Callable[[], None] | None = None,
+        on_phrase: Callable[[], None] | None = None,
     ) -> None:
         self._activity = activity
         self._on_state = on_state
         self._on_result = on_result
+        self._on_phrase = on_phrase
 
     def voice_status(self, state: str, detail: str = "") -> None:
         if state == "recognized":
+            if self._on_phrase is not None:
+                self._on_phrase()
             self._activity.begin(detail, "voice")
         elif state == "partial":
             self._activity.partial(detail)

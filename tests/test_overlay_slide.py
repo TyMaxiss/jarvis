@@ -375,16 +375,17 @@ def test_glass_orb_appears_in_place_and_the_page_grows_it(desktop: list[tuple[An
     host.show("overlay")
     assert wait_for(lambda: any(call[0] == "show" for call in desktop))
     time.sleep(SHOW_TIME + 0.1)
-    # Сфера 440×420 при 150 % — 660×630: окно сразу на месте и целиком по форме шара и карточки,
-    # а растёт из центра и проявляется сама страница — окно полупрозрачное.
+    # Сфера 440×420 при 150 % — 660×630: окно сразу на месте и с первого кадра целиком по форме шара
+    # и карточки, а растёт из центра и проявляется сама страница — окно полупрозрачное.
     assert desktop == [
         ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("corners", 42, False),  # прямые углы без рамки: окно и так по форме шара
         ("glass", 42, True),  # смешивается с рабочим столом: кольцо и карточка полупрозрачные
         ("bounds", 42, 630, 374, 660, 630),
-        ("shape", 42, shape, None, None),
+        ("shape", 42, shape, None, (330, 309, 0)),  # до первого кадра не видно ничего
         ("show", 42, 630, 374),
+        ("shape", 42, shape, None, None),
     ]
     host.hide("overlay")
     assert wait_for(lambda: overlay.hidden == 1)
@@ -516,3 +517,19 @@ def test_orb_window_shape_matches_page_layout() -> None:
     disc = (orb["left"], orb["top"], orb["left"] + orb["width"] - 1, orb["top"] + orb["height"] - 1)
     box = (card["left"], card["top"], card["left"] + card["width"] - 1, card["top"] + card["height"] - 1)
     assert ((*disc, orb["width"] // 2), (*box, card["border-radius"])) == ORB_SHAPE
+
+
+def test_glass_orb_page_folds_before_window_hides() -> None:
+    """Полупрозрачную сферу раскрывает страница (ui/src/index.css, .orb-pop): появляется она столько
+    же, сколько окно, а сворачивается быстрее — событие об уходе доходит до страницы на кадр-другой
+    позже, а окно прячется ровно через HIDE_TIME."""
+    css = (Path(__file__).resolve().parents[1] / "ui" / "src" / "index.css").read_text(encoding="utf-8")
+
+    def durations(selector: str) -> set[float]:
+        body = re.search(re.escape(selector) + r" \{([^}]*)\}", css)
+        assert body, selector
+        return {int(ms) / 1000 for ms in re.findall(r"(?:opacity|scale) (\d+)ms", body.group(1))}
+
+    assert durations(".orb-glass.orb-present .orb-pop") == {SHOW_TIME}
+    (fold,) = durations(".orb-glass .orb-pop")
+    assert fold <= HIDE_TIME - 3 * FRAME

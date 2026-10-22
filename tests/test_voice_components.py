@@ -709,13 +709,98 @@ def test_model_file_that_did_not_open_is_tried_again(monkeypatch: pytest.MonkeyP
 def test_model_file_that_never_opens_names_the_reason(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    from assistant.stt.whisper_stt import OPEN_RETRY_PAUSES
+
     fake_cache(tmp_path)
-    fake_whisper_model(monkeypatch, fail_on="cpu", error="Unable to open file 'model.bin'")
+    loaded = fake_whisper_model(monkeypatch, fail_on="cpu", error="Unable to open file 'model.bin'")
     monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSES", (0, 0, 0))
     monkeypatch.setattr("assistant.stt.whisper_stt.open_problem", lambda folder: "занят другой программой")
     no_downloads(monkeypatch)
     with pytest.raises(RuntimeError, match="'model.bin'; model.bin занят другой программой"):
         WhisperSTT(SttConfig(device="cpu"), tmp_path).load()
+    assert len(loaded) == 1 + len(OPEN_RETRY_PAUSES) == 4  # первая попытка и ещё три
+
+
+def test_other_error_while_retrying_is_not_hidden(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Повторяется только «не открылся файл»: другая ошибка (память видеокарты) — сразу, как есть.
+    fake_cache(tmp_path)
+    errors = iter(["Unable to open file 'model.bin'", "CUDA failed with error out of memory"])
+    calls: list[str] = []
+
+    def create(path: str, *, device: str, **options: object) -> object:
+        calls.append(path)
+        raise RuntimeError(next(errors))
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", create)
+    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSES", (0, 0, 0))
+    no_downloads(monkeypatch)
+    with pytest.raises(RuntimeError, match=r"^CUDA failed with error out of memory$"):
+        WhisperSTT(SttConfig(device="cpu"), tmp_path).load()
+    assert len(calls) == 2
+
+
+def test_hub_problem_names_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    import huggingface_hub
+    from huggingface_hub import constants
+
+    from assistant.stt.whisper_stt import hub_problem
+
+    assert hub_problem("") == ""
+    monkeypatch.setattr(constants, "HF_HUB_OFFLINE", True)
+    assert "HF_HUB_OFFLINE" in hub_problem("Systran/faster-whisper-small")
+    monkeypatch.setattr(constants, "HF_HUB_OFFLINE", False)
+
+    def unreachable(self: object, repo: str, timeout: float) -> None:
+        raise ConnectionError("getaddrinfo failed " + "x" * 500)
+
+    monkeypatch.setattr(huggingface_hub.HfApi, "repo_info", unreachable)
+    problem = hub_problem("Systran/faster-whisper-small")
+    assert (
+        problem.startswith("нет связи с Hugging Face: ConnectionError: getaddrinfo failed")
+        and len(problem) <= 300
+    )
+    monkeypatch.setattr(huggingface_hub.HfApi, "repo_info", lambda self, repo, timeout: object())
+    assert hub_problem("Systran/faster-whisper-small") == ""
+
+
+def test_unseen_gpu_is_named_when_cpu_fails_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_cache(tmp_path)
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: False)
+    monkeypatch.setattr(
+        "assistant.stt.whisper_stt.nvidia_driver_status", lambda: "драйвер видит видеокарт: 1"
+    )
+    fake_whisper_model(monkeypatch, fail_on="cpu", error="Unsupported model binary version")
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    with pytest.raises(RuntimeError) as caught:
+        stt.load()
+    assert stt.failure(caught.value) == (
+        "не удалось загрузить Whisper (Unsupported model binary version); "
+        "до этого — видеокарта не видна (драйвер видит видеокарт: 1)"
+    )
+
+
+def test_first_download_without_internet_says_so(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Первый запуск без сети на компьютере с видеокартой: и CUDA, и модель не скачались. Моделей на диске
+    # нет — подсказка про интернет на месте, а про видеокарту сказано, что не скачалось.
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "cublas64_12.dll")
+    monkeypatch.setattr("assistant.stt.whisper_stt.register_cuda_dlls", lambda: None)
+
+    def fetch_cuda() -> None:
+        raise OSError("нет сети")
+
+    def fetch(model: str, folder: Path, out: object) -> str:
+        raise ModelDownloadError(f"не удалось скачать модель Whisper {model} (нет сети)")
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.fetch_model", fetch)
+    stt = WhisperSTT(SttConfig(), tmp_path, fetch_cuda=fetch_cuda)
+    with pytest.raises(ModelDownloadError) as caught:
+        stt.load()
+    assert stt.failure(caught.value) == (
+        "не удалось скачать модель Whisper small (нет сети). Нужен интернет для первой загрузки; "
+        "до этого — видеокарта: не скачались библиотеки CUDA (нет сети)"
+    )
 
 
 def test_model_files_are_described_for_the_log(tmp_path: Path) -> None:

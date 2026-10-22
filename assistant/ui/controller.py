@@ -84,6 +84,8 @@ class WindowHost(Protocol):
 
     def overlay_glass(self) -> bool: ...
 
+    def overlay_glass_next(self) -> bool: ...
+
     def sender(self, name: str) -> Callable[[str], None]: ...
 
     def quit(self) -> None: ...
@@ -500,8 +502,13 @@ class UiController:
 
     def _overlay_event(self, visible: bool) -> None:
         """Окно оверлея показано или прячется; glass — окно смешивается с рабочим столом по альфа-
-        каналу (сфера рисует полупрозрачные внешнее кольцо и карточку, иначе — непрозрачные)."""
-        glass = self.host is not None and self.host.overlay_glass()
+        каналу (сфера рисует полупрозрачные внешнее кольцо и карточку, иначе — непрозрачные).
+
+        Спрятанной странице glass — каким окно будет при следующем показе: она заранее готовит сферу
+        к появлению такой, какой та появится.
+        """
+        host = self.host
+        glass = host is not None and (host.overlay_glass() if visible else host.overlay_glass_next())
         self.bus.emit("overlay", {"visible": visible, "glass": glass}, to=["overlay"])
 
     def overlay_dismiss(self) -> None:

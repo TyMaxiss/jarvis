@@ -264,6 +264,10 @@ class Windows:
         кольцо шара и карточка — как стекло."""
         return self._glass_wanted
 
+    def overlay_glass_next(self) -> bool:
+        """Оверлей, если показать его сейчас, будет полупрозрачным (см. overlay_glass)."""
+        return self._wants_glass(self._overlay_style)
+
     def _wants_glass(self, style: str) -> bool:
         """Сфера полупрозрачная только с «Эффектами прозрачности» Windows: кто их выключил, видит её
         непрозрачной. Плашка всегда непрозрачная."""
@@ -339,7 +343,9 @@ class Windows:
         у сферы — её форма в круге из центра шара.
 
         Полупрозрачную сферу раскрывает сама страница (растёт из центра и проявляется), окну — вся
-        форма сразу. Непрозрачную — круг: уменьшенная страница легла бы на чёрный фон окна.
+        форма с первого кадра анимации; до него окно пустое: у страницы есть кадр, чтобы сделать сферу
+        невидимой, а не показать то, что было в окне в прошлый раз. Непрозрачную — круг: уменьшенная
+        страница легла бы на чёрный фон окна.
         """
         if self._overlay_shape is None:
             visible = track.visible(track.y(shown))
@@ -348,7 +354,8 @@ class Windows:
                 self._overlay_region = ("panel", visible)
             return
         x, y, reach = self._overlay_circle
-        circle = None if self._overlay_glass or shown >= 1 else (x, y, round(reach * shown))
+        whole = shown >= 1 or (self._overlay_glass and shown > 0)
+        circle = None if whole else (x, y, round(reach * shown))
         if ("orb", circle) != self._overlay_region:
             self._win32.shape_window(hwnd, self._overlay_shape, None, circle)
             self._overlay_region = ("orb", circle)

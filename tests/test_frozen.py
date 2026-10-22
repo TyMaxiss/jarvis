@@ -75,3 +75,6 @@ def test_installer_leaves_the_mark_it_is_named_after() -> None:
 
     script = (ROOT / "packaging" / "jarvis.iss").read_text(encoding="utf-8-sig")
     assert "{app}\\" + frozen.UPDATED_MARK in script
+    # Отметка появляется до запуска программы: [Run] выполняется раньше шага ssPostInstall.
+    relaunch = [line for line in script.splitlines() if "Check: Relaunch" in line]
+    assert len(relaunch) == 2 and all("BeforeInstall: WriteUpdateMark" in line for line in relaunch)

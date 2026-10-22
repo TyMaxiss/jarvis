@@ -245,22 +245,25 @@ def test_overlay_style_applies_without_restart(world: SimpleNamespace) -> None:
 
 def test_overlay_page_learns_when_overlay_shows_and_hides(world: SimpleNamespace) -> None:
     controller, bus = world.controller, world.bus
-    controller.window_ready("overlay")  # страница загрузилась, пока оверлей спрятан
-    world.host.glass = True  # сфера с «Эффектами прозрачности» Windows: страница рисует её полупрозрачной
+    world.host.next_glass = True  # с «Эффектами прозрачности» Windows страница рисует сферу полупрозрачной
+    controller.window_ready("overlay")  # страница загрузилась, пока оверлей спрятан: готовит сферу заранее
+    world.host.glass = True
     controller.overlay.voice_state("listening")
+    world.host.next_glass = False  # «Эффекты прозрачности» выключили, пока сфера на экране
     controller.overlay_dismiss()  # клик по оверлею
     presence = [(payload, to) for kind, payload, to in bus.events if kind == "overlay"]
     assert presence == [
-        ({"visible": False, "glass": False}, ("overlay",)),
-        ({"visible": True, "glass": True}, ("overlay",)),
         ({"visible": False, "glass": True}, ("overlay",)),
+        ({"visible": True, "glass": True}, ("overlay",)),
+        ({"visible": False, "glass": False}, ("overlay",)),  # следующий показ — непрозрачный
     ]
     assert world.host.calls == [("show", "overlay"), ("hide", "overlay")]
 
 
 def voice_command(controller: UiController) -> None:
     """Голосовая команда от «Джарвис» до конца ожидания продолжения."""
-    status = VoiceStatus(controller.activity, controller.on_voice_state, controller.overlay.command_done)
+    overlay = controller.overlay
+    status = VoiceStatus(controller.activity, controller.on_voice_state, overlay.command_done, overlay.phrase)
     for state in ("listening", "capturing", "recognizing", "processing"):
         status.voice_status(state)
     status.voice_status("recognized", "сделай громче")

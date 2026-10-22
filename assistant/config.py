@@ -29,6 +29,15 @@ ENV_FILE = ".env"
 TIMERS_FILE = "timers.json"  # таймеры и напоминания (рядом с config.yaml)
 UPDATE_FILE = "update.json"  # когда последний раз проверялись обновления (рядом с config.yaml)
 
+# Строки из примеров прежних версий, которые config.yaml получил при создании, → их замена.
+# 0.8.0: итог голосовой команды держался до следующей фразы, и оверлей «висел» — теперь выключено.
+OLD_EXAMPLE_LINES = {
+    "  overlay_keep: true             # итог голосовой команды виден до следующей фразы (клик — спрятать)": (
+        "  overlay_keep: false            # true — итог голосовой команды"
+        " виден до следующей фразы (клик — спрятать)"
+    ),
+}
+
 
 class ConfigError(Exception):
     """Конфиг не найден, не читается или содержит ошибки."""
@@ -397,6 +406,33 @@ def load_env(env_path: Path) -> None:
     os.environ.update(values)
 
 
+def migrate(path: Path) -> str:
+    """Читает config.yaml и меняет в нём строки, оставшиеся от примера прежней версии.
+
+    Меняется только строка целиком, как её записал пример (OLD_EXAMPLE_LINES): своё значение
+    пользователя остаётся. Если файл не записался, замена действует до следующего запуска.
+
+    Returns:
+        Текст конфига после замен.
+    """
+    with path.open(encoding="utf-8", newline="") as file:  # переводы строк файла не меняются
+        text = file.read()
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        if body in OLD_EXAMPLE_LINES:
+            lines[index] = OLD_EXAMPLE_LINES[body] + line[len(body) :]
+    fixed = "".join(lines)
+    if fixed != text:
+        try:
+            with path.open("w", encoding="utf-8", newline="") as file:
+                file.write(fixed)
+            log.info("%s: настройки из примера прежней версии обновлены", path.name)
+        except OSError as exc:
+            log.warning("Не удалось обновить %s: %s", path.name, exc)
+    return fixed
+
+
 def load_config(path: Path) -> AppConfig:
     """Загружает config.yaml и переменные из .env рядом с ним.
 
@@ -423,7 +459,7 @@ def load_config(path: Path) -> AppConfig:
             return config
 
     try:
-        data = YAML(typ="safe", pure=True).load(path.read_text(encoding="utf-8")) or {}
+        data = YAML(typ="safe", pure=True).load(migrate(path)) or {}
     except (OSError, YAMLError) as exc:
         raise ConfigError(f"Не удалось прочитать {path.name}: {exc}") from exc
     if not isinstance(data, dict):

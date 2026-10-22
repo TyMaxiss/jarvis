@@ -17,14 +17,28 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
   const [state, dispatch] = useReducer(overlayReduce, initialOverlay)
   const [level, setLevel] = useState(0)
   const [present, setPresent] = useState(false)
+  // Прозрачность окна сферы решает Python: показывая — какая она сейчас, пряча — какой будет при
+  // следующем показе. Спрятанная сфера заранее становится такой, какой появится.
   const [glass, setGlass] = useState(false)
+  const [nextGlass, setNextGlass] = useState(false)
+  const turn = useRef(0) // номер события overlay: отложенное появление не переживает следующего
+  const showing = useRef(false) // Python показал оверлей
+  const hiddenAt = useRef(0) // когда показанный оверлей начал уезжать
   useAssistantEvent((event) => {
     if (event.type === 'level') setLevel(event.payload.value)
     else {
       if (event.type === 'overlay') {
-        setPresent(event.payload.visible)
-        // Прозрачность окна Python ставит при показе — пока окно уезжает, сфера не меняется.
-        if (event.payload.visible) setGlass(event.payload.glass ?? false)
+        const { visible, glass: next = false } = event.payload
+        const mine = ++turn.current
+        if (showing.current && !visible) hiddenAt.current = Date.now()
+        showing.current = visible
+        setNextGlass(next)
+        if (visible && next !== glass) {
+          // Прозрачность сменилась, пока сфера была спрятана: сначала она невидимая в новом виде,
+          // и лишь потом раскрывается — иначе переходу (index.css, .orb-pop) не от чего начаться.
+          setGlass(next)
+          afterFrames(2, () => turn.current === mine && setPresent(true))
+        } else setPresent(visible)
       }
       dispatch(event)
     }
@@ -33,24 +47,27 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
   // перестроит при следующем показе. Уезжающее окно ещё прежней формы — ждём, пока оно уедет.
   const wanted = app?.ui.overlay_style ?? 'classic'
   const [style, setStyle] = useState(wanted)
-  const hiddenAt = useRef(0) // когда показанный оверлей начал уезжать
-  const wasPresent = useRef(false)
   useEffect(() => {
-    if (wasPresent.current && !present) hiddenAt.current = Date.now()
-    wasPresent.current = present
-  }, [present])
-  useEffect(() => {
-    if (present || style === wanted) return
+    if (present || (style === wanted && glass === nextGlass)) return
+    const apply = () => {
+      setStyle(wanted)
+      setGlass(nextGlass)
+    }
     const wait = hiddenAt.current + STYLE_SWITCH_MS - Date.now()
     if (wait <= 0) {
-      setStyle(wanted)
+      apply()
       return
     }
-    const timer = window.setTimeout(() => setStyle(wanted), wait)
+    const timer = window.setTimeout(apply, wait)
     return () => window.clearTimeout(timer)
-  }, [wanted, present, style])
+  }, [wanted, nextGlass, present, style, glass])
   if (style === 'orb') return <Orb state={state} level={level} present={present} glass={glass} framed={framed} />
   return <Pill state={state} level={level} framed={framed} />
+}
+
+/** Вызывает action через count кадров: к тому времени браузер успел отрисовать прежние изменения. */
+function afterFrames(count: number, action: () => void) {
+  window.requestAnimationFrame(() => (count > 1 ? afterFrames(count - 1, action) : action()))
 }
 
 /** Плашка: значок состояния, две строки и кнопки «Да / Нет». */

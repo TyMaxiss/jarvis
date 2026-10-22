@@ -64,10 +64,16 @@ class OverlayController:
         """Состояние голосового цикла изменилось."""
         with self._lock:
             self._voice_active = state in ACTIVE_VOICE
-            if state == "recognizing" or state in QUIET_VOICE:
-                self._holding = False  # прозвучала новая фраза: прежний итог ей уступает место
-            if state == "recognizing":
-                self._stopped = False
+            if state in QUIET_VOICE:
+                self._holding = False
+            action = self._update()
+        self._call(action)
+
+    def phrase(self) -> None:
+        """Распознана новая фраза: прежний итог уступает ей место (шум, в котором Whisper ничего
+        не услышал, итог не прячет — как и страница оверлея)."""
+        with self._lock:
+            self._holding = self._stopped = False
             action = self._update()
         self._call(action)
 

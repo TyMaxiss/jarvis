@@ -406,6 +406,7 @@ class WhisperSTT:
         self.cuda_problem = ""  # почему не на видеокарте, хотя она есть ('' — всё в порядке)
         self.gpu_error = ""  # то же коротко — для сообщения, если не загрузился и процессор
         self.attempts: list[str] = []  # что не вышло по дороге — для сообщения, если не вышло ничего
+        self.found_on_disk = False  # хоть одна модель нашлась на диске (не первая загрузка)
 
     def load(self) -> None:
         """Загружает модель: видеокарта, а если она не запускается — процессор (cuda_problem — почему).
@@ -417,6 +418,7 @@ class WhisperSTT:
         model, device, compute = resolve_settings(self._config, cuda_available())
         self.cuda_problem = self.gpu_error = ""
         self.attempts = []
+        self.found_on_disk = False
         gpu_model = resolve_settings(self._config.model_copy(update={"device": "cuda"}), True)[0]
         if device == "cpu":
             chosen = self._config.device == "cpu"
@@ -443,14 +445,20 @@ class WhisperSTT:
             # Модель для видеокарты даже не загружаем: без DLL она не заработает.
             self.cuda_problem = cuda_message(missing, fetch_error)
             log.warning("%s", self.cuda_problem)
-            return f"не загружается {missing}"
+            return (
+                f"не скачались библиотеки CUDA ({fetch_error})"
+                if fetch_error
+                else f"не загружается {missing}"
+            )
         try:
             self._load(model, "cuda", compute)
             self._warm_up()  # часть ошибок CUDA видна только при распознавании
         except Exception as exc:
             self._model = None
             log.warning("Whisper на видеокарте не запустился", exc_info=True)
-            reason = str(exc) or type(exc).__name__  # пустая причина значила бы «получилось»
+            # Пустая причина значила бы «получилось»; ошибку скачивания повторит и процессор — коротко.
+            reason = f"модель {model} не скачалась" if isinstance(exc, ModelDownloadError) else str(exc)
+            reason = reason or type(exc).__name__
             self.cuda_problem = (
                 f"Whisper на видеокарте не запустился ({reason}) — распознаю на процессоре. "
                 "При следующем запуске снова попробую видеокарту."
@@ -494,6 +502,8 @@ class WhisperSTT:
         if path is None:
             log.info("Модели Whisper %s нет на диске — скачиваю (один раз)", model)
             path = fetch_model(model, self._download_dir, self._out)
+        else:
+            self.found_on_disk = True
         options: dict[str, Any] = {"device": device, "compute_type": compute}
         if device == "cpu":
             options["cpu_threads"] = self._config.cpu_threads or default_cpu_threads()
@@ -546,9 +556,10 @@ class WhisperSTT:
         (видеокарта, другие модели на процессоре)."""
         download = isinstance(error, ModelDownloadError)
         text = str(error) if download else f"не удалось загрузить Whisper ({error})"
-        if self.attempts:
-            return f"{text}; до этого — {'; '.join(self.attempts)}"
-        return f"{text}. Нужен интернет для первой загрузки" if download else text
+        if download and not self.found_on_disk:
+            text += ". Нужен интернет для первой загрузки"
+        attempts = list(dict.fromkeys(self.attempts))  # одинаковые причины — один раз
+        return f"{text}; до этого — {'; '.join(attempts)}" if attempts else text
 
     def _warm_up(self) -> None:
         segments, _ = self._model.transcribe(np.zeros(16_000, dtype=np.float32), language="ru", beam_size=1)

@@ -43,6 +43,7 @@ class FakeHost:
         self.shown: set[str] = {"main"}
         self.scripts: dict[str, list[str]] = {}
         self.glass = False  # окно сферы смешивается с рабочим столом
+        self.next_glass = False  # и будет смешиваться при следующем показе
 
     def show(self, name: str) -> None:
         self.calls.append(("show", name))
@@ -69,6 +70,9 @@ class FakeHost:
 
     def overlay_glass(self) -> bool:
         return self.glass
+
+    def overlay_glass_next(self) -> bool:
+        return self.next_glass
 
     def sender(self, name: str) -> Callable[[str], None]:
         return lambda script: self.scripts.setdefault(name, []).append(script)

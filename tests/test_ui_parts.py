@@ -132,6 +132,17 @@ def test_voice_status_reports_finished_commands_only() -> None:
     assert done == [True]
 
 
+def test_voice_status_reports_new_phrase_before_command_starts() -> None:
+    bus = RecordingBus()
+    events: list[str] = []
+    status = VoiceStatus(Activity(bus), events.append, on_phrase=lambda: events.append("phrase"))
+    status.voice_status("recognizing")
+    status.voice_status("partial", "сделай")
+    assert events == ["recognizing"]  # шум и слова по ходу речи — ещё не фраза
+    status.voice_status("recognized", "сделай громче")
+    assert events == ["recognizing", "phrase"] and bus.of("recognized")
+
+
 # --- Подтверждение -----------------------------------------------------------------------
 
 
@@ -299,8 +310,10 @@ def test_disabled_overlay_never_shows() -> None:
 
 
 def run_voice_command(overlay: OverlayController) -> None:
-    for state in ("listening", "capturing", "recognizing", "processing"):
+    for state in ("listening", "capturing", "recognizing"):
         overlay.voice_state(state)
+    overlay.phrase()  # Whisper распознал фразу (VoiceStatus, «recognized»)
+    overlay.voice_state("processing")
     overlay.command_done()
     overlay.voice_state("listening")  # слушает продолжение
     overlay.voice_state("idle")
@@ -315,8 +328,14 @@ def test_overlay_keeps_command_result_until_next_phrase() -> None:
     overlay.voice_state("idle")
     assert overlay.visible and not world.timers
     overlay.voice_state("listening")
-    overlay.voice_state("recognizing")  # новая фраза: прежний итог больше не держим
-    overlay.voice_state("idle")  # Whisper ничего не услышал
+    overlay.voice_state("recognizing")
+    overlay.voice_state("idle")  # Whisper ничего не услышал (шум) — итог остаётся, как и на странице
+    assert overlay.visible and not world.timers
+    overlay.voice_state("listening")
+    overlay.voice_state("recognizing")
+    overlay.phrase()  # новая фраза: прежний итог больше не держим
+    overlay.voice_state("processing")
+    overlay.voice_state("idle")
     world.timers[-1].action()
     assert world.calls == ["show", "hide"] and not overlay.visible
 

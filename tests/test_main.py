@@ -266,3 +266,29 @@ def test_restart_passes_path_without_program_folders(monkeypatch: pytest.MonkeyP
     main.relaunch(["--debug"])
     assert started[0]["PATH"] == "C:\\Windows" and started[0][RESTART_ENV] == "1"
     assert os.environ["PATH"] == os.pathsep.join(["C:\\Jarvis\\cuda", "C:\\Windows"])
+
+
+class Closing:
+    """Часть голоса, которую закрывают при выходе: запоминает, закрыли ли её."""
+
+    def __init__(self, calls: list[str], name: str, alive: bool = False) -> None:
+        self._calls, self._name, self.alive = calls, name, alive
+
+    def close(self) -> None:
+        self._calls.append(self._name)
+
+    def stop(self) -> None:
+        self._calls.append(self._name)
+
+
+@pytest.mark.parametrize(("alive", "unloaded"), [(False, True), (True, False)])
+def test_voice_runtime_unloads_whisper_only_after_loop_stopped(alive: bool, unloaded: bool) -> None:
+    # Выгружать модель, пока цикл ещё распознаёт, нельзя: CTranslate2 уронил бы программу.
+    calls: list[str] = []
+    runtime = main.VoiceRuntime(
+        Closing(calls, "capture"), Closing(calls, "loop", alive), Closing(calls, "hotkeys"),  # type: ignore[arg-type]
+        stt=Closing(calls, "stt"),  # type: ignore[arg-type]
+    )  # fmt: skip
+    runtime.close()
+    assert calls == ["loop", "hotkeys", "capture", *(["stt"] if unloaded else [])]
+    main.VoiceRuntime(Closing(calls, "capture"), Closing(calls, "loop"), Closing(calls, "hotkeys")).close()  # type: ignore[arg-type]

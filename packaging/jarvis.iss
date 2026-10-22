@@ -76,8 +76,8 @@ Filename: "{app}\Jarvis.exe"; Description: "{cm:LaunchProgram,Джарвис}"; 
 ; После обновления из программы — так же, как с ярлыка: через Проводник, с его окружением и без
 ; установщика среди родителей (у запущенной установщиком копии голос не запускался). Без оболочки
 ; Windows (Проводник не запущен) — напрямую.
-Filename: "{win}\explorer.exe"; Parameters: """{app}\Jarvis.exe"""; Flags: nowait; Check: RelaunchViaShell
-Filename: "{app}\Jarvis.exe"; Flags: nowait; Check: RelaunchDirectly
+Filename: "{win}\explorer.exe"; Parameters: """{app}\Jarvis.exe"""; Flags: nowait; Check: RelaunchViaShell; BeforeInstall: WriteUpdateMark
+Filename: "{app}\Jarvis.exe"; Flags: nowait; Check: RelaunchDirectly; BeforeInstall: WriteUpdateMark
 
 [UninstallDelete]
 ; Ярлык автозапуска создаёт сама программа (настройка «Запускать вместе с Windows»).
@@ -111,11 +111,11 @@ begin
 end;
 
 { Через Проводник переменную окружения не передать: что программу запустили после обновления,
-  она узнаёт по отметке в своей папке (assistant/frozen.py, UPDATED_MARK) и убирает её. }
-procedure CurStepChanged(CurStep: TSetupStep);
+  она узнаёт по отметке в своей папке (assistant/frozen.py, UPDATED_MARK) и убирает её.
+  Отметка пишется перед самим запуском из [Run]: ssPostInstall наступает уже после него. }
+procedure WriteUpdateMark();
 begin
-  if (CurStep = ssPostInstall) and Relaunch() then
-    SaveStringToFile(ExpandConstant('{app}\updated.mark'), GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':'), False);
+  SaveStringToFile(ExpandConstant('{app}\updated.mark'), GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':'), False);
 end;
 
 { Файл открыт работающей программой: exe, который выполняется, нельзя открыть на запись. }

@@ -873,11 +873,19 @@ def run_ui(
     )
     controller.startup_issues = [str(issue) for issue in core.loaded.issues]
     confirmer.on_change = controller.overlay.confirming
-    status = VoiceStatus(activity, controller.on_voice_state, controller.overlay.command_done)
+    status = VoiceStatus(
+        activity, controller.on_voice_state, controller.overlay.command_done, controller.overlay.phrase
+    )
 
     def handle_voice(text: str, _: Confirmer | None) -> Any:
         # Голосовая команда подтверждается и голосом, и кнопками в оверлее.
-        return core.pipeline.handle_text(text, "voice", confirmer.for_source("voice"))
+        try:
+            return core.pipeline.handle_text(text, "voice", confirmer.for_source("voice"))
+        except Exception:
+            # Окна узнают, что команда кончилась (иначе оверлей так и показывал бы «Выполняю…»),
+            # а ошибку голосовой цикл запишет в лог и уйдёт в покой.
+            activity.failed(text, "voice", "Ошибка — подробности в логе")
+            raise
 
     def voice_starter(progress: Any) -> VoiceRuntime:
         fetch_voice(config, speech, progress)
