@@ -192,13 +192,21 @@ def stop_heard(audio: np.ndarray, spotter: GrammarSpotter) -> tuple[bool, list[S
         on_stop=stopped.set,
     )
     heard: list[SpotResult] = []
-    is_stop = loop.is_stop
+    is_stop, named_stop = loop.is_stop, loop._named_stop
 
-    def remember(result: SpotResult) -> bool:
+    def remember(result: SpotResult, over_speech: bool = False) -> bool:
         heard.append(result)
-        return is_stop(result)
+        return is_stop(result, over_speech)
+
+    def remember_named(result: SpotResult) -> bool:
+        # «Джарвис, стоп» по куску фразы, который Vosk отдал до паузы (поверх речи ассистента).
+        found = named_stop(result)
+        if found:
+            heard.append(result)
+        return found
 
     loop.is_stop = remember  # type: ignore[method-assign]
+    loop._named_stop = remember_named  # type: ignore[method-assign]
     loop.run(stop_when_exhausted=True)
     return stopped.is_set(), heard
 
