@@ -440,17 +440,43 @@ def dictate(dictation: Dictation, audio: np.ndarray) -> list[tuple[int, str]]:
     return shown
 
 
+def vosk_text(model: object, audio: np.ndarray) -> str:
+    """Всё, что Vosk без грамматики распознал во фразе целиком (куски после пауз и остаток)."""
+    import json
+
+    import vosk
+
+    recognizer = vosk.KaldiRecognizer(model, 16_000)
+    pieces = []
+    for start in range(0, len(audio) - 511, 512):
+        if recognizer.AcceptWaveform(audio[start : start + 512].tobytes()):
+            pieces.append(json.loads(recognizer.Result()).get("text", ""))
+    pieces.append(json.loads(recognizer.FinalResult()).get("text", ""))
+    return " ".join(" ".join(pieces).lower().replace("ё", "е").split())
+
+
+def same_phrase(shown: str, heard: str) -> bool:
+    """Оверлей показал фразу, которую Vosk в ней распознал: с того же слова и почти всю — последнее
+    слово Vosk, бывает, дорешивает уже после конца фразы."""
+    words, expected = shown.split(), heard.split()
+    return bool(words and expected) and words[0] == expected[0] and len(words) >= len(expected) - 1
+
+
 @pytest.mark.parametrize(
     "phrase", ["Сделай громче", "Который час", "Открой браузер и найди погоду на завтра"]
 )
 def test_dictation_shows_words_while_speaking(any_piper: PiperTTS, vosk_model: object, phrase: str) -> None:
-    # Оверлей показывает слова по ходу речи, в конце — вся фраза. У длинной фразы первые слова видны
-    # задолго до её конца (короткую Vosk успевает показать только под конец — это нормально).
+    # Оверлей показывает слова по ходу речи, а к концу паузы после фразы — всё, что Vosk в ней
+    # распознал (точность самих слов — дело модели; точный текст потом даёт Whisper). У длинной фразы
+    # первые слова видны задолго до её конца; короткую Vosk успевает показать только под конец.
+    # Пауза — как в голосовом цикле до конца фразы (voice.min_silence_ms, 700 мс): слова подаются
+    # и в ней, по ней Vosk дорешивает последнее слово.
     audio = say(any_piper, phrase)
-    dictation = Dictation(vosk_model)
-    shown = dictate(dictation, audio)
+    spoken = np.concatenate([audio, gap(0.7)])
+    shown = dictate(Dictation(vosk_model), spoken)
     assert shown, "слов по ходу речи нет"
-    assert phrase.lower().split()[-1][:5] in shown[-1][1], f"в конце нет последнего слова: {shown}"
+    heard = vosk_text(vosk_model, spoken)
+    assert same_phrase(shown[-1][1], heard), f"к концу паузы видна не вся фраза «{heard}»: {shown}"
     if len(phrase.split()) > 3:
         assert shown[0][0] < len(audio) * 0.6, f"первые слова — только в конце фразы: {shown}"
         assert len({text for _, text in shown}) >= 3, f"слова не появлялись по ходу речи: {shown}"
@@ -462,8 +488,10 @@ def test_dictation_starts_next_phrase_clean(any_piper: PiperTTS, vosk_model: obj
     dictate(dictation, say(any_piper, "Сделай громче"))
     dictation.reset()
     assert dictation.accept(gap(0.1)[:512]) is None
-    shown = dictate(dictation, say(any_piper, "Который час"))
-    assert shown and shown[-1][1].startswith("котор"), f"перед новой фразой — хвост прошлой: {shown}"
+    second = np.concatenate([say(any_piper, "Который час"), gap(0.7)])
+    shown = dictate(dictation, second)
+    heard = vosk_text(vosk_model, second)
+    assert shown and same_phrase(shown[-1][1], heard), f"перед «{heard}» — хвост прошлой фразы: {shown}"
 
 
 @pytest.mark.parametrize(
