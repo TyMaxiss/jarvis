@@ -1,7 +1,8 @@
 """Запуск интерфейса: окна, значок в трее, горячие клавиши, наблюдение за командами.
 
 webview.start() занимает главный поток до закрытия всех окон; голос загружается в фоне
-уже после того, как окна появились (Whisper загружается несколько секунд).
+уже после того, как окна появились (Whisper загружается несколько секунд, а при первом
+запуске модели ещё и скачиваются).
 """
 
 from __future__ import annotations
@@ -21,7 +22,11 @@ log = logging.getLogger(__name__)
 
 
 class UiOut:
-    """Вместо консоли для сообщений запуска голоса: строки «! …» показываются в окнах."""
+    """Вместо консоли для сообщений запуска голоса.
+
+    Строки «! …» — уведомления в окнах, остальные — что сейчас делается (главная показывает
+    это, пока голос загружается); ход скачивания с процентами приходит в progress.
+    """
 
     def __init__(self, controller: UiController) -> None:
         self._controller = controller
@@ -34,7 +39,12 @@ class UiOut:
                 self._controller.bus.emit("toast", {"kind": "error", "text": line.lstrip("! ")})
             elif line:
                 log.info("%s", line)
+                self._controller.voice_progress(line)
         return len(text)
+
+    def progress(self, text: str, fraction: float | None) -> None:
+        """Ход скачивания (assistant.progress.Progress): строка и доля сделанного."""
+        self._controller.voice_progress(text, fraction)
 
     def flush(self) -> None:
         """Буфера нет."""
@@ -116,11 +126,18 @@ class UiApp:
         """Окна созданы (отдельный поток): подписки, таймеры, затем загрузка голоса."""
         windows.watch_session_end()
         self._controller.start_alarms()
-        if self._voice_starter is None:
-            return
+        if self._voice_starter is not None:
+            # Поток-демон: при первом запуске голос может минутами скачивать модели,
+            # а выход из программы и «Перезапустить» ждать этого не должны.
+            threading.Thread(
+                target=self._start_voice, args=(self._voice_starter,), name="voice-start", daemon=True
+            ).start()
+
+    def _start_voice(self, starter: Callable[[Any], VoiceHandle]) -> None:
+        """Загружает голос и сообщает окнам, получилось ли."""
         controller = self._controller
         try:
-            voice = self._voice_starter(UiOut(controller))
+            voice = starter(UiOut(controller))
         except Exception as exc:
             log.warning("Голос недоступен: %s", exc, exc_info=not isinstance(exc, RuntimeError))
             controller.voice_failed(f"Голос недоступен: {exc}")

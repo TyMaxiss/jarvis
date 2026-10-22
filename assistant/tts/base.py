@@ -101,6 +101,10 @@ class SpeechQueue:
         self._thread = threading.Thread(target=self._worker, name="tts", daemon=True)
         self._thread.start()
 
+    def switch(self, engine: TTSEngine) -> None:
+        """Новый основной движок (скачался голос Piper); прежний становится запасным."""
+        self._fallback, self.engine = self.engine, engine
+
     @property
     def speaking(self) -> bool:
         """Есть что произносить или идёт воспроизведение."""

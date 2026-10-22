@@ -66,9 +66,7 @@ function Hero({ state }: { state: AppState }) {
             <Keys value={voice.stop_key} /> или «стоп».
           </p>
         ) : voice.loading ? (
-          <p className="mt-1.5 text-[13px] text-muted">
-            Загружаю распознавание речи — это несколько секунд. Команды текстом уже работают.
-          </p>
+          <LoadingNote step={voice.step} progress={voice.progress} />
         ) : (
           <p className="mt-1.5 flex items-center gap-2 text-[13px] text-warn">
             <CircleAlert size={15} />
@@ -86,6 +84,31 @@ function Hero({ state }: { state: AppState }) {
         </Button>
       )}
     </Card>
+  )
+}
+
+/** Что делается, пока голос загружается: при первом запуске модели скачиваются минутами. */
+function LoadingNote({ step, progress }: { step: string; progress: number | null }) {
+  const percent = progress === null ? null : Math.round(progress * 100)
+  return (
+    <div className="mt-1.5 max-w-xl text-[13px] text-muted">
+      <p className="truncate">{step || 'Загружаю распознавание речи — это несколько секунд.'}</p>
+      {percent !== null && (
+        <div
+          role="progressbar"
+          aria-label="Ход загрузки"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-3"
+        >
+          <div className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
+        </div>
+      )}
+      <p className="mt-1.5 text-faint">
+        {percent !== null && 'Это нужно только при первом запуске. '}Команды текстом уже работают.
+      </p>
+    </div>
   )
 }
 

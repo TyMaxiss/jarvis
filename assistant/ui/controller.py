@@ -174,6 +174,8 @@ class UiController:
         self.voice: VoiceHandle | None = None
         self.voice_loading = False  # голос ещё загружается (Whisper — несколько секунд)
         self.voice_problem = ""
+        self.voice_step = ""  # что делается, пока голос загружается: «Скачиваю модель Vosk: 40% …»
+        self.voice_fraction: float | None = None  # доля сделанного; None — неизвестна
         self._voice_state = "off"
         self._paused = False
         self._meter = False
@@ -232,6 +234,8 @@ class UiController:
                 "stop_key": config.voice.stop_key,
                 "loading": self.voice_loading,
                 "problem": self.voice_problem,
+                "step": self.voice_step,
+                "progress": self.voice_fraction,
             },
             "llm": self._llm_summary(),
             "dry_run": self.executor.dry_run,
@@ -291,11 +295,17 @@ class UiController:
 
     # --- Голос -----------------------------------------------------------------------
 
+    def voice_progress(self, text: str, fraction: float | None = None) -> None:
+        """Ход загрузки голоса (скачивание моделей и библиотек): главная показывает его под заголовком."""
+        self.voice_step, self.voice_fraction = text, fraction
+        self.bus.emit("voice_progress", {"text": text, "fraction": fraction}, to=["main"])
+
     def attach_voice(self, voice: VoiceHandle) -> None:
         """Голос запущен (он загружается в фоне после появления окон)."""
         self.voice = voice
         self.voice_loading = False
         self.voice_problem = ""
+        self.voice_step, self.voice_fraction = "", None
         self._voice_state = "idle"
         self.confirmer.voice = voice.confirmer
         self.push_state()
@@ -304,6 +314,7 @@ class UiController:
         """Голос запустить не удалось: окна покажут почему."""
         self.voice_loading = False
         self.voice_problem = problem
+        self.voice_step, self.voice_fraction = "", None
         self.push_state()
 
     def on_voice_state(self, state: str) -> None:

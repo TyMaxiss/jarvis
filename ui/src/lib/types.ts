@@ -193,6 +193,8 @@ export interface AppState {
     stop_key: string
     loading: boolean // голос ещё загружается
     problem: string
+    step: string // что делается, пока голос загружается: «Скачиваю модель Vosk: 40% (18 МБ из 45 МБ)»
+    progress: number | null // доля сделанного (0–1); null — неизвестна
   }
   llm: LlmSummary
   dry_run: boolean
@@ -299,6 +301,7 @@ export interface Step {
 export type AssistantEvent =
   | { type: 'state'; payload: AppState }
   | { type: 'voice'; payload: { state: VoiceState; detail: string } }
+  | { type: 'voice_progress'; payload: { text: string; fraction: number | null } }
   | { type: 'level'; payload: { value: number } }
   | { type: 'recognized'; payload: { text: string; source?: 'voice' | 'text' | 'hotkey' } }
   | { type: 'step'; payload: Step }

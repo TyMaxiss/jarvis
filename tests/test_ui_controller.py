@@ -125,6 +125,8 @@ def test_state_matches_interface(world: SimpleNamespace) -> None:
         "stop_key",
         "loading",
         "problem",
+        "step",
+        "progress",
     }
     assert set(state["llm"]) == {"enabled", "profile", "title", "model", "ready", "problem"}
     assert state["name"] == "Джарвис" and state["voice"]["state"] == "off"
@@ -377,6 +379,33 @@ def test_voice_controls(world: SimpleNamespace) -> None:
     assert len(world.bus.of("state")) == pushes + 1 and world.bus.of("voice")[-1]["state"] == "paused"
     controller.toggle_pause()
     assert not voice.loop.paused
+
+
+def test_voice_progress_while_loading(world: SimpleNamespace) -> None:
+    from assistant.ui.app import UiOut
+
+    controller = world.controller
+    controller.voice_loading = True
+    out = UiOut(controller)
+    out.write("Загружаю распознавание речи (Whisper)…\n")
+    assert world.bus.events[-1] == (
+        "voice_progress",
+        {"text": "Загружаю распознавание речи (Whisper)…", "fraction": None},
+        ("main",),
+    )
+    out.progress("Скачиваю библиотеки CUDA: 40% (550 МБ из 1,3 ГБ)", 0.4)
+    voice = controller.state()["voice"]
+    assert (voice["step"], voice["progress"]) == ("Скачиваю библиотеки CUDA: 40% (550 МБ из 1,3 ГБ)", 0.4)
+    out.write("! Не удалось скачать голос Piper (нет сети)\n")
+    assert world.bus.events[-1] == (
+        "toast",
+        {"kind": "error", "text": "Не удалось скачать голос Piper (нет сети)"},
+        None,
+    )
+    assert controller.state()["voice"]["progress"] == 0.4  # уведомление ход загрузки не сбрасывает
+    controller.attach_voice(FakeVoice())
+    voice = world.bus.of("state")[-1]["voice"]
+    assert (voice["step"], voice["progress"], voice["loading"]) == ("", None, False)
 
 
 def test_level_meter_goes_to_settings_and_overlay(world: SimpleNamespace) -> None:

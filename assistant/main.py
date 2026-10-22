@@ -39,7 +39,7 @@ from assistant.config import (
     load_config,
 )
 from assistant.console import ConsoleApp, ConsoleSpeaker
-from assistant.frozen import CONSOLE_EXE, FROZEN, RESET_ENV, app_dir, external_launch
+from assistant.frozen import CONSOLE_EXE, FROZEN, RESET_ENV, app_dir, cuda_dir, external_launch
 from assistant.instance import RESTART_ENV, RESTART_WAIT, SingleInstance
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent
@@ -72,6 +72,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--text", action="store_true", help="только ввод текстом, без микрофона и озвучки")
     parser.add_argument("--console", action="store_true", help="консольный режим вместо окон")
     parser.add_argument("--download-models", action="store_true", help="скачать модели Vosk, Piper, Whisper")
+    parser.add_argument(
+        "--download-cuda", action="store_true", help="скачать библиотеки CUDA для Whisper в папку cuda"
+    )
     parser.add_argument("--list-devices", action="store_true", help="показать микрофоны и выйти")
     parser.add_argument(
         "--self-check", action="store_true", help="проверить, что загружаются все части программы, и выйти"
@@ -140,7 +143,11 @@ class VoiceRuntime:
 
 
 def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
-    """Озвучка: Piper, при ошибке — голоса Windows (SAPI); None — озвучки нет."""
+    """Озвучка: Piper, при ошибке — голоса Windows (SAPI); None — озвучки нет.
+
+    Голоса Piper ещё нет (первый запуск) — пока говорит SAPI, а голос скачивает fetch_piper_voice.
+    """
+    from assistant.models import piper_voice_ready
     from assistant.tts.piper_tts import PiperTTS
     from assistant.tts.player import SoundDevicePlayer
     from assistant.tts.sapi_tts import SapiTTS
@@ -148,19 +155,77 @@ def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
     sapi = SapiTTS(config.tts.sapi_voice, config.tts.rate) if sys.platform == "win32" else None
     primary: TTSEngine | None = sapi
     if config.tts.engine == "piper":
-        try:
-            primary = PiperTTS(config.resolve(config.tts.piper_voice), config.tts.rate)
-        except Exception as exc:
-            if not isinstance(exc, TTSError):
-                log.exception("Не удалось загрузить голос Piper")
-            out.write(f"! {exc}\n")
-            if sapi is not None:
-                out.write("  Пока буду говорить голосом Windows (SAPI).\n")
+        voice = config.resolve(config.tts.piper_voice)
+        if not piper_voice_ready(voice) and sapi is not None:
+            out.write("Голос Piper скачаю при запуске голоса, а пока говорю голосом Windows (SAPI).\n")
+        else:
+            try:
+                primary = PiperTTS(voice, config.tts.rate)
+            except Exception as exc:
+                if not isinstance(exc, TTSError):
+                    log.exception("Не удалось загрузить голос Piper")
+                out.write(f"! {exc}\n")
+                if sapi is not None:
+                    out.write("  Пока буду говорить голосом Windows (SAPI).\n")
     if primary is None:
         out.write("! Озвучка недоступна — ответы будут только в консоли.\n")
         return None
     fallback = sapi if primary is not sapi else None
     return SpeechQueue(primary, SoundDevicePlayer(), fallback, config.tts.volume)
+
+
+def fetch_piper_voice(config: AppConfig, speech: SpeechQueue | None, out: Any) -> None:
+    """Голоса Piper ещё нет (первый запуск): скачивает его и переключает озвучку на него."""
+    from assistant.models import ensure_piper, piper_voice_ready
+    from assistant.tts.piper_tts import PiperTTS
+
+    voice = config.resolve(config.tts.piper_voice)
+    if speech is None or config.tts.engine != "piper" or piper_voice_ready(voice):
+        return
+    try:
+        ensure_piper(voice, out)
+        speech.switch(PiperTTS(voice, config.tts.rate))
+    except Exception as exc:
+        log.warning("Не удалось скачать голос Piper", exc_info=True)
+        out.write(
+            f"! Не удалось скачать голос Piper ({exc}). Пока говорю голосом Windows, "
+            "скачать попробую при следующем запуске.\n"
+        )
+
+
+def load_wake_model(path: Path, out: Any) -> Any:
+    """Модель Vosk (обращение по имени, голосовые «да/нет» и «стоп»); её нет — скачивает.
+
+    Возвращает None, если модель недоступна: голос работает и без неё, с горячей клавишей.
+    """
+    from assistant.audio.wakeword import VoskModelError, load_vosk_model
+    from assistant.models import ensure_vosk
+
+    try:
+        if not path.is_dir():
+            ensure_vosk(path, out)
+        return load_vosk_model(path)
+    except VoskModelError as exc:
+        out.write(f"! {exc}\n")
+    except Exception as exc:
+        log.warning("Не удалось скачать модель Vosk", exc_info=True)
+        out.write(
+            f"! Не удалось скачать модель Vosk ({exc}): пока не работают обращение по имени "
+            "и голосовые «да» и «стоп». Скачать попробую при следующем запуске.\n"
+        )
+    return None
+
+
+def cuda_fetcher(out: Any) -> Callable[[], None] | None:
+    """Чем скачать DLL CUDA для Whisper: собранный exe кладёт их в папку cuda рядом с собой.
+
+    Из исходников их ставит uv sync --extra cuda, поэтому там None — не скачивать.
+    """
+    if not FROZEN:
+        return None
+    from assistant.models import ensure_cuda
+
+    return lambda: ensure_cuda(cuda_dir(), out)
 
 
 def whisper_prompt(config: AppConfig, store: CommandStore, index: AppIndex) -> Callable[[], str]:
@@ -189,7 +254,7 @@ def start_voice(
     handle_text: Callable[[str, Confirmer | None], Any] | None = None,
     hotkeys_paused: threading.Event | None = None,
 ) -> VoiceRuntime:
-    """Запускает микрофон, распознавание и голосовой цикл.
+    """Запускает микрофон, распознавание и голосовой цикл; недостающие модели скачивает.
 
     Args:
         status: куда сообщать о состоянии голоса (консоль или окна).
@@ -203,7 +268,7 @@ def start_voice(
     from assistant.audio.capture import CaptureError, MicrophoneCapture
     from assistant.audio.sounds import SOUND_RATE, listen_chime
     from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
-    from assistant.audio.wakeword import VoskModelError, load_vosk_model, phrase_spotter, wake_spotter
+    from assistant.audio.wakeword import phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
     from assistant.stt.whisper_stt import WhisperSTT
     from assistant.voice import STOP_PHRASES, STOP_SOUNDALIKES, VoiceLoop, VoiceSettings
@@ -219,11 +284,7 @@ def start_voice(
 
     hotkeys = HotkeyManager(hotkeys_paused)
     try:
-        vosk_model = None
-        try:
-            vosk_model = load_vosk_model(config.resolve(voice.vosk_model))
-        except VoskModelError as exc:
-            out.write(f"! {exc}\n")
+        vosk_model = load_wake_model(config.resolve(voice.vosk_model), out)
         spotter = None
         if voice.wake_word and vosk_model is not None:
             spotter = wake_spotter(vosk_model, config.general.name)
@@ -236,9 +297,13 @@ def start_voice(
         if spotter is None and not voice.push_to_talk:
             raise VoiceSetupError("слово активации недоступно, а push-to-talk выключен")
 
-        out.write("Загружаю распознавание речи (Whisper)… при первом запуске модель скачивается.\n")
+        out.write("Загружаю распознавание речи (Whisper)…\n")
         stt = WhisperSTT(
-            config.stt, config.resolve(config.stt.download_dir), whisper_prompt(config, store, index)
+            config.stt,
+            config.resolve(config.stt.download_dir),
+            whisper_prompt(config, store, index),
+            out=out,
+            fetch_cuda=cuda_fetcher(out),
         )
         try:
             stt.load()
@@ -544,6 +609,10 @@ def main(argv: list[str] | None = None) -> int:
         from assistant.models import download_all
 
         return 0 if download_all(config, out) else 1
+    if args.download_cuda:
+        from assistant.models import download_cuda
+
+        return 0 if download_cuda(out) else 1
     if args.self_check:
         from assistant.selfcheck import run_self_check
 
@@ -595,6 +664,7 @@ def run_console(
 
     runtime = None
     if voice_wanted:
+        fetch_piper_voice(config, speech, out)
         try:
             runtime = start_voice(
                 config, core.pipeline, core.normalizer, console, speech, core.store, core.index, out
@@ -703,6 +773,7 @@ def run_ui(
         return core.pipeline.handle_text(text, "voice", confirmer.for_source("voice"))
 
     def voice_starter(progress: Any) -> VoiceRuntime:
+        fetch_piper_voice(config, speech, progress)
         return start_voice(
             config, core.pipeline, core.normalizer, status, speech, core.store, core.index, progress,
             handle_text=handle_voice, hotkeys_paused=hotkeys_paused,

@@ -19,6 +19,14 @@ describe('reduce', () => {
     expect(next.recent[0]).toBe(item)
     expect(reduce(next, { type: 'result', payload: item })!.recent.filter((r) => r.id === 99)).toHaveLength(1)
   })
+
+  it('voice_progress — что делается, пока голос загружается, и доля сделанного', async () => {
+    const state = await createMockApi(() => {}).get_state()
+    const text = 'Скачиваю модель Vosk: 40% (18 МБ из 45 МБ)'
+    const next = reduce(state, { type: 'voice_progress', payload: { text, fraction: 0.4 } })!
+    expect(next.voice).toMatchObject({ step: text, progress: 0.4, state: state.voice.state })
+    expect(reduce(next, { type: 'voice_progress', payload: { text: 'Распаковываю', fraction: null } })!.voice.progress).toBeNull()
+  })
 })
 
 describe('applyTheme', () => {

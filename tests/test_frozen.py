@@ -25,6 +25,17 @@ def test_clean_path_drops_bundle_folders(tmp_path: os.PathLike[str]) -> None:
     )
 
 
+def test_clean_path_drops_cuda_folder_but_not_lookalikes(tmp_path: os.PathLike[str]) -> None:
+    bundle, cuda = os.path.join(str(tmp_path), "_internal"), os.path.join(str(tmp_path), "cuda")
+    keep = [os.path.join(str(tmp_path), "_internal2"), os.path.join(str(tmp_path), "cuda.download")]
+    path = os.pathsep.join([cuda, *keep, os.path.join(bundle, "vosk")])
+    assert frozen.clean_path(path, bundle, cuda) == os.pathsep.join(keep)
+
+
+def test_cuda_folder_is_next_to_program() -> None:
+    assert frozen.cuda_dir() == frozen.app_dir() / "cuda"
+
+
 def test_external_launch_does_nothing_outside_build() -> None:
     before = os.environ.get("PATH")
     with frozen.external_launch():

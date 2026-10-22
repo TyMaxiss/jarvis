@@ -66,7 +66,10 @@ def load_vosk_model(path: Path) -> Any:
     try:
         return vosk.Model(str(path))
     except Exception as exc:
-        raise VoskModelError(f"Не удалось загрузить модель Vosk из {path}: {exc}") from exc
+        raise VoskModelError(
+            f"Не удалось загрузить модель Vosk из {path}: {exc}. Удалите эту папку — "
+            "при следующем запуске модель скачается заново."
+        ) from exc
 
 
 def _normalize(text: str) -> str:

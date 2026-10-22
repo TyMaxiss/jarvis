@@ -239,6 +239,8 @@ function makeState(): AppState {
       stop_key: 'ctrl+alt+q',
       loading: false,
       problem: '',
+      step: '',
+      progress: null,
     },
     llm: { enabled: true, profile: 'deepseek', title: 'DeepSeek', model: 'deepseek-flash', ready: true, problem: '' },
     dry_run: false,

@@ -5,7 +5,8 @@
 (SetDllDirectoryW), vosk добавляет свою папку в PATH, и программа, которую запускает
 ассистент, унаследовала бы и то и другое — и могла бы загрузить чужие DLL. Поэтому внешние
 программы запускаются внутри external_launch (документация PyInstaller: «Launching external
-programs from the frozen application»).
+programs from the frozen application»). Папку cuda с DLL для Whisper (она тоже в PATH) запущенные
+программы не видят по той же причине.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from typing import Any
 FROZEN = bool(getattr(sys, "frozen", False))
 CONSOLE_EXE = "JarvisConsole.exe"  # та же сборка с окном консоли (Jarvis.exe — без него)
 RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"  # новый экземпляр exe — не дочерний процесс этого
+CUDA_DIR = "cuda"  # DLL CUDA для Whisper на видеокарте — рядом с программой
 # Поиск DLL и PATH — общие для всего процесса: запуски из разных потоков идут по очереди.
 _LAUNCH_LOCK = threading.Lock()
 
@@ -34,19 +36,25 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def cuda_dir() -> Path:
+    """Папка с DLL CUDA рядом с программой: собранный exe скачивает их туда сам (models.ensure_cuda)."""
+    return app_dir() / CUDA_DIR
+
+
 def run_hint(arguments: str) -> str:
     """Как запустить ассистента с аргументами: в сборке — JarvisConsole.exe, иначе через uv."""
     return f"{CONSOLE_EXE} {arguments}" if FROZEN else f"uv run python -m assistant {arguments}"
 
 
-def clean_path(path: str, bundle: str) -> str:
-    """PATH без папок сборки (bundle — _internal)."""
-    prefix = os.path.normcase(os.path.abspath(bundle))
-    return os.pathsep.join(
-        part
-        for part in path.split(os.pathsep)
-        if part and not os.path.normcase(os.path.abspath(part)).startswith(prefix)
-    )
+def clean_path(path: str, *folders: str) -> str:
+    """PATH без папок folders и их подпапок (папка сборки _internal, папка cuda)."""
+    prefixes = [os.path.normcase(os.path.abspath(folder)) for folder in folders]
+
+    def inside(part: str) -> bool:
+        part = os.path.normcase(os.path.abspath(part))
+        return any(part == prefix or part.startswith(prefix + os.sep) for prefix in prefixes)
+
+    return os.pathsep.join(part for part in path.split(os.pathsep) if part and not inside(part))
 
 
 @contextlib.contextmanager
@@ -64,7 +72,7 @@ def external_launch() -> Iterator[None]:
     kernel32.SetDllDirectoryW.argtypes = (ctypes.c_wchar_p,)
     with _LAUNCH_LOCK:
         original = os.environ.get("PATH", "")
-        os.environ["PATH"] = clean_path(original, bundle)
+        os.environ["PATH"] = clean_path(original, bundle, str(cuda_dir()))
         kernel32.SetDllDirectoryW(None)
         try:
             yield

@@ -132,6 +132,18 @@ jobs:
           # Нативные части: Vosk, Whisper, VAD, Piper, звук, .NET и WebView2, UI Automation, SAPI.
           & "$app\JarvisConsole.exe" --self-check
           if ($LASTEXITCODE) { Get-Content "$app\logs\assistant.log" -Tail 80; exit $LASTEXITCODE }
+          # Библиотеки CUDA, как при первом запуске с видеокартой: PyPI, sha256, распаковка, LoadLibrary.
+          & "$app\JarvisConsole.exe" --download-cuda
+          if ($LASTEXITCODE) { Get-Content "$app\logs\assistant.log" -Tail 80; exit $LASTEXITCODE }
+          if (-not (Test-Path "$app\cuda\cudnn_ops64_9.dll")) { throw "в папке cuda нет cuDNN" }
+          if (Test-Path "$app\cuda.download") { throw "cuda.download не убрана" }
+          # Модели для голоса — тем же кодом, что при первом запуске: Vosk, Piper, Whisper small.
+          & "$app\JarvisConsole.exe" --download-models
+          if ($LASTEXITCODE) { Get-Content "$app\logs\assistant.log" -Tail 80; exit $LASTEXITCODE }
+          foreach ($model in 'vosk-model-small-ru-0.22\am', 'piper\ru_RU-dmitri-medium.onnx.json',
+                             'whisper\models--Systran--faster-whisper-small') {
+            if (-not (Test-Path "$app\models\$model")) { throw "не скачалось: models\$model" }
+          }
           "который час`nсделай громче`n:q" | & "$app\JarvisConsole.exe" --console --text --dry-run
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if (-not (Test-Path "$app\config.yaml")) { throw "config.yaml не создан рядом с exe" }

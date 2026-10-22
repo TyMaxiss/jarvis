@@ -19,10 +19,17 @@ from assistant.audio.wakeword import SpotResult, parse_result, phrase_spotter, w
 from assistant.config import AppConfig, SttConfig
 from assistant.models import _safe_extract, download_all
 from assistant.safety.confirm import VoiceConfirmer
-from assistant.stt.whisper_stt import WhisperSTT, build_prompt, is_hallucination, resolve_settings
+from assistant.stt.whisper_stt import (
+    WhisperSTT,
+    build_prompt,
+    is_hallucination,
+    resolve_settings,
+    whisper_download_progress,
+    whisper_repo,
+)
 from assistant.tts.base import SpeechQueue, TeeSpeaker, split_sentences
 from assistant.tts.sapi_tts import sapi_rate, token_languages
-from tests.conftest import ROOT
+from tests.conftest import ROOT, wait_until
 from tests.voice_fakes import FakeSource, FakeSpeech, silence, speech
 
 # --- VAD и границы фразы -----------------------------------------------------------
@@ -175,6 +182,19 @@ def test_speech_queue_fallback_engine() -> None:
     queue.say("Привет")
     assert queue.wait_idle(timeout=5)
     assert fallback.texts == ["Привет"]
+    queue.close()
+
+
+def test_speech_queue_switches_to_downloaded_voice() -> None:
+    sapi, piper = FakeEngine("sapi"), FakeEngine("piper", fail=True)
+    queue = SpeechQueue(sapi, FakePlayer())
+    queue.say("Пока голос Windows.")
+    assert queue.wait_idle(timeout=5)
+    queue.switch(piper)  # голос Piper скачался
+    queue.say("Теперь Piper.")
+    assert queue.wait_idle(timeout=5)
+    # Piper не смог — прежний голос стал запасным.
+    assert queue.engine is piper and sapi.texts == ["Пока голос Windows.", "Теперь Piper."]
     queue.close()
 
 
@@ -409,6 +429,91 @@ def test_without_cuda_libraries_gpu_model_is_not_loaded(
     assert loaded == [("small", "cpu", "int8")] and stt.device == "cpu"
     assert "нет библиотек CUDA (cublas64_12.dll)" in stt.cuda_problem
     assert "uv sync --extra cuda" in stt.cuda_problem and "«Процессор»" in stt.cuda_problem
+
+
+def gpu_without_libraries(
+    monkeypatch: pytest.MonkeyPatch, after_fetch: str
+) -> tuple[list[tuple[str, str, str]], list[bool]]:
+    """Видеокарта есть, DLL CUDA нет; когда в список fetched что-то добавят (скачали),
+    недостаёт after_fetch ('' — ничего). Возвращает загруженные модели и fetched."""
+    loaded: list[tuple[str, str, str]] = []
+    fetched: list[bool] = []
+
+    def fake_load(self: WhisperSTT, model: str, device: str, compute: str) -> None:
+        loaded.append((model, device, compute))
+        self._model, self.device = object(), device
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr(
+        "assistant.stt.whisper_stt.missing_cuda_library",
+        lambda: after_fetch if fetched else "cublas64_12.dll",
+    )
+    monkeypatch.setattr("assistant.stt.whisper_stt.register_cuda_dlls", lambda: None)
+    monkeypatch.setattr(WhisperSTT, "_load", fake_load)
+    monkeypatch.setattr(WhisperSTT, "_warm_up", lambda self: None)
+    return loaded, fetched
+
+
+def test_missing_cuda_libraries_are_downloaded_before_gpu_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    loaded, fetched = gpu_without_libraries(monkeypatch, after_fetch="")
+    stt = WhisperSTT(SttConfig(), tmp_path, fetch_cuda=lambda: fetched.append(True))
+    stt.load()
+    assert fetched == [True] and loaded == [("large-v3-turbo", "cuda", "float16")]
+    assert stt.cuda_problem == ""
+
+
+def test_failed_cuda_download_falls_back_to_cpu(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    loaded, _ = gpu_without_libraries(monkeypatch, after_fetch="")
+
+    def offline() -> None:
+        raise OSError("нет сети")
+
+    stt = WhisperSTT(SttConfig(), tmp_path, fetch_cuda=offline)
+    stt.load()
+    assert loaded == [("small", "cpu", "int8")]
+    assert "не удалось скачать библиотеки CUDA (нет сети)" in stt.cuda_problem
+    assert "при следующем запуске" in stt.cuda_problem and "uv sync" not in stt.cuda_problem
+
+
+def test_downloaded_cuda_library_that_does_not_load(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    loaded, fetched = gpu_without_libraries(monkeypatch, after_fetch="cudnn_ops64_9.dll")
+    stt = WhisperSTT(SttConfig(), tmp_path, fetch_cuda=lambda: fetched.append(True))
+    stt.load()
+    assert loaded == [("small", "cpu", "int8")]
+    assert "cudnn_ops64_9.dll не загружается" in stt.cuda_problem and "Удалите папку" in stt.cuda_problem
+
+
+def test_whisper_repo_like_faster_whisper() -> None:
+    assert whisper_repo("small") == "Systran/faster-whisper-small"
+    assert whisper_repo("large-v3-turbo") == "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+    assert whisper_repo("someone/my-model") == "someone/my-model"
+    assert whisper_repo("unknown") == ""
+
+
+def test_whisper_download_progress_watches_model_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Window(io.StringIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.steps: list[tuple[str, float | None]] = []
+
+        def progress(self, text: str, fraction: float | None) -> None:
+            self.steps.append((text, fraction))
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.whisper_download_size", lambda repo: 4 << 20)
+    window = Window()
+    folder = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+    with whisper_download_progress("small", tmp_path, window):
+        folder.mkdir(parents=True)
+        (folder / "abc.incomplete").write_bytes(bytes(4 << 20))
+        assert wait_until(lambda: bool(window.steps) and window.steps[-1][1] == 1.0, timeout=5)
+    assert "Скачиваю модель распознавания речи Whisper small (один раз)" in window.getvalue()
+    assert window.steps[-1] == ("Скачиваю модель Whisper small: 100% (4 МБ из 4 МБ)", 1.0)
+    with whisper_download_progress("small", tmp_path, None):  # некому сообщать
+        pass
 
 
 def test_cpu_choice_skips_gpu_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

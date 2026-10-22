@@ -25,7 +25,15 @@ def _vosk() -> str:
 def _ctranslate2() -> str:
     import ctranslate2
 
-    return f"ctranslate2 {ctranslate2.__version__}, видеокарт CUDA: {ctranslate2.get_cuda_device_count()}"
+    from assistant.stt.whisper_stt import missing_cuda_library, register_cuda_dlls
+
+    devices = ctranslate2.get_cuda_device_count()
+    detail = f"ctranslate2 {ctranslate2.__version__}, видеокарт CUDA: {devices}"
+    if devices:  # без библиотек CUDA Whisper на видеокарте не запустится
+        register_cuda_dlls()
+        missing = missing_cuda_library()
+        detail += f", библиотеки CUDA: {f'нет {missing}' if missing else 'на месте'}"
+    return detail
 
 
 def _vad() -> str:

@@ -2,11 +2,13 @@
 
 Модель загружается один раз при старте. Видеокарта NVIDIA (CUDA) определяется
 автоматически; если CUDA или её библиотеки недоступны, используется процессор.
+Собранный exe недостающие библиотеки CUDA скачивает сам (fetch_cuda).
 Скачанная модель берётся из локального кэша без обращения к интернету.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -14,13 +16,15 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from assistant.config import SttConfig
-from assistant.frozen import FROZEN, app_dir
+from assistant.frozen import cuda_dir
+from assistant.progress import Progress, watch_folder
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +43,8 @@ _MAX_PROMPT_CHARS = 600
 # для проверки: свой маленький загрузчик с этим именем лежит в самом пакете ctranslate2 и
 # загружается при его импорте; cudnn_ops64_9.dll есть только в настоящем cuDNN 9.
 CUDA_LIBRARIES = ("cublas64_12.dll", "cudnn_ops64_9.dll")
+# Какие файлы модели скачивает faster_whisper.utils.download_model (allow_patterns).
+WHISPER_FILES = ("config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.*")
 # Тишина по краям фразы: без неё Whisper иногда «съедает» первый звук («Делай» вместо «Сделай»).
 _PAD_SECONDS = 0.3
 
@@ -84,14 +90,14 @@ def cuda_dirs() -> list[Path]:
     else:
         for base in getattr(nvidia, "__path__", []):
             dirs += sorted(Path(base).glob("*/bin"))
-    own = app_dir() / "cuda"  # в собранный exe CUDA не входит: DLL можно положить сюда
+    own = cuda_dir()  # в собранный exe CUDA не входит: он скачивает DLL сюда сам
     if own.is_dir():
         dirs.append(own)
     return dirs
 
 
 def register_cuda_dlls() -> None:
-    """Делает видимыми DLL CUDA (cuda_dirs).
+    """Делает видимыми DLL CUDA (cuda_dirs); уже добавленные папки второй раз не добавляются.
 
     CTranslate2 загружает cuBLAS и cuDNN при первом распознавании на видеокарте.
     Пакеты nvidia-cublas-cu12 и nvidia-cudnn-cu12 кладут DLL в site-packages/nvidia/*/bin,
@@ -99,7 +105,10 @@ def register_cuda_dlls() -> None:
     """
     if sys.platform != "win32":
         return
+    known = {os.path.normcase(part) for part in os.environ.get("PATH", "").split(os.pathsep)}
     for bin_dir in cuda_dirs():
+        if os.path.normcase(str(bin_dir)) in known:
+            continue
         os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
         os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         log.debug("DLL CUDA: %s", bin_dir)
@@ -154,6 +163,82 @@ def resolve_settings(config: SttConfig, has_cuda: bool) -> tuple[str, str, str]:
     return model, device, compute
 
 
+def cuda_libraries_needed(config: SttConfig) -> bool:
+    """Whisper пойдёт на видеокарту, а её DLL не находятся — их надо скачать."""
+    if resolve_settings(config, cuda_available())[1] != "cuda":
+        return False
+    register_cuda_dlls()
+    return bool(missing_cuda_library())
+
+
+def whisper_repo(model: str) -> str:
+    """Репозиторий модели на Hugging Face — как в faster_whisper.utils.download_model ('' — неизвестно)."""
+    if "/" in model:
+        return model
+    from faster_whisper import utils
+
+    return getattr(utils, "_MODELS", {}).get(model, "")
+
+
+def whisper_download_size(repo: str) -> int:
+    """Сколько байт скачивать для модели: её файлы на Hugging Face (0 — узнать не удалось)."""
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(repo, files_metadata=True, timeout=10)
+    except Exception:
+        log.debug("Размер модели %s неизвестен", repo, exc_info=True)
+        return 0
+    files = info.siblings or []
+    return sum(f.size or 0 for f in files if any(fnmatch(f.rfilename, pattern) for pattern in WHISPER_FILES))
+
+
+def whisper_download_progress(
+    model: str, download_dir: Path, out: Any
+) -> contextlib.AbstractContextManager[None]:
+    """Ход скачивания модели (на время блока): сколько байт в её папке кэша Hugging Face."""
+    repo = whisper_repo(model)
+    if out is None or not repo:
+        return contextlib.nullcontext()
+    out.write(f"Скачиваю модель распознавания речи Whisper {model} (один раз)\n")
+    progress = Progress(out, f"Скачиваю модель Whisper {model}", whisper_download_size(repo))
+    # Так кэш Hugging Face называет папку модели: models--Systran--faster-whisper-small.
+    return watch_folder(download_dir / f"models--{repo.replace('/', '--')}", progress)
+
+
+def fetch_cuda_libraries(fetch: Callable[[], None]) -> str:
+    """Скачивает DLL CUDA и делает их видимыми: '' — скачались, иначе — почему нет."""
+    try:
+        fetch()
+    except Exception as exc:
+        log.warning("Не удалось скачать библиотеки CUDA", exc_info=True)
+        return str(exc) or type(exc).__name__
+    finally:
+        register_cuda_dlls()  # папка cuda могла появиться, даже если скачалось не всё
+    return ""
+
+
+def cuda_message(missing: str, fetch_error: str | None) -> str:
+    """Почему Whisper не на видеокарте, хотя она есть: нет DLL CUDA.
+
+    fetch_error: None — скачивать DLL нечем (запуск из исходников), '' — скачались, но не
+    загружаются, иначе — почему не скачались.
+    """
+    if fetch_error is None:
+        how = "Включить видеокарту: uv sync --extra cuda."
+        reason = f"нет библиотек CUDA ({missing})"
+    elif fetch_error:
+        how = "Скачать их попробую при следующем запуске."
+        reason = f"не удалось скачать библиотеки CUDA ({fetch_error})"
+    else:
+        how = f"Удалите папку {cuda_dir()} — при следующем запуске библиотеки скачаются заново."
+        reason = f"библиотека CUDA {missing} не загружается"
+    return (
+        f"Видеокарта NVIDIA не используется: {reason}, распознаю на процессоре — это медленнее. {how} "
+        "Чтобы не видеть это сообщение, выберите в настройках распознавания «Процессор»."
+    )
+
+
 class WhisperSTT:
     """Обёртка над faster_whisper.WhisperModel.
 
@@ -161,6 +246,8 @@ class WhisperSTT:
         config: настройки распознавания.
         download_dir: куда скачивать модели.
         prompt: функция, возвращающая initial_prompt (список программ строится в фоне).
+        out: куда сообщать о скачивании модели (консоль или окна); None — никуда.
+        fetch_cuda: скачивает DLL CUDA, если их нет (собранный exe); None — не скачивать.
     """
 
     def __init__(
@@ -168,10 +255,15 @@ class WhisperSTT:
         config: SttConfig,
         download_dir: Path,
         prompt: Callable[[], str] | None = None,
+        *,
+        out: Any = None,
+        fetch_cuda: Callable[[], None] | None = None,
     ) -> None:
         self._config = config
         self._download_dir = download_dir
         self._prompt = prompt or (lambda: "")
+        self._out = out
+        self._fetch_cuda = fetch_cuda
         self._model: Any = None
         self.model_name = ""
         self.device = ""
@@ -184,18 +276,13 @@ class WhisperSTT:
         self.cuda_problem = ""
         if device == "cuda":
             missing = missing_cuda_library()
+            fetch_error: str | None = None
+            if missing and self._fetch_cuda is not None:
+                fetch_error = fetch_cuda_libraries(self._fetch_cuda)
+                missing = missing_cuda_library()
             if missing:
                 # Модель для видеокарты даже не загружаем: без DLL она не заработает.
-                how = (
-                    "положите DLL cuBLAS 12 и cuDNN 9 в папку cuda рядом с Jarvis.exe"
-                    if FROZEN
-                    else "uv sync --extra cuda"
-                )
-                self.cuda_problem = (
-                    f"Видеокарта NVIDIA не используется: нет библиотек CUDA ({missing}), распознаю "
-                    f"на процессоре — это медленнее. Включить видеокарту: {how}. "
-                    "Чтобы не видеть это сообщение, выберите в настройках распознавания «Процессор»."
-                )
+                self.cuda_problem = cuda_message(missing, fetch_error)
             else:
                 try:
                     self._load(model, device, compute)
@@ -229,7 +316,8 @@ class WhisperSTT:
             self._model = WhisperModel(model, local_files_only=True, **options)
         except Exception:
             log.info("Модели Whisper %s нет в кэше — скачиваю (один раз)", model)
-            self._model = WhisperModel(model, local_files_only=False, **options)
+            with whisper_download_progress(model, self._download_dir, self._out):
+                self._model = WhisperModel(model, local_files_only=False, **options)
         self.model_name, self.device = model, device
         log.info(
             "Whisper %s (%s, %s) загружен за %.1f с", model, device, compute, time.perf_counter() - started
