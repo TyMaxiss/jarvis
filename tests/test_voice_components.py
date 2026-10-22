@@ -20,8 +20,10 @@ from assistant.config import AppConfig, SttConfig
 from assistant.models import _safe_extract, download_all
 from assistant.safety.confirm import VoiceConfirmer
 from assistant.stt.whisper_stt import (
+    ModelDownloadError,
     WhisperSTT,
     build_prompt,
+    cached_model,
     is_hallucination,
     resolve_settings,
     whisper_download_progress,
@@ -515,6 +517,126 @@ def test_whisper_download_progress_watches_model_folder(
     assert window.steps[-1] == ("Скачиваю модель Whisper small: 100% (4 МБ из 4 МБ)", 1.0)
     with whisper_download_progress("small", tmp_path, None):  # некому сообщать
         pass
+
+
+def fake_cache(folder: Path, model: str = "small") -> Path:
+    """Модель Whisper в кэше Hugging Face — так её раскладывает snapshot_download."""
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    repo = folder / f"models--{whisper_repo(model).replace('/', '--')}"
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text(commit, encoding="utf-8")
+    snapshot = repo / "snapshots" / commit
+    snapshot.mkdir(parents=True)
+    for name in ("config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.json"):
+        (snapshot / name).write_text("{}", encoding="utf-8")
+    return snapshot
+
+
+def fake_whisper_model(
+    monkeypatch: pytest.MonkeyPatch, fail_on: str = "", error: str = ""
+) -> list[tuple[Path, str]]:
+    """Вместо faster_whisper.WhisperModel: запоминает (папка, устройство); на fail_on — error."""
+    loaded: list[tuple[Path, str]] = []
+
+    def create(path: str, *, device: str, **options: object) -> object:
+        loaded.append((Path(path), device))
+        if device == fail_on:
+            raise RuntimeError(error)
+        return object()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", create)
+    return loaded
+
+
+def no_downloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fetch(*args: object) -> str:
+        pytest.fail("лишнее скачивание")
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.fetch_model", fetch)
+
+
+def test_cached_model_is_found_without_network(tmp_path: Path) -> None:
+    assert cached_model("small", tmp_path) is None
+    snapshot = fake_cache(tmp_path)
+    assert cached_model("small", tmp_path) == str(snapshot)
+    assert cached_model("large-v3-turbo", tmp_path) is None
+    assert cached_model(str(snapshot), tmp_path / "other") == str(snapshot)  # своя папка с моделью
+
+
+def test_downloaded_model_is_loaded_from_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    snapshot = fake_cache(tmp_path)
+    loaded = fake_whisper_model(monkeypatch)
+    no_downloads(monkeypatch)
+    out = io.StringIO()
+    stt = WhisperSTT(SttConfig(device="cpu"), tmp_path, out=out)
+    stt.load()
+    assert loaded == [(snapshot, "cpu")] and (stt.model_name, stt.device) == ("small", "cpu")
+    assert out.getvalue() == ""
+
+
+def test_model_on_disk_that_does_not_load_is_not_downloaded_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Так было после обновления: модель на диске не загрузилась, а окно показывало «Скачиваю
+    # модель…» и затем «Нужен интернет для первой загрузки» — вместо настоящей причины.
+    fake_cache(tmp_path)
+    fake_whisper_model(monkeypatch, fail_on="cpu", error="Unable to open file 'model.bin'")
+    no_downloads(monkeypatch)
+    out = io.StringIO()
+    with pytest.raises(RuntimeError, match="Unable to open file 'model.bin'"):
+        WhisperSTT(SttConfig(device="cpu"), tmp_path, out=out).load()
+    assert "Скачиваю" not in out.getvalue()
+
+
+def test_missing_model_is_downloaded_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    loaded = fake_whisper_model(monkeypatch)
+    fetched: list[str] = []
+
+    def fetch(model: str, folder: Path, out: object) -> str:
+        fetched.append(model)
+        return str(fake_cache(folder, model))
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.fetch_model", fetch)
+    WhisperSTT(SttConfig(device="cpu"), tmp_path).load()
+    assert fetched == ["small"] and [device for _, device in loaded] == ["cpu"]
+
+
+def test_failed_download_is_reported_as_download(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    def download_model(model: str, *, cache_dir: str, local_files_only: bool = False) -> str:
+        if local_files_only:
+            raise LocalEntryNotFoundError("нет в кэше")
+        raise ConnectionError("нет сети")
+
+    monkeypatch.setattr("faster_whisper.utils.download_model", download_model)
+    with pytest.raises(ModelDownloadError, match=r"не удалось скачать модель Whisper small \(нет сети\)"):
+        WhisperSTT(SttConfig(device="cpu"), tmp_path).load()
+
+
+@pytest.mark.parametrize(
+    ("on_disk", "expected"),
+    [
+        # Модели для процессора нет: та, что для видеокарты, работает и на процессоре —
+        # из-за того, что видеокарта не запустилась, полгигабайта не качаются.
+        (["large-v3-turbo"], "large-v3-turbo"),
+        (["large-v3-turbo", "small"], "small"),
+    ],
+)
+def test_gpu_failure_falls_back_to_model_on_disk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, on_disk: list[str], expected: str
+) -> None:
+    for model in on_disk:
+        fake_cache(tmp_path, model)
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "")
+    loaded = fake_whisper_model(monkeypatch, fail_on="cuda", error="CUDA failed with error out of memory")
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    stt.load()
+    assert [device for _, device in loaded] == ["cuda", "cpu"]
+    assert (stt.model_name, stt.device) == (expected, "cpu")
+    assert "out of memory" in stt.cuda_problem and "снова попробую видеокарту" in stt.cuda_problem
 
 
 def test_cpu_choice_skips_gpu_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

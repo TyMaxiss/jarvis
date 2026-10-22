@@ -206,6 +206,41 @@ def whisper_download_progress(
     return watch_folder(download_dir / f"models--{repo.replace('/', '--')}", progress)
 
 
+class ModelDownloadError(OSError):
+    """Модели Whisper на диске нет, а скачать её не удалось (нет сети и т. п.)."""
+
+
+def cached_model(model: str, download_dir: Path) -> str | None:
+    """Папка модели Whisper на диске: в кэше download_dir, а если model — папка, то она сама.
+
+    None — модели на диске нет или она скачана не до конца: её надо скачать.
+    """
+    if os.path.isdir(model):
+        return model
+    from faster_whisper.utils import download_model
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+        return str(download_model(model, cache_dir=str(download_dir), local_files_only=True))
+    except LocalEntryNotFoundError:
+        return None
+
+
+def fetch_model(model: str, download_dir: Path, out: Any) -> str:
+    """Скачивает модель Whisper в кэш download_dir (с ходом загрузки для out) и возвращает её папку.
+
+    Raises:
+        ModelDownloadError: скачать не удалось.
+    """
+    from faster_whisper.utils import download_model
+
+    try:
+        with whisper_download_progress(model, download_dir, out):
+            return str(download_model(model, cache_dir=str(download_dir)))
+    except Exception as exc:
+        raise ModelDownloadError(f"не удалось скачать модель Whisper {model} ({exc})") from exc
+
+
 def fetch_cuda_libraries(fetch: Callable[[], None]) -> str:
     """Скачивает DLL CUDA и делает их видимыми: '' — скачались, иначе — почему нет."""
     try:
@@ -290,13 +325,19 @@ class WhisperSTT:
                     return
                 except Exception as exc:
                     self._model = None
+                    log.warning("Whisper на видеокарте не запустился", exc_info=True)
                     self.cuda_problem = (
-                        f"Whisper на видеокарте не запустился ({exc}) — распознаю на процессоре."
+                        f"Whisper на видеокарте не запустился ({exc}) — распознаю на процессоре. "
+                        "При следующем запуске снова попробую видеокарту."
                     )
             log.info("%s", self.cuda_problem)
             cpu_config = self._config.model_copy(update={"device": "cpu"})
-            model, device, _ = resolve_settings(cpu_config, has_cuda=False)
-            compute = "int8"
+            cpu_model, device, _ = resolve_settings(cpu_config, has_cuda=False)
+            # Своей модели для процессора ещё нет, а модель для видеокарты скачана — распознаём
+            # ею: из-за того, что видеокарта не запустилась, не стоит качать ещё полгигабайта.
+            if cached_model(model, self._download_dir) and not cached_model(cpu_model, self._download_dir):
+                cpu_model = model
+            model, compute = cpu_model, "int8"
         self._load(model, device, compute)
 
     def _load(self, model: str, device: str, compute: str) -> None:
@@ -304,20 +345,16 @@ class WhisperSTT:
 
         started = time.perf_counter()
         self._download_dir.mkdir(parents=True, exist_ok=True)
-        options: dict[str, Any] = {
-            "device": device,
-            "compute_type": compute,
-            "download_root": str(self._download_dir),
-        }
+        # Скачивается, только если модели на диске нет: скачанную модель, которая не загрузилась,
+        # повторное скачивание не починит, а «Скачиваю…» в окне только собьёт с толку.
+        path = cached_model(model, self._download_dir)
+        if path is None:
+            log.info("Модели Whisper %s нет на диске — скачиваю (один раз)", model)
+            path = fetch_model(model, self._download_dir, self._out)
+        options: dict[str, Any] = {"device": device, "compute_type": compute}
         if device == "cpu":
             options["cpu_threads"] = self._config.cpu_threads or default_cpu_threads()
-        try:
-            # Сначала только локальный кэш: так работает без интернета и не ждёт сеть.
-            self._model = WhisperModel(model, local_files_only=True, **options)
-        except Exception:
-            log.info("Модели Whisper %s нет в кэше — скачиваю (один раз)", model)
-            with whisper_download_progress(model, self._download_dir, self._out):
-                self._model = WhisperModel(model, local_files_only=False, **options)
+        self._model = WhisperModel(path, **options)
         self.model_name, self.device = model, device
         log.info(
             "Whisper %s (%s, %s) загружен за %.1f с", model, device, compute, time.perf_counter() - started

@@ -5,10 +5,12 @@ GitHub и раздачу файлов изображает локальный HT
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import io
 import json
+import os
 import re
 import tomllib
 import urllib.error
@@ -356,6 +358,29 @@ def test_install_runs_installer_silently(monkeypatch: pytest.MonkeyPatch, tmp_pa
     launched.error = OSError("нет доступа")
     with pytest.raises(UpdateError, match="не удалось запустить установщик"):
         Updater(tmp_path / "update.json").install(installer, tmp_path / "Jarvis")
+
+
+@contextlib.contextmanager
+def path_cleaned_to(path: str) -> Iterator[None]:
+    """Вместо external_launch: на время блока PATH — path, потом прежний."""
+    original = os.environ["PATH"]
+    os.environ["PATH"] = path
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = original
+
+
+def test_installer_gets_path_without_program_folders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Установщик запускает новую версию со своим окружением: папки CUDA, Vosk и WebView2,
+    # которые этот процесс добавил себе в PATH, ей не нужны.
+    launched = Launched()
+    monkeypatch.setattr(updates.subprocess, "Popen", launched)
+    monkeypatch.setattr(updates, "external_launch", lambda: path_cleaned_to("C:\\Windows"))
+    monkeypatch.setenv("PATH", os.pathsep.join(["C:\\Jarvis\\cuda", "C:\\Windows"]))
+    Updater(tmp_path / "update.json").install(tmp_path / "Jarvis-Setup-0.7.2.exe", tmp_path / "Jarvis")
+    assert launched.calls[0][1]["env"]["PATH"] == "C:\\Windows"
+    assert os.environ["PATH"] == os.pathsep.join(["C:\\Jarvis\\cuda", "C:\\Windows"])
 
 
 def test_release_view_is_ready_for_windows() -> None:

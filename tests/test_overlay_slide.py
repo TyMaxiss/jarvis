@@ -267,7 +267,6 @@ def desktop(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
         size[0] = (width, height)
 
     monkeypatch.setattr(win32, "make_overlay", record("make_overlay"))
-    monkeypatch.setattr(win32, "set_transparent", record("transparent"))
     monkeypatch.setattr(win32, "round_corners", record("corners"))
     monkeypatch.setattr(win32, "set_bounds", set_bounds)
     monkeypatch.setattr(win32, "show_without_focus", record("show"))
@@ -338,16 +337,15 @@ def test_overlay_slides_in_and_out(desktop: list[tuple[Any, ...]]) -> None:
 
 
 def test_orb_window_is_shaped_like_orb_and_card_and_slides_in(desktop: list[tuple[Any, ...]]) -> None:
-    from assistant.ui.windows import ORB_SHAPE
+    from assistant.ui.windows import ORB_SHAPE, scaled_shape
 
-    shape = tuple(tuple(round(side * 1.5) for side in part) for part in ORB_SHAPE)
+    shape = scaled_shape(ORB_SHAPE, 1.5)
     host, overlay = make_windows(animate=True, overlay_style="orb")
     host.show("overlay")
     assert wait_for(lambda: ("move", 42, 630, 374) in desktop)
     # Сфера 440×420 при 150 % — 660×630; окно — только круг шара и карточка, выезжает снизу.
-    assert desktop[:6] == [
+    assert desktop[:5] == [
         ("make_overlay", 42),
-        ("transparent", 42, True),
         ("corners", 42, False),  # прямые углы без рамки: окно и так по форме шара
         ("bounds", 42, 630, 374, 660, 630),
         ("shape", 42, shape, 0),  # до показа: не видно ничего
@@ -380,7 +378,6 @@ def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) 
     assert wait_for(lambda: ("move", 42, 600, 908) in desktop)
     assert desktop == [
         ("make_overlay", 42),
-        ("transparent", 42, False),
         ("corners", 42, True),
         ("bounds", 42, 600, 908, 720, 96),
         ("clip", 42, 720, 0, 12),
@@ -389,6 +386,14 @@ def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) 
         ("clip", 42, 720, None, 12),
     ]
     host.quit()
+
+
+def test_orb_shape_scales_by_edges() -> None:
+    from assistant.ui.windows import ORB_SHAPE, scaled_shape
+
+    assert scaled_shape(ORB_SHAPE, 1) == ORB_SHAPE
+    # Шар 378 в (31, 17) при 200 % — 756 физических пикселей от 62 до 817 включительно.
+    assert scaled_shape(ORB_SHAPE, 2)[0] == (62, 34, 817, 789, 378)
 
 
 def test_orb_window_shape_matches_page_layout() -> None:
@@ -406,6 +411,7 @@ def test_orb_window_shape_matches_page_layout() -> None:
     assert (stage["width"], stage["height"]) == OVERLAY_SIZES["orb"]
     assert orb["width"] == orb["height"] and orb["left"] * 2 + orb["width"] == stage["width"]
     assert card["left"] * 2 + card["width"] == stage["width"], "карточка по центру окна"
-    disc = (orb["left"] - 2, orb["top"] - 2, orb["left"] + orb["width"] + 1, orb["top"] + orb["height"] + 1)
-    box = (card["left"] - 1, card["top"] - 1, card["left"] + card["width"], card["top"] + card["height"])
-    assert ((*disc, orb["width"] // 2 + 2), (*box, card["border-radius"] + 1)) == ORB_SHAPE
+    # Точно по краю шара и карточки: правая и нижняя границы — включительно.
+    disc = (orb["left"], orb["top"], orb["left"] + orb["width"] - 1, orb["top"] + orb["height"] - 1)
+    box = (card["left"], card["top"], card["left"] + card["width"] - 1, card["top"] + card["height"] - 1)
+    assert ((*disc, orb["width"] // 2), (*box, card["border-radius"])) == ORB_SHAPE

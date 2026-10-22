@@ -27,13 +27,23 @@ CHAT_SIZE = (620, 400)
 OVERLAY_MARGIN = 24  # от панели задач, логические пиксели
 OVERLAY_RADIUS = 8  # скругление углов окна в Windows 11, логические пиксели
 # Форма окна сферы, логические пиксели (числа — из ui/src/index.css, их сверяет тест): круг шара
-# 378 с левым верхним углом в (31, 17) — с запасом 2 пикселя на сглаженный край, и карточка
-# 358×126 со скруглением 18 в (41, 266) — с запасом 1 пиксель. Скруглённые прямоугольники:
-# left, top, right, bottom (включительно), радиус скругления (радиус в полстороны — круг).
-# Вне формы окна нет: ни фона, ни кликов.
-ORB_SHAPE = ((29, 15, 410, 396, 191), (40, 265, 399, 392, 19))
+# 378 с левым верхним углом в (31, 17) и карточка 358×126 со скруглением 18 в (41, 266) — точно
+# по их краю: окно непрозрачное, за краем фигур была бы видна заливка формы. Скруглённые
+# прямоугольники: left, top, right, bottom (включительно), радиус скругления (радиус в полстороны —
+# круг). Вне формы окна нет: ни фона, ни кликов.
+ORB_SHAPE = ((31, 17, 408, 394, 189), (41, 266, 398, 391, 18))
 # Фон окна до загрузки страницы — как у интерфейса, чтобы не мигало белым.
 BACKGROUNDS = {"dark": ("#0F1013", "#15161A"), "light": ("#F6F6F8", "#FFFFFF")}
+
+
+def scaled_shape(shape: tuple[tuple[int, ...], ...], scale: float) -> tuple[tuple[int, ...], ...]:
+    """Форма окна (как ORB_SHAPE) в физических пикселях: края фигур — по масштабу, а не их последние
+    пиксели (иначе при 200 % фигура выйдет на пиксель уже, чем на странице)."""
+    return tuple(
+        (round(left * scale), round(top * scale), round((right + 1) * scale) - 1,
+         round((bottom + 1) * scale) - 1, round(radius * scale))
+        for left, top, right, bottom, radius in shape
+    )  # fmt: skip
 
 
 def ui_urls(theme: str, accent: str, dev_url: str | None = None) -> dict[str, str]:
@@ -133,7 +143,7 @@ class Windows:
         try:
             from System.Drawing import Color  # type: ignore[import-not-found]
 
-            window.native.BackColor = Color.Black  # в прозрачном окне чёрная заливка формы не видна
+            window.native.BackColor = Color.Black  # видна разве что в сглаженных краях шара и карточки
             window.native.webview.DefaultBackgroundColor = Color.Transparent
         except Exception:
             log.warning("Фон оверлея не сделан прозрачным", exc_info=True)
@@ -205,11 +215,7 @@ class Windows:
         if self._win32.window_size(hwnd) != (width, height):
             self._win32.set_bounds(hwnd, x, top, width, height)
         radius = round(OVERLAY_RADIUS * scale) if self._win32.rounds_corners() else 0
-        self._overlay_shape = (
-            tuple(tuple(round(side * scale) for side in part) for part in ORB_SHAPE)
-            if style == "orb"
-            else None
-        )
+        self._overlay_shape = scaled_shape(ORB_SHAPE, scale) if style == "orb" else None
         track = Track(x, top, area[3], width, height, radius)
         self._overlay_region = -1  # окно могло остаться обрезанным иначе — ставим заново
         self._clip_overlay(hwnd, track, 0)
@@ -217,17 +223,16 @@ class Windows:
         return track
 
     def _apply_overlay_look(self, hwnd: int, style: str) -> None:
-        """Окно оверлея под оформление: сфере — прозрачное без рамки, плашке — скруглённое.
+        """Окно оверлея под оформление: сфере — без рамки и скругления Windows, плашке — скруглённое.
 
-        Прозрачность — только поверх формы окна: если Windows её не показывает (например, выключены
-        эффекты прозрачности), вокруг шара всё равно не будет фона — его там просто нет.
+        Окно сферы не делается прозрачным (DwmEnableBlurBehindWindow): с выключенными «Эффектами
+        прозрачности» Windows рисует под таким окном сплошную подложку во весь его прямоугольник,
+        и форма окна её не обрезала (серый квадрат вокруг шара в 0.7.0–0.7.1). Форма — только
+        регион (ORB_SHAPE): им же плашка выезжает из-за панели задач.
         """
         if style == self._overlay_look:
             return
-        orb = style == "orb"
-        if not self._win32.set_transparent(hwnd, orb) and orb:
-            log.info("Прозрачность окна сферы недоступна: края шара — без сглаживания")
-        self._win32.round_corners(hwnd, rounded=not orb)
+        self._win32.round_corners(hwnd, rounded=style != "orb")
         self._overlay_look = style
 
     def _overlay_place(self, track: Track, y: int) -> None:

@@ -333,7 +333,7 @@ def start_voice(
     from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
     from assistant.audio.wakeword import phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
-    from assistant.stt.whisper_stt import WhisperSTT
+    from assistant.stt.whisper_stt import ModelDownloadError, WhisperSTT
     from assistant.voice import STOP_PHRASES, STOP_SOUNDALIKES, VoiceLoop, VoiceSettings
 
     voice = config.voice
@@ -370,11 +370,12 @@ def start_voice(
         )
         try:
             stt.load()
+        except ModelDownloadError as exc:
+            log.warning("%s", exc, exc_info=True)
+            raise VoiceSetupError(f"{exc}. Нужен интернет для первой загрузки") from exc
         except Exception as exc:
             log.exception("Не удалось загрузить Whisper")
-            raise VoiceSetupError(
-                f"не удалось загрузить Whisper ({exc}). Нужен интернет для первой загрузки"
-            ) from exc
+            raise VoiceSetupError(f"не удалось загрузить Whisper ({exc})") from exc
         if stt.cuda_problem:
             out.write(f"! {stt.cuda_problem}\n")
         where = "видеокарте" if stt.device == "cuda" else "процессоре"
@@ -601,13 +602,14 @@ def relaunch(argv: list[str] | None) -> None:
     """
     args = sys.argv[1:] if argv is None else argv
     log.info("Перезапуск")
-    env = {**os.environ, RESTART_ENV: "1"}
-    if FROZEN:
-        # Новый Jarvis.exe — самостоятельный экземпляр, а не дочерний процесс этого.
-        command, env[RESET_ENV] = [sys.executable, *args], "1"
-    else:
-        command = [sys.executable, "-m", "assistant", *args]
     with external_launch():
+        # PATH — без папок, которые добавил себе этот процесс (external_launch).
+        env = {**os.environ, RESTART_ENV: "1"}
+        if FROZEN:
+            # Новый Jarvis.exe — самостоятельный экземпляр, а не дочерний процесс этого.
+            command, env[RESET_ENV] = [sys.executable, *args], "1"
+        else:
+            command = [sys.executable, "-m", "assistant", *args]
         subprocess.Popen(command, env=env)
 
 

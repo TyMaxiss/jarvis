@@ -173,7 +173,7 @@ def orb_pixels(rect: tuple[int, int, int, int], scale: float) -> dict[str, tuple
     return {
         "corner": at(6, 6),  # мимо формы окна
         "beside": at(14, 206),  # слева от круга
-        "ring": at(30, 206),  # в форме окна, но мимо шара: прозрачность Windows (только для сведения)
+        "ring": at(30, 206),  # в пикселе от края шара — уже мимо формы окна
         "disc": at(40, 206),  # внешний диск шара
         "orb": at(220, 150),  # середина шара
         "badge": at(61, 293),  # кружок микрофона слева от значка
@@ -268,7 +268,8 @@ def test_windows_load_interface_and_talk_to_python(
             try:
                 before = winapi.api().GetForegroundWindow()
                 controller.overlay.voice_state("listening")
-                results["orb_rise"] = [y for y, _ in follow(overlay, 0.8)]
+                results["orb_path"] = follow(overlay, 0.8)
+                results["orb_rise"] = [y for y, _ in results["orb_path"]]
                 time.sleep(0.8)  # внутренние слои распускаются
                 results["orb_rect"] = win32.window_rect(overlay)
                 results["orb_focus_kept"] = winapi.api().GetForegroundWindow() == before
@@ -339,6 +340,8 @@ def test_windows_load_interface_and_talk_to_python(
     assert any(kind for _, kind in results["overlay_fall"]), "уходя, оверлей не обрезался"
     # Сфера: выехала снизу на место своего размера, без фокуса; вне формы окна — пурпурное окно под
     # ним, в форме — диск, синий шар, кружок микрофона и тёмная карточка там, где им положено быть.
+    # Окно не прозрачное: пурпурный вокруг шара — только благодаря форме окна (как и у пользователя
+    # с выключенными «Эффектами прозрачности»), а карточка не просвечивает.
     pixels = results["orb_pixels"]
     with capsys.disabled():
         print(f"\nЦвета сферы: {pixels}; путь: {results['orb_rise']}")
@@ -347,14 +350,15 @@ def test_windows_load_interface_and_talk_to_python(
     rise = results["orb_rise"]
     assert len(set(rise)) >= 3 and rise == sorted(rise, reverse=True), rise
     assert rise[-1] == results["orb_rect"][1], rise
-    assert near(pixels["corner"], MAGENTA) and near(pixels["beside"], MAGENTA), (
+    assert results["orb_path"][-1][1] == 3, f"на месте у окна сферы нет формы: {results['orb_path']}"
+    assert all(near(pixels[point], MAGENTA) for point in ("corner", "beside", "ring")), (
         f"вокруг шара есть фон: {pixels}"
     )
     assert near(pixels["disc"], (30, 47, 81)), f"нет тёмно-синего диска шара: {pixels}"
     red, _, blue = pixels["orb"]
     assert blue >= 200 and blue - red >= 80, f"нет синего шара: {pixels}"
     assert near(pixels["badge"], (68, 134, 255), 30), f"карточка не на месте (нет кружка микрофона): {pixels}"
-    assert max(pixels["card"]) <= 70, f"нет тёмной карточки: {pixels}"
+    assert near(pixels["card"], (22, 24, 28), 8), f"нет непрозрачной тёмной карточки: {pixels}"
     assert results["chat_visible"] and results["chat_hidden"]
     assert results["chat_command"] == "сделай громче"
     width, height = results["resized"]

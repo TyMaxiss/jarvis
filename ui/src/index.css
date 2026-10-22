@@ -238,14 +238,14 @@ body.overlay-window {
   padding: 14px 16px 16px;
   border-radius: 18px;
   border: 1px solid rgb(255 255 255 / 0.13);
-  background: rgb(22 24 28 / 0.92);
-  backdrop-filter: blur(24px);
+  /* Непрозрачная: окно сферы не смешивается с рабочим столом (windows.py, ORB_SHAPE). */
+  background: rgb(22 24 28);
 }
 
 :root[data-theme='light'] .orb-card {
   border-color: rgb(0 0 0 / 0.08);
-  background: rgb(255 255 255 / 0.92);
-  /* На белом стекле зелёный и красный темнее — иначе их плохо видно. */
+  background: #fff;
+  /* На белой карточке зелёный и красный темнее — иначе их плохо видно. */
   --ok: #138a55;
   --danger: #d23f3f;
 }

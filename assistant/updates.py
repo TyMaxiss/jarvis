@@ -244,13 +244,14 @@ class Updater:
         if self._log_file is not None:
             arguments.append(f"/LOG={self._log_file}")
         log.info("Запускаю установку: %s", " ".join(arguments))
-        # Новую версию запустит установщик: она должна быть самостоятельным экземпляром,
-        # а не дочерним процессом этого exe (см. assistant.frozen.RESET_ENV).
-        env = {**os.environ, RESET_ENV: "1"}
         try:
             if self._log_file is not None:
                 self._log_file.parent.mkdir(parents=True, exist_ok=True)
             with external_launch():
+                # Новую версию запустит установщик со своим окружением: она должна быть
+                # самостоятельным экземпляром, а не дочерним процессом этого exe (RESET_ENV),
+                # и получить PATH без папок, которые добавил себе этот процесс (external_launch).
+                env = {**os.environ, RESET_ENV: "1"}
                 subprocess.Popen(arguments, creationflags=_DETACHED_PROCESS, close_fds=True, env=env)
         except OSError as exc:
             raise UpdateError(f"не удалось запустить установщик: {exc}") from exc

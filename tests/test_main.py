@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,11 @@ from assistant import main
 from assistant.audio.wakeword import VoskModelError
 from assistant.config import AppConfig
 from assistant.frozen import cuda_dir
+from assistant.instance import RESTART_ENV
 from assistant.logging_setup import SecretMasker
 from assistant.main import build_masker, describe_llm
 from assistant.tts.silero_tts import SileroTTS
+from tests.test_updates import path_cleaned_to
 
 
 def test_keys_of_all_profiles_are_masked(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -251,3 +254,15 @@ def test_voice_check_reports_seconds(tmp_path: Path, monkeypatch: pytest.MonkeyP
     # Выбранный голос не заработал — говорил запасной: проверка не пройдена.
     monkeypatch.setattr(main, "create_speech", lambda config, out: Speech("sapi", 2.5))
     assert main.test_voice(AppConfig(), "edge", io.StringIO()) == 1
+
+
+def test_restart_passes_path_without_program_folders(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Новый экземпляр после «Перезапустить» — как запущенный заново: без папок CUDA, Vosk и
+    # WebView2, которые этот процесс добавил себе в PATH (иначе PATH растёт с каждым перезапуском).
+    started: list[dict[str, str]] = []
+    monkeypatch.setattr(main.subprocess, "Popen", lambda command, env: started.append(env))
+    monkeypatch.setattr(main, "external_launch", lambda: path_cleaned_to("C:\\Windows"))
+    monkeypatch.setenv("PATH", os.pathsep.join(["C:\\Jarvis\\cuda", "C:\\Windows"]))
+    main.relaunch(["--debug"])
+    assert started[0]["PATH"] == "C:\\Windows" and started[0][RESTART_ENV] == "1"
+    assert os.environ["PATH"] == os.pathsep.join(["C:\\Jarvis\\cuda", "C:\\Windows"])

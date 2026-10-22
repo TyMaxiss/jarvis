@@ -161,13 +161,13 @@ class SileroTTS:
             return self._process
         if not self._model.is_file():
             raise TTSError(f"нет модели Silero {self._model.name}")
-        env = {**os.environ, RESET_ENV: "1"} if FROZEN else None
         stderr: IO[bytes] | int = subprocess.DEVNULL
         if self._log_file is not None:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
             stderr = self._log_file.open("ab")
         try:
             with external_launch():
+                env = {**os.environ, RESET_ENV: "1"} if FROZEN else None  # PATH уже без наших папок
                 process = subprocess.Popen(
                     self._command,
                     stdin=subprocess.PIPE,

@@ -26,12 +26,13 @@ from assistant.config import AppConfig
 from assistant.frozen import FROZEN, cuda_dir, silero_dir
 from assistant.progress import Progress, megabytes
 from assistant.stt.whisper_stt import (
+    cached_model,
     cuda_available,
     cuda_libraries_needed,
+    fetch_model,
     missing_cuda_library,
     register_cuda_dlls,
     resolve_settings,
-    whisper_download_progress,
 )
 
 log = logging.getLogger(__name__)
@@ -313,20 +314,19 @@ def ensure_piper(voice_path: Path, out: Any = sys.stdout) -> None:
 
 
 def ensure_whisper(config: AppConfig, out: Any = sys.stdout) -> None:
-    """Скачивает модель Whisper, которая будет использоваться на этом компьютере."""
-    from faster_whisper.utils import download_model
+    """Скачивает модель Whisper, которая будет использоваться на этом компьютере.
 
+    Raises:
+        ModelDownloadError: скачать не удалось.
+    """
     model, device, _ = resolve_settings(config.stt, cuda_available())
     download_dir = config.resolve(config.stt.download_dir)
     out.write(f"Whisper: модель {model} для {'видеокарты' if device == 'cuda' else 'процессора'}\n")
-    try:
-        download_model(model, cache_dir=str(download_dir), local_files_only=True)
-    except Exception:
-        with whisper_download_progress(model, download_dir, out):
-            download_model(model, cache_dir=str(download_dir))
-        out.write("Whisper: готово\n")
-    else:
+    if cached_model(model, download_dir) is not None:
         out.write("Whisper: уже есть\n")
+        return
+    fetch_model(model, download_dir, out)
+    out.write("Whisper: готово\n")
 
 
 def extract_dlls(wheel: Path, folder: Path) -> list[str]:

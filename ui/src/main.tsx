@@ -23,7 +23,7 @@ function Root() {
   return <MainWindow />
 }
 
-// Окно оверлея может быть прозрачным (сфера): фон страницы рисует само оформление.
+// Фон страницы оверлея прозрачный: плашку и сферу рисует само оформление (окно сферы вырезано по её форме).
 if (view === 'overlay') document.body.classList.add('overlay-window')
 
 if (mock && view !== 'main') {
