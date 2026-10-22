@@ -311,7 +311,7 @@ def test_hold_mode() -> None:
     assert h.handled == ["Сделай громче."]
 
 
-def test_stop_speech_returns_to_idle() -> None:
+def test_interrupt_returns_to_idle() -> None:
     audio = silence(500)
     h = Harness(audio)
     h.loop.push_to_talk()
