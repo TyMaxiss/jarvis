@@ -64,6 +64,25 @@ describe('SettingsPage', () => {
   })
 })
 
+describe('Оформление оверлея', () => {
+  it('сфера выбирается и сохраняется сразу, без оверлея выбор недоступен', async () => {
+    await renderPage()
+    const sphere = screen.getByRole('radio', { name: 'Сфера' })
+    expect(screen.getByRole('radio', { name: 'Плашка' }).getAttribute('aria-checked')).toBe('true')
+    await act(async () => {
+      fireEvent.click(sphere)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect(call).toHaveBeenCalledWith('save_settings', { ui: { overlay_style: 'orb' } })
+    expect(sphere.getAttribute('aria-checked')).toBe('true')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'Оверлей' }))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect((sphere as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
 describe('Обновления в настройках', () => {
   it('показывают версию и сохраняют автоматическую проверку', async () => {
     await renderPage()

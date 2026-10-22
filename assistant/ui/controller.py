@@ -80,6 +80,8 @@ class WindowHost(Protocol):
 
     def resize_main(self, width: int, height: int) -> None: ...
 
+    def set_overlay_style(self, style: str) -> None: ...
+
     def sender(self, name: str) -> Callable[[str], None]: ...
 
     def quit(self) -> None: ...
@@ -212,9 +214,7 @@ class UiController:
         self.editor = CommandEditor(commands, executor.registry, lambda: pipeline.matcher)
         pipeline.on_stop.append(self._stopped_by_user)
         self.overlay = OverlayController(
-            show=lambda: self._host_call("show", "overlay"),
-            hide=lambda: self._host_call("hide", "overlay"),
-            enabled=lambda: self.config.ui.overlay,
+            show=self._show_overlay, hide=self._hide_overlay, enabled=lambda: self.config.ui.overlay
         )
 
     # --- Состояние -------------------------------------------------------------------
@@ -225,6 +225,8 @@ class UiController:
             return
         first = not self.bus.attached(name)
         self.bus.attach(name, self.host.sender(name))
+        if name == "overlay":
+            self.bus.emit("overlay", {"visible": self.overlay.visible}, to=["overlay"])
         if not first or name != "main":
             return
         if self.startup_issues:
@@ -475,6 +477,16 @@ class UiController:
         показывает «Остановлено»."""
         self.confirmer.cancel_all()
         self.bus.emit("stopped", {})
+
+    def _show_overlay(self) -> None:
+        """Окно оверлея показывается, а страница узнаёт об этом: сфера проигрывает появление."""
+        self._host_call("show", "overlay")
+        self.bus.emit("overlay", {"visible": True}, to=["overlay"])
+
+    def _hide_overlay(self) -> None:
+        """Страница проигрывает уход, окно прячется (сфера — когда уход доигран)."""
+        self.bus.emit("overlay", {"visible": False}, to=["overlay"])
+        self._host_call("hide", "overlay")
 
     def level_meter(self, on: bool) -> None:
         self._meter = on
@@ -754,6 +766,8 @@ class UiController:
             self.on_chat_key(config.ui.quick_chat_key)
         if not config.ui.overlay:
             self.overlay.hide_now()
+        if previous.ui.overlay_style != config.ui.overlay_style:
+            self._host_call("set_overlay_style", config.ui.overlay_style)
         self.push_state()
 
     def _apply_llm(self, llm: LlmConfig) -> None:

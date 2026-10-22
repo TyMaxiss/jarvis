@@ -318,7 +318,11 @@ class UiConfig(_Section):
     enabled: bool = Field(True, description="false — консольный режим без окон")
     theme: Literal["dark", "light"] = "dark"
     accent: str = Field("#7c6cff", pattern=r"^#[0-9a-fA-F]{6}$", description="Акцентный цвет, #rrggbb")
-    overlay: bool = Field(True, description="Плашка внизу экрана: что услышал и что делает")
+    overlay: bool = Field(True, description="Оверлей внизу экрана: что услышал и что делает")
+    overlay_style: Literal["classic", "orb"] = Field(
+        "classic",
+        description="Оформление оверлея: classic — плашка, orb — сфера, которая отзывается на голос",
+    )
     quick_chat_key: str = Field("ctrl+alt+enter", description="Окно для команды текстом")
     start_minimized: bool = Field(False, description="При запуске сразу свернуться в трей")
 

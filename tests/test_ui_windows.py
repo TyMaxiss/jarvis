@@ -78,6 +78,67 @@ def follow(hwnd: int, seconds: float) -> list[tuple[int, int]]:
     return path
 
 
+SS_WHITERECT, WS_POPUP, SWP_SHOWWINDOW, PM_REMOVE = 0x6, 0x80000000, 0x40, 0x1
+WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80, 0x08000000
+
+
+class Backdrop:
+    """Белое окно (стандартный STATIC) в своём потоке: сквозь прозрачные места сферы виден он."""
+
+    def __init__(self, x: int, y: int, width: int, height: int) -> None:
+        self._stop = threading.Event()
+        ready = threading.Event()
+        threading.Thread(target=self._run, args=(x, y, width, height, ready), daemon=True).start()
+        assert ready.wait(5), "белое окно не создалось"
+
+    def _run(self, x: int, y: int, width: int, height: int, ready: threading.Event) -> None:
+        from assistant.ui import win32
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.CreateWindowExW.argtypes = (
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        )  # fmt: skip
+        hwnd = user32.CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "", WS_POPUP | SS_WHITERECT, x, y, width, height,
+            None, None, None, None,
+        )  # fmt: skip
+        api = win32._api()
+        assert api is not None
+        # Поверх обычных окон (но под оверлеем, он поверх всех) и без активации.
+        api.SetWindowPos(hwnd, 0, x, y, width, height, win32.SWP_NOACTIVATE | SWP_SHOWWINDOW)
+        ready.set()
+        message = wintypes.MSG()
+        while not self._stop.is_set():
+            while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, PM_REMOVE):
+                user32.TranslateMessage(ctypes.byref(message))
+                user32.DispatchMessageW(ctypes.byref(message))
+            time.sleep(0.01)
+        user32.DestroyWindow(hwnd)
+
+    def close(self) -> None:
+        self._stop.set()
+
+
+def orb_pixels(rect: tuple[int, int, int, int], scale: float) -> dict[str, tuple[int, ...]]:
+    """Снимок окна сферы с экрана (в артефакт CI, если задан JARVIS_SCREENSHOTS) и цвета в его точках."""
+    from PIL import ImageGrab
+
+    x, y, width, height = rect
+    shot = ImageGrab.grab(bbox=(x, y, x + width, y + height), include_layered_windows=True)
+    folder = os.environ.get("JARVIS_SCREENSHOTS")
+    if folder:
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        shot.save(Path(folder) / "overlay-orb.png")
+
+    def at(left: int, top: int) -> tuple[int, ...]:
+        return tuple(shot.getpixel((round(left * scale), round(top * scale))))[:3]
+
+    # Логические координаты в окне 440×420: углы и край — мимо шара, середина шара, карточка.
+    return {"corner": at(6, 6), "side": at(4, 206), "orb": at(220, 150), "card": at(220, 360)}
+
+
 def test_windows_load_interface_and_talk_to_python(
     tmp_path: Path, registry: ActionRegistry, store: CommandStore, matcher: Matcher
 ) -> None:
@@ -148,6 +209,26 @@ def test_windows_load_interface_and_talk_to_python(
             results["overlay_fall"] = follow(overlay, 0.6)
             results["overlay_hidden"] = wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
 
+            # Сфера: окно 440×420 прозрачное — сквозь него видно белое окно под ним, кроме шара и карточки.
+            controller.save_settings({"ui": {"overlay_style": "orb"}})
+            scale = win32.dpi_scale(overlay)
+            size = (int(440 * scale), int(420 * scale))
+            ox, oy = win32.bottom_center(size, win32.work_area(), round(24 * scale))
+            backdrop = Backdrop(ox - 20, oy - 20, size[0] + 40, size[1] + 40)
+            try:
+                before = winapi.api().GetForegroundWindow()
+                controller.overlay.voice_state("listening")
+                results["orb_visible"] = wait(lambda: bool(winapi.api().IsWindowVisible(overlay)), 5)
+                time.sleep(1.5)  # страница проигрывает появление
+                results["orb_rect"] = win32.window_rect(overlay)
+                results["orb_focus_kept"] = winapi.api().GetForegroundWindow() == before
+                results["orb_pixels"] = orb_pixels(results["orb_rect"], scale)
+                controller.overlay.hide_now()
+                results["orb_hidden"] = wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
+            finally:
+                backdrop.close()
+            results["orb_size"] = size
+
             # Быстрый чат: окно показывается, команда из него проходит через js_api в конвейер.
             controller.toggle_chat()
             chat = windows._handle("chat")
@@ -206,6 +287,15 @@ def test_windows_load_interface_and_talk_to_python(
     assert len(set(fall)) >= 3 and fall == sorted(fall), results["overlay_fall"]
     assert place <= fall[0] and fall[-1] <= edge, results["overlay_fall"]
     assert any(kind for _, kind in results["overlay_fall"]), "уходя, оверлей не обрезался"
+    # Сфера: на месте, своего размера, без фокуса; прозрачная вокруг шара, синий шар, тёмная карточка.
+    assert results["orb_visible"] and results["orb_hidden"] and results["orb_focus_kept"]
+    assert tuple(results["orb_rect"][2:]) == results["orb_size"], results["orb_rect"]
+    pixels = results["orb_pixels"]
+    print(f"Цвета сферы: {pixels}")
+    assert min(pixels["corner"]) >= 225 and min(pixels["side"]) >= 225, f"окно сферы не прозрачно: {pixels}"
+    red, _, blue = pixels["orb"]
+    assert blue >= 200 and blue - red >= 80, f"нет синего шара: {pixels}"
+    assert max(pixels["card"]) <= 140, f"нет тёмной карточки: {pixels}"
     assert results["chat_visible"] and results["chat_hidden"]
     assert results["chat_command"] == "сделай громче"
     width, height = results["resized"]

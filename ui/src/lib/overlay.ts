@@ -10,23 +10,34 @@ export interface OverlayState {
   step: Step | null // последний шаг
   reply: string
   confirm: { id: string; question: string } | null
+  last: Outcome | null // итог прошлой команды: сфера показывает его, пока слушает продолжение
 }
 
-export const initialOverlay: OverlayState = { mode: 'listening', heard: '', step: null, reply: '', confirm: null }
+export const initialOverlay: OverlayState = { mode: 'listening', heard: '', step: null, reply: '', confirm: null, last: null }
 
 export function overlayReduce(state: OverlayState, event: AssistantEvent): OverlayState {
+  const next = reduceCommand(state, event)
+  const outcome = outcomeOf(next)
+  return outcome && next !== state ? { ...next, last: outcome } : next
+}
+
+function reduceCommand(state: OverlayState, event: AssistantEvent): OverlayState {
+  const fresh = { ...initialOverlay, last: state.last } // новая фраза помнит итог прошлой
   switch (event.type) {
     case 'voice': {
       const voice = event.payload.state
       if (voice === 'listening' || voice === 'capturing' || voice === 'holding') {
         // Новая фраза. Задачу, которая ещё выполняется, не сбрасываем.
-        return state.mode === 'working' ? state : initialOverlay
+        return state.mode === 'working' ? state : fresh
       }
-      if (voice === 'recognizing') return { ...initialOverlay, mode: 'recognizing' }
+      if (voice === 'recognizing') return { ...fresh, mode: 'recognizing' }
       return state
     }
+    case 'overlay':
+      // Оверлей показался заново: прошлые команды уже не к месту.
+      return event.payload.visible && state.last ? { ...state, last: null } : state
     case 'recognized':
-      return { ...initialOverlay, mode: 'working', heard: event.payload.text }
+      return { ...fresh, mode: 'working', heard: event.payload.text }
     case 'step':
       return { ...state, mode: 'working', step: event.payload }
     case 'reply':
@@ -55,6 +66,46 @@ export function overlayReduce(state: OverlayState, event: AssistantEvent): Overl
 export function stepLabel(step: Step): string {
   const number = step.total ? `Шаг ${step.number} из ${step.total}` : `Шаг ${step.number}`
   return step.text ? `${number} · ${step.text}` : number
+}
+
+/** Чем кончилась команда: строка результата в карточке сферы. */
+export interface Outcome {
+  tone: 'ok' | 'error' | 'muted'
+  text: string
+}
+
+/** Итог команды, если она уже кончилась (сфера показывает его и пока слушает продолжение). */
+export function outcomeOf(state: OverlayState): Outcome | null {
+  switch (state.mode) {
+    case 'done':
+      return { tone: 'ok', text: state.reply || 'Готово' }
+    case 'error':
+      return { tone: 'error', text: state.reply || 'Не получилось' }
+    case 'stopped':
+      return { tone: 'muted', text: 'Остановлено' }
+    default:
+      return null
+  }
+}
+
+/** Карточка сферы: заголовок (что происходит или что услышано) и строка под ним.
+ *
+ * Пока ассистент слушает, внизу остаётся итог прошлой команды, как «YouTube открыт». */
+export function orbCard(state: OverlayState): { title: string; heard: boolean; line: Outcome | null } {
+  if (state.confirm) return { title: 'Подтвердите', heard: false, line: { tone: 'muted', text: state.confirm.question } }
+  const heard = state.heard ? `«${state.heard}»` : ''
+  switch (state.mode) {
+    case 'listening':
+      return { title: 'Слушаю…', heard: false, line: state.last }
+    case 'recognizing':
+      return { title: 'Распознаю…', heard: false, line: state.last }
+    case 'working': {
+      const progress = state.reply || (state.step ? stepLabel(state.step) : '')
+      return { title: heard || 'Выполняю…', heard: Boolean(heard), line: progress ? { tone: 'muted', text: progress } : null }
+    }
+    default:
+      return { title: heard || outcomeOf(state)!.text, heard: Boolean(heard), line: heard ? outcomeOf(state) : null }
+  }
 }
 
 /** Две строки оверлея: главная и пояснение. */

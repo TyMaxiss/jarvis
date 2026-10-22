@@ -1,20 +1,40 @@
-// Оверлей — маленькое окно-«пилюля» внизу экрана. Окно показывает и прячет Python;
-// здесь только отрисовка событий: «Слушаю…» с волной, распознанный текст, шаги, ответ, «Да / Нет».
+// Оверлей внизу экрана в одном из двух оформлений: плашка («пилюля») или сфера (Orb.tsx).
+// Окно показывает и прячет Python; здесь только отрисовка событий: «Слушаю…» с волной,
+// распознанный текст, шаги, ответ, «Да / Нет».
 
 import { CircleAlert, CircleCheck, CircleStop } from 'lucide-react'
-import { useReducer, useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { cx } from '../components/ui'
 import { call } from '../lib/bridge'
 import { initialOverlay, overlayLines, overlayReduce, type OverlayState } from '../lib/overlay'
-import { useAssistantEvent } from '../lib/store'
+import { useAppState, useAssistantEvent } from '../lib/store'
+import { Orb } from './Orb'
 
 export function Overlay({ framed = false }: { framed?: boolean }) {
+  const app = useAppState()
   const [state, dispatch] = useReducer(overlayReduce, initialOverlay)
   const [level, setLevel] = useState(0)
+  const [present, setPresent] = useState(false)
   useAssistantEvent((event) => {
     if (event.type === 'level') setLevel(event.payload.value)
-    else dispatch(event)
+    else {
+      if (event.type === 'overlay') setPresent(event.payload.visible)
+      dispatch(event)
+    }
   })
+  // Оформление меняется, только пока оверлей спрятан: окно под новое оформление Python
+  // перестроит при следующем показе.
+  const wanted = app?.ui.overlay_style ?? 'classic'
+  const [style, setStyle] = useState(wanted)
+  useEffect(() => {
+    if (!present) setStyle(wanted)
+  }, [wanted, present])
+  if (style === 'orb') return <Orb state={state} level={level} present={present} framed={framed} />
+  return <Pill state={state} level={level} framed={framed} />
+}
+
+/** Плашка: значок состояния, две строки и кнопки «Да / Нет». */
+function Pill({ state, level, framed }: { state: OverlayState; level: number; framed: boolean }) {
   const [main, sub] = overlayLines(state)
 
   return (

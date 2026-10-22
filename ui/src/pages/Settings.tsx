@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { HotkeyInput, LevelMeter, Segmented, Swatches } from '../components/controls'
 import { Button, Card, CardTitle, Field, Select, Slider, TextInput, Toggle } from '../components/ui'
 import { call } from '../lib/bridge'
-import type { SaveResult, Settings, SettingsPatch, TtsEngine, UpdateState } from '../lib/types'
+import type { OverlayStyle, SaveResult, Settings, SettingsPatch, TtsEngine, UpdateState } from '../lib/types'
 import { LlmSection } from './LlmSection'
 import { UpdatesCard } from './Updates'
 
@@ -335,8 +335,20 @@ export function SettingsPage({ updates }: { updates: UpdateState }) {
         <Field label="Акцентный цвет">
           <Swatches value={ui.accent} onChange={(accent) => update('ui', { accent })} />
         </Field>
-        <Field label="Оверлей" hint="Плашка внизу экрана: что услышал и что делает">
+        <Field label="Оверлей" hint="Внизу экрана: что услышал и что делает">
           <Toggle label="Оверлей" checked={ui.overlay} onChange={(overlay) => update('ui', { overlay })} />
+        </Field>
+        <Field label="Оформление оверлея" hint="Сфера — шар, который отзывается на голос, и карточка с ответом">
+          <Segmented<OverlayStyle>
+            label="Оформление оверлея"
+            value={ui.overlay_style}
+            disabled={!ui.overlay}
+            options={[
+              { value: 'classic', title: 'Плашка' },
+              { value: 'orb', title: 'Сфера' },
+            ]}
+            onChange={(overlay_style) => update('ui', { overlay_style })}
+          />
         </Field>
         {general.autostart !== null && (
           <Field label="Запускать вместе с Windows" hint="Сразу в трей; ярлык — в папке «Автозагрузка»">

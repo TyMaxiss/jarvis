@@ -37,7 +37,10 @@ MONITOR_DEFAULTTONEAREST = 2
 RGN_AND = 1
 SPI_GETCLIENTAREAANIMATION = 0x1042
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
-DWMWCP_ROUND = 2
+DWMWCP_DONOTROUND, DWMWCP_ROUND = 1, 2
+DWMWA_BORDER_COLOR = 34
+DWMWA_COLOR_NONE, DWMWA_COLOR_DEFAULT = 0xFFFFFFFE, 0xFFFFFFFF
+DWM_BB_ENABLE, DWM_BB_BLURREGION = 0x1, 0x2
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x8, 0x4000
@@ -57,6 +60,15 @@ class MONITORINFO(ctypes.Structure):
         ("rcMonitor", wintypes.RECT),
         ("rcWork", wintypes.RECT),
         ("dwFlags", wintypes.DWORD),
+    )
+
+
+class DWM_BLURBEHIND(ctypes.Structure):
+    _fields_ = (
+        ("dwFlags", wintypes.DWORD),
+        ("fEnable", wintypes.BOOL),
+        ("hRgnBlur", wintypes.HRGN),
+        ("fTransitionOnMaximized", wintypes.BOOL),
     )
 
 
@@ -127,6 +139,9 @@ class _Win32:
             wintypes.DWORD,
         )
         self.DwmFlush = fn(dwmapi, "DwmFlush", ctypes.c_long)
+        self.DwmEnableBlurBehindWindow = fn(
+            dwmapi, "DwmEnableBlurBehindWindow", ctypes.c_long, hwnd, ctypes.POINTER(DWM_BLURBEHIND)
+        )
 
 
 @functools.cache
@@ -271,15 +286,39 @@ def bottom_center(size: tuple[int, int], area: tuple[int, int, int, int], margin
     return left + (right - left - width) // 2, bottom - height - margin
 
 
-def round_corners(hwnd: int) -> None:
-    """Скруглённые углы окна в Windows 11 (в Windows 10 ничего не меняется)."""
+def round_corners(hwnd: int, rounded: bool = True) -> None:
+    """Скруглённые углы окна и рамка Windows 11; rounded=False — прямые углы без рамки.
+
+    В Windows 10 ничего не меняется.
+    """
     api = _api()
     if api is None or not hwnd:
         return
-    preference = ctypes.c_int(DWMWCP_ROUND)
+    preference = ctypes.c_int(DWMWCP_ROUND if rounded else DWMWCP_DONOTROUND)
     api.DwmSetWindowAttribute(
         hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(preference), ctypes.sizeof(preference)
     )
+    border = wintypes.DWORD(DWMWA_COLOR_DEFAULT if rounded else DWMWA_COLOR_NONE)
+    api.DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ctypes.byref(border), ctypes.sizeof(border))
+
+
+def set_transparent(hwnd: int, on: bool) -> bool:
+    """Прозрачный фон окна: Windows смешивает окно с тем, что под ним, по альфа-каналу.
+
+    Размытие под окном включается с пустой областью: Windows 8 и новее тогда не размывают,
+    а только учитывают прозрачность (так прозрачны окна Tauri и winit). False — окно снова
+    непрозрачное. Возвращает, удалось ли.
+    """
+    api = _api()
+    if api is None or not hwnd:
+        return False
+    region = api.CreateRectRgn(0, 0, -1, -1) if on else None
+    blur = DWM_BLURBEHIND(DWM_BB_ENABLE | (DWM_BB_BLURREGION if on else 0), on, region, False)
+    try:
+        return api.DwmEnableBlurBehindWindow(hwnd, ctypes.byref(blur)) == 0
+    finally:
+        if region:
+            api.DeleteObject(region)
 
 
 def bring_to_front(hwnd: int) -> bool:

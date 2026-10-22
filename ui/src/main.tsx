@@ -23,6 +23,9 @@ function Root() {
   return <MainWindow />
 }
 
+// Окно оверлея может быть прозрачным (сфера): фон страницы рисует само оформление.
+if (view === 'overlay') document.body.classList.add('overlay-window')
+
 if (mock && view !== 'main') {
   // В браузере окна оверлея и чата рисуются по центру страницы.
   document.body.classList.add('mock-stage')

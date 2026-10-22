@@ -156,7 +156,10 @@ class Slide:
         track, start = self._track, self._shown
         showing = target > start
         duration = (self._show_time if showing else self._hide_time) * abs(target - start)
-        if duration > 0 and self._animate():
+        # Путь нулевой длины (окно не двигается): появляется оно сразу, а уход выдерживает время,
+        # пока страница доигрывает своё исчезновение.
+        still = track.top == track.edge
+        if duration > 0 and not (still and showing) and self._animate():
             ease = ease_out if showing else ease_in
             started, progress = self._clock(), 0.0
             while progress < 1:

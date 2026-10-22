@@ -143,6 +143,235 @@ select {
   animation: spin 0.9s linear infinite;
 }
 
+/* --- Сфера: оверлей с шаром, который отзывается на голос (views/Orb.tsx) ------------------
+   Окно 440×420 прозрачное: видны только шар и карточка. --level (0..1) — громкость микрофона,
+   её каждый кадр выставляет страница. */
+body.overlay-window {
+  background: transparent;
+}
+
+.orb-stage {
+  position: relative;
+  width: 440px;
+  height: 420px;
+  margin: 0 auto;
+  --level: 0;
+}
+
+.orb-framed {
+  outline: 1px dashed rgb(255 255 255 / 0.18);
+}
+
+.orb {
+  position: absolute;
+  left: 50%;
+  top: 206px;
+  width: 378px;
+  height: 378px;
+  translate: -50% -50%;
+  opacity: 0;
+  scale: 0.7;
+  transition:
+    opacity 140ms ease-in,
+    scale 140ms ease-in;
+}
+
+.orb-present .orb {
+  opacity: 1;
+  scale: 1;
+  transition:
+    opacity 360ms var(--ease-out-soft),
+    scale 560ms var(--ease-out-soft);
+}
+
+.orb-breath {
+  position: absolute;
+  inset: 0;
+  animation: orb-breathe 4.2s ease-in-out infinite;
+}
+
+.orb-stage[data-mode='working'] .orb-breath {
+  animation: orb-think 1.5s ease-in-out infinite;
+}
+
+/* Слой: синий нужной прозрачности; форма медленно перетекает и вращается, размер растёт с голосом. */
+.orb-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--size);
+  height: var(--size);
+  translate: calc(-50% + var(--x)) calc(-50% + var(--y));
+  scale: calc(1 + var(--level) * var(--gain));
+  background: rgb(68 134 255 / var(--alpha));
+  border-radius: 50%;
+  animation: orb-morph 20s linear infinite;
+}
+
+.orb-card {
+  position: absolute;
+  left: 50%;
+  top: 266px;
+  width: 358px;
+  height: 126px;
+  translate: -50% 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 14px 16px 16px;
+  border-radius: 18px;
+  border: 1px solid rgb(255 255 255 / 0.13);
+  background: rgb(22 24 28 / 0.77);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 18px 40px -16px rgb(0 0 0 / 0.65);
+  opacity: 0;
+  transform: translateY(14px) scale(0.98);
+  transition:
+    opacity 130ms ease-in,
+    transform 130ms ease-in;
+}
+
+.orb-present .orb-card {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 300ms var(--ease-out-soft) 70ms,
+    transform 460ms var(--ease-out-soft) 70ms;
+}
+
+:root[data-theme='light'] .orb-card {
+  border-color: rgb(0 0 0 / 0.08);
+  background: rgb(255 255 255 / 0.78);
+  box-shadow: 0 18px 40px -16px rgb(16 24 40 / 0.35);
+  /* На белом стекле зелёный и красный темнее — иначе их плохо видно. */
+  --ok: #138a55;
+  --danger: #d23f3f;
+}
+
+.orb-badge {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: #4486ff;
+  box-shadow: 0 0 0 calc(var(--level) * 7px) rgb(68 134 255 / 0.28);
+}
+
+.orb-badge[data-tone='error'] {
+  background: var(--danger);
+  box-shadow: none;
+}
+
+.orb-badge[data-tone='muted'] {
+  color: var(--muted);
+  background: var(--surface-3);
+  box-shadow: none;
+}
+
+/* Точки справа: в покое — пунктир, с голосом — столбики разной высоты, при выполнении — волна. */
+@property --bounce {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0.4;
+}
+
+.orb-dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.orb-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: #79a8ff;
+  opacity: 0.5;
+}
+
+:root[data-theme='light'] .orb-dots i {
+  background: #4486ff;
+}
+
+.orb-dots[data-state='voice'] i {
+  opacity: 1;
+  scale: 1 calc(1 + var(--level) * 6 * var(--bounce));
+  animation: orb-dot calc(460ms + var(--i) * 43ms) ease-in-out calc(var(--i) * -97ms) infinite;
+}
+
+.orb-dots[data-state='working'] i {
+  animation: orb-wave 1.2s ease-in-out calc(var(--i) * 80ms) infinite;
+}
+
+@keyframes orb-morph {
+  0% {
+    border-radius: 58% 42% 54% 46% / 46% 56% 44% 54%;
+    transform: rotate(0turn);
+  }
+  25% {
+    border-radius: 46% 54% 41% 59% / 57% 43% 58% 42%;
+  }
+  50% {
+    border-radius: 53% 47% 60% 40% / 41% 59% 47% 53%;
+    transform: rotate(0.5turn);
+  }
+  75% {
+    border-radius: 41% 59% 47% 53% / 59% 41% 55% 45%;
+  }
+  100% {
+    border-radius: 58% 42% 54% 46% / 46% 56% 44% 54%;
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.025;
+  }
+}
+
+@keyframes orb-think {
+  0%,
+  100% {
+    scale: 0.97;
+  }
+  50% {
+    scale: 1.06;
+  }
+}
+
+@keyframes orb-dot {
+  0%,
+  100% {
+    --bounce: 0.3;
+  }
+  50% {
+    --bounce: 1;
+  }
+}
+
+@keyframes orb-wave {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    translate: 0 0;
+  }
+  30% {
+    opacity: 1;
+    translate: 0 -3px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

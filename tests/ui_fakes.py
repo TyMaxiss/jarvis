@@ -63,6 +63,9 @@ class FakeHost:
     def resize_main(self, width: int, height: int) -> None:
         self.calls.append(("resize", width, height))
 
+    def set_overlay_style(self, style: str) -> None:
+        self.calls.append(("overlay_style", style))
+
     def sender(self, name: str) -> Callable[[str], None]:
         return lambda script: self.scripts.setdefault(name, []).append(script)
 

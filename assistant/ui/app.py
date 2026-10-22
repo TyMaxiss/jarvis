@@ -97,7 +97,9 @@ class UiApp:
         webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
         apis = {name: Api(controller, name) for name in WINDOWS}
         urls = ui_urls(config.ui.theme, config.ui.accent, self._dev_url)
-        windows = Windows(webview, urls, apis, config.ui.theme, self._start_hidden)
+        windows = Windows(
+            webview, urls, apis, config.ui.theme, self._start_hidden, overlay_style=config.ui.overlay_style
+        )
         controller.host = windows
         controller.voice_problem = self._voice_problem
         controller.voice_loading = self._voice_starter is not None

@@ -231,6 +231,31 @@ def test_live_settings_apply_without_restart(world: SimpleNamespace) -> None:
     assert world.controller.settings()["restart_pending"]  # баннер «Перезапустить» не пропадёт
 
 
+def test_overlay_style_applies_without_restart(world: SimpleNamespace) -> None:
+    result = world.controller.save_settings({"ui": {"overlay_style": "orb"}})
+    assert result["ok"] and not result["restart"] and result["settings"]["ui"]["overlay_style"] == "orb"
+    assert world.host.calls == [("overlay_style", "orb")]
+    assert world.bus.of("state")[-1]["ui"]["overlay_style"] == "orb"
+    assert "overlay_style: orb" in world.config_path.read_text(encoding="utf-8")
+    world.controller.save_settings({"ui": {"theme": "light"}})  # оформление не менялось — окну не сообщают
+    assert world.host.calls == [("overlay_style", "orb")]
+    assert not world.controller.save_settings({"ui": {"overlay_style": "neon"}})["ok"]
+
+
+def test_overlay_page_learns_when_overlay_shows_and_hides(world: SimpleNamespace) -> None:
+    controller, bus = world.controller, world.bus
+    controller.window_ready("overlay")  # страница загрузилась, пока оверлей спрятан
+    controller.overlay.voice_state("listening")
+    controller.overlay.hide_now()
+    presence = [(payload, to) for kind, payload, to in bus.events if kind == "overlay"]
+    assert presence == [
+        ({"visible": False}, ("overlay",)),
+        ({"visible": True}, ("overlay",)),
+        ({"visible": False}, ("overlay",)),
+    ]
+    assert world.host.calls == [("show", "overlay"), ("hide", "overlay")]
+
+
 def test_command_line_dry_run_is_not_turned_off(world: SimpleNamespace) -> None:
     world.controller._force_dry_run = True
     world.controller.save_settings({"general": {"dry_run": False}})

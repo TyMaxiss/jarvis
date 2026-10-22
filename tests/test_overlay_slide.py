@@ -182,6 +182,20 @@ def test_without_animation_window_jumps() -> None:
     assert screen.calls == ["appear", TRACK.top, "vanish"] and screen.frames == 0
 
 
+def test_still_window_appears_at_once_and_waits_before_hiding() -> None:
+    still = Track(x=630, top=374, edge=374, width=660, height=630)
+    screen = Screen(still)
+    slide = screen.slide()
+    slide.show()
+    assert wait_for(lambda: screen.calls == ["appear"])
+    time.sleep(0.05)
+    assert screen.frames == 0, "появление рисует страница — окно ждать нечего"
+    slide.hide()
+    assert wait_for(lambda: gone(screen))
+    assert screen.calls == ["appear", "vanish"]
+    assert abs(screen.frames * FRAME - HIDE_TIME) < FRAME, "уход ждёт полное время, пока его доигрывают"
+
+
 def test_requests_that_change_nothing_do_nothing() -> None:
     screen = Screen()
     slide = screen.slide()
@@ -255,22 +269,31 @@ def desktop(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
     """WinAPI оверлея: монитор 1920×1080 с панелью задач 40 пикселей, масштаб 150 %."""
     calls: list[tuple[Any, ...]] = []
 
+    size = [(720, 96)]  # окно создано плашкой
+
     def record(name: str) -> Callable[..., None]:
-        return lambda *args: calls.append((name, *args))
+        return lambda *args, **options: calls.append((name, *args, *options.values()))
+
+    def set_bounds(hwnd: int, x: int, y: int, width: int, height: int) -> None:
+        calls.append(("bounds", hwnd, x, y, width, height))
+        size[0] = (width, height)
 
     monkeypatch.setattr(win32, "make_overlay", record("make_overlay"))
+    monkeypatch.setattr(win32, "set_transparent", record("transparent"))
+    monkeypatch.setattr(win32, "round_corners", record("corners"))
+    monkeypatch.setattr(win32, "set_bounds", set_bounds)
     monkeypatch.setattr(win32, "show_without_focus", record("show"))
     monkeypatch.setattr(win32, "move_window", record("move"))
     monkeypatch.setattr(win32, "clip_window", record("clip"))
     monkeypatch.setattr(win32, "work_area", lambda: (0, 0, 1920, 1040))
     monkeypatch.setattr(win32, "dpi_scale", lambda hwnd: 1.5)
-    monkeypatch.setattr(win32, "window_size", lambda hwnd: (720, 96))
+    monkeypatch.setattr(win32, "window_size", lambda hwnd: size[0])
     monkeypatch.setattr(win32, "rounds_corners", lambda: True)
     monkeypatch.setattr(win32, "wait_frame", lambda: time.sleep(0.004))
     return calls
 
 
-def make_windows(animate: bool) -> tuple[Any, FakeWindow]:
+def make_windows(animate: bool, overlay_style: str = "classic") -> tuple[Any, FakeWindow]:
     from assistant.ui.windows import Windows
 
     windows: dict[str, FakeWindow] = {}
@@ -282,7 +305,7 @@ def make_windows(animate: bool) -> tuple[Any, FakeWindow]:
     webview = SimpleNamespace(create_window=create_window)
     urls = {name: f"index.html?view={name}&theme=dark" for name in ("main", "overlay", "chat")}
     apis = dict.fromkeys(urls)
-    host = Windows(webview, urls, apis, "dark", start_hidden=False, animate=lambda: animate)
+    host = Windows(webview, urls, apis, "dark", False, overlay_style, animate=lambda: animate)
     return host, windows["overlay"]
 
 
@@ -322,4 +345,48 @@ def test_overlay_slides_in_and_out(desktop: list[tuple[Any, ...]]) -> None:
     clips = [call[3] for call in desktop if call[0] == "clip"]
     assert len(moves) >= 4 and all(a < b for a, b in pairwise(moves)) and moves[-1] == 1040
     assert clips[-1] == 0, "уехав за край, окно не видно ещё до того, как спрятано"
+    host.quit()
+
+
+def test_orb_stands_in_place_in_transparent_window_and_waits_for_page(desktop: list[tuple[Any, ...]]) -> None:
+    host, overlay = make_windows(animate=True, overlay_style="orb")
+    host.show("overlay")
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
+    # Сфера 440×420 при 150 % — 660×630; окно сразу на месте: без обрезки и без сдвигов.
+    assert desktop == [
+        ("make_overlay", 42),
+        ("transparent", 42, True),
+        ("corners", 42, False),  # прямые углы без рамки: у прозрачного окна их не видно
+        ("bounds", 42, 630, 374, 660, 630),
+        ("show", 42, 630, 374),
+    ]
+    started = time.monotonic()
+    host.hide("overlay")
+    assert wait_for(lambda: overlay.hidden == 1)
+    assert time.monotonic() - started >= HIDE_TIME - 0.01, "окно ждёт, пока страница доиграет уход"
+    assert [call[0] for call in desktop[5:]] == []
+    host.quit()
+
+
+def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) -> None:
+    host, overlay = make_windows(animate=False, overlay_style="orb")
+    host.show("overlay")
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
+    host.hide("overlay")
+    assert wait_for(lambda: overlay.hidden == 1)
+    desktop.clear()
+    host.set_overlay_style("classic")
+    host.set_overlay_style("neon")  # неизвестное оформление не принимается
+    host.show("overlay")
+    assert wait_for(lambda: ("move", 42, 600, 908) in desktop)
+    assert desktop == [
+        ("make_overlay", 42),
+        ("transparent", 42, False),
+        ("corners", 42, True),
+        ("bounds", 42, 600, 908, 720, 96),
+        ("clip", 42, 720, 0, 12),
+        ("show", 42, 600, 1040),
+        ("move", 42, 600, 908),
+        ("clip", 42, 720, None, 12),
+    ]
     host.quit()

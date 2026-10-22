@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialOverlay, overlayLines, overlayReduce, type OverlayState } from './overlay'
+import { initialOverlay, orbCard, overlayLines, overlayReduce, type OverlayState } from './overlay'
 import type { AssistantEvent, RecentItem } from './types'
 
 const run = (events: AssistantEvent[], state: OverlayState = initialOverlay) => events.reduce(overlayReduce, state)
@@ -48,13 +48,50 @@ describe('overlayReduce', () => {
     expect(overlayLines(state)).toEqual(['Остановлено', '«расскажи сказку»'])
     state = run([result({ ok: false, reply: 'Жили-были…' })], state)
     expect(overlayLines(state)).toEqual(['Остановлено', '«расскажи сказку»'])
-    expect(run([{ type: 'voice', payload: { state: 'listening', detail: '' } }], state)).toEqual(initialOverlay)
+    expect(run([{ type: 'voice', payload: { state: 'listening', detail: '' } }], state)).toEqual({
+      ...initialOverlay,
+      last: { tone: 'muted', text: 'Остановлено' },
+    })
   })
 
   it('новая фраза после ответа начинается с чистого листа, а выполняющаяся задача не сбрасывается', () => {
     const done = run([{ type: 'recognized', payload: { text: 'громче' } }, result({ reply: 'Громкость 60' })])
-    expect(run([{ type: 'voice', payload: { state: 'listening', detail: '' } }], done)).toEqual(initialOverlay)
+    expect(run([{ type: 'voice', payload: { state: 'listening', detail: '' } }], done)).toEqual({
+      ...initialOverlay,
+      last: { tone: 'ok', text: 'Громкость 60' }, // итог прошлой команды помнится для сферы
+    })
     const working = run([{ type: 'recognized', payload: { text: 'громче' } }])
     expect(run([{ type: 'voice', payload: { state: 'capturing', detail: '' } }], working)).toBe(working)
+  })
+})
+
+describe('orbCard', () => {
+  const listening: AssistantEvent = { type: 'voice', payload: { state: 'listening', detail: '' } }
+
+  it('слушает продолжение и показывает итог прошлой команды, как «YouTube открыт»', () => {
+    let state = run([{ type: 'recognized', payload: { text: 'открой ютуб' } }])
+    expect(orbCard(state)).toEqual({ title: '«открой ютуб»', heard: true, line: null })
+    state = run([{ type: 'step', payload: { number: 1, total: 2, action: 'open_url', text: 'Открываю YouTube', ok: true } }], state)
+    expect(orbCard(state).line).toEqual({ tone: 'muted', text: 'Шаг 1 из 2 · Открываю YouTube' })
+    state = run([result({ reply: 'YouTube открыт' })], state)
+    expect(orbCard(state)).toEqual({ title: '«открой ютуб»', heard: true, line: { tone: 'ok', text: 'YouTube открыт' } })
+    state = run([listening], state)
+    expect(orbCard(state)).toEqual({ title: 'Слушаю…', heard: false, line: { tone: 'ok', text: 'YouTube открыт' } })
+  })
+
+  it('новый показ оверлея начинается без прошлых итогов', () => {
+    const state = run([{ type: 'recognized', payload: { text: 'сделай кофе' } }, result({ ok: false, reply: 'Не знаю такой команды' }), listening])
+    expect(orbCard(state).line).toEqual({ tone: 'error', text: 'Не знаю такой команды' })
+    const shown = run([{ type: 'overlay', payload: { visible: true } }], state)
+    expect(orbCard(shown)).toEqual({ title: 'Слушаю…', heard: false, line: null })
+    expect(run([{ type: 'overlay', payload: { visible: false } }], state)).toBe(state) // уходя, ничего не меняет
+  })
+
+  it('подтверждение: вопрос вместо итога', () => {
+    const state = run([
+      { type: 'recognized', payload: { text: 'выключи компьютер' } },
+      { type: 'confirm', payload: { id: 'c1', question: 'Выключить компьютер?' } },
+    ])
+    expect(orbCard(state)).toEqual({ title: 'Подтвердите', heard: false, line: { tone: 'muted', text: 'Выключить компьютер?' } })
   })
 })

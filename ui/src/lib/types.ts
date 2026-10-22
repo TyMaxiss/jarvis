@@ -231,10 +231,13 @@ export interface AppState {
   ui: UiSettings
 }
 
+export type OverlayStyle = 'classic' | 'orb' // плашка или сфера, которая отзывается на голос
+
 export interface UiSettings {
   theme: 'dark' | 'light'
   accent: string
   overlay: boolean
+  overlay_style: OverlayStyle
   quick_chat_key: string
 }
 
@@ -365,6 +368,7 @@ export type AssistantEvent =
   | { type: 'update'; payload: UpdateState }
   | { type: 'busy'; payload: { busy: boolean } }
   | { type: 'stopped'; payload: Record<string, never> } // остановили: кнопка, Ctrl+Alt+Q или «стоп»
+  | { type: 'overlay'; payload: { visible: boolean } } // окно оверлея показано или прячется
 
 export type WindowName = 'main' | 'overlay' | 'chat'
 

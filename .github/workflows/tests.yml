@@ -44,7 +44,18 @@ jobs:
 
       - name: Тесты (вместе с окнами интерфейса на рабочем столе раннера)
         timeout-minutes: 15
+        env:
+          JARVIS_SCREENSHOTS: ${{ runner.temp }}/screenshots  # снимки окон из тестов — в артефакт
         run: uv run pytest -v -rs
+
+      - name: Снимки окон из тестов
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots
+          path: ${{ runner.temp }}/screenshots
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Запуск консольного режима (dry-run, без голоса)
         shell: pwsh

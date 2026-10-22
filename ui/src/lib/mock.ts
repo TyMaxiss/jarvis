@@ -228,6 +228,7 @@ function later(seconds: number): string {
 }
 
 function makeState(): AppState {
+  const params = new URLSearchParams(window.location.search) // ?theme=light, ?style=orb
   return {
     name: 'Джарвис',
     version: '0.6.0',
@@ -267,7 +268,13 @@ function makeState(): AppState {
       progress: null,
       error: '',
     },
-    ui: { theme: 'dark', accent: '#7c6cff', overlay: true, quick_chat_key: 'ctrl+alt+enter' },
+    ui: {
+      theme: params.get('theme') === 'light' ? 'light' : 'dark',
+      accent: '#7c6cff',
+      overlay: true,
+      overlay_style: params.get('style') === 'orb' ? 'orb' : 'classic',
+      quick_chat_key: 'ctrl+alt+enter',
+    },
   }
 }
 
@@ -348,6 +355,10 @@ function makeSettings(state: AppState): Settings {
 
 export function createMockApi(emit: (event: AssistantEvent) => void): AssistantApi {
   const state = makeState()
+  if (new URLSearchParams(window.location.search).get('view') === 'overlay') {
+    // Страница уже подписалась на события: макет оверлея начинает «говорить».
+    window.setTimeout(() => void import('./mockOverlay').then((demo) => demo.startOverlayDemo(emit, new URLSearchParams(window.location.search))), 50)
+  }
   const history = makeHistory()
   let settings = makeSettings(state)
   let meter: number | undefined

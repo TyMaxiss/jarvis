@@ -123,6 +123,9 @@ class BridgeHost:
     def resize_main(self, width: int, height: int) -> None:
         self.calls.append(("resize",))
 
+    def set_overlay_style(self, style: str) -> None:
+        self.calls.append(("overlay_style", style))
+
     def quit(self) -> None:
         self.calls.append(("quit",))
 
