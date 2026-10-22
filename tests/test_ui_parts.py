@@ -114,8 +114,22 @@ def test_voice_status_routes_messages() -> None:
     status.voice_status("recognized", "сделай громче")
     status.voice_status("latency", "500 мс")
     status.voice_status("stopped", "стоп")
+    status.voice_status("partial", "сделай гро")
     assert states == ["listening", "recognizing", "processing", "paused", "idle"]
     assert bus.of("recognized") == [{"text": "сделай громче", "source": "voice"}]
+    # Слова по ходу речи — только оверлею.
+    assert [(payload, to) for kind, payload, to in bus.events if kind == "partial"] == [
+        ({"text": "сделай гро"}, ("overlay",))
+    ]
+
+
+def test_voice_status_reports_finished_commands_only() -> None:
+    done: list[bool] = []
+    status = VoiceStatus(Activity(RecordingBus()), lambda state: None, lambda: done.append(True))
+    status.voice_result(Result("", "llm", False, status="empty"))  # ничего не сказали — не команда
+    assert done == []
+    status.voice_result(Result("сделай громче", "local", True))
+    assert done == [True]
 
 
 # --- Подтверждение -----------------------------------------------------------------------
@@ -230,10 +244,11 @@ class FakeTimer:
 
 
 class OverlayWorld:
-    def __init__(self, enabled: bool = True) -> None:
+    def __init__(self, enabled: bool = True, keep: bool = False) -> None:
         self.calls: list[str] = []
         self.timers: list[FakeTimer] = []
         self.enabled = enabled
+        self.keep = keep
 
         def timer(seconds: float, action: Any) -> FakeTimer:
             self.timers.append(FakeTimer(seconds, action))
@@ -243,6 +258,7 @@ class OverlayWorld:
             lambda: self.calls.append("show"),
             lambda: self.calls.append("hide"),
             lambda: self.enabled,
+            keep=lambda: self.keep,
             timer=timer,
         )
 
@@ -280,6 +296,96 @@ def test_disabled_overlay_never_shows() -> None:
     world.overlay.voice_state("capturing")
     world.overlay.hide_now()
     assert world.calls == ["show", "hide"]
+
+
+def run_voice_command(overlay: OverlayController) -> None:
+    for state in ("listening", "capturing", "recognizing", "processing"):
+        overlay.voice_state(state)
+    overlay.command_done()
+    overlay.voice_state("listening")  # слушает продолжение
+    overlay.voice_state("idle")
+
+
+def test_overlay_keeps_command_result_until_next_phrase() -> None:
+    world = OverlayWorld(keep=True)
+    overlay = world.overlay
+    run_voice_command(overlay)
+    assert world.calls == ["show"] and overlay.visible and not world.timers  # итог остаётся
+    overlay.voice_state("listening")  # снова «Джарвис», но фраза не прозвучала
+    overlay.voice_state("idle")
+    assert overlay.visible and not world.timers
+    overlay.voice_state("listening")
+    overlay.voice_state("recognizing")  # новая фраза: прежний итог больше не держим
+    overlay.voice_state("idle")  # Whisper ничего не услышал
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide"] and not overlay.visible
+
+
+def test_kept_result_hides_on_click_pause_or_when_setting_is_off() -> None:
+    world = OverlayWorld(keep=True)
+    run_voice_command(world.overlay)
+    world.overlay.hide_now()  # клик по оверлею
+    assert world.calls == ["show", "hide"]
+
+    world = OverlayWorld(keep=True)
+    run_voice_command(world.overlay)
+    world.overlay.voice_state("paused")
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide"]
+
+    world = OverlayWorld(keep=True)
+    run_voice_command(world.overlay)
+    world.keep = False
+    world.overlay.refresh()
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide"]
+
+
+def test_stopped_command_result_is_not_kept() -> None:
+    world = OverlayWorld(keep=True)
+    overlay = world.overlay
+    for state in ("listening", "capturing", "recognizing", "processing"):
+        overlay.voice_state(state)
+    overlay.stopped()  # «стоп» посреди задачи
+    overlay.command_done()  # результат прерванной задачи приходит следом
+    overlay.voice_state("idle")
+    assert len(world.timers) == 1 and world.timers[-1].started
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide"]
+
+    run_voice_command(overlay)  # следующая команда снова держится
+    assert overlay.visible and world.calls == ["show", "hide", "show"]
+    overlay.voice_state("listening")
+    overlay.voice_state("idle")
+    assert overlay.visible and len(world.timers) == 1  # итог держится — таймера нет
+    overlay.stopped()  # «Джарвис, стоп», пока на экране итог прошлой команды
+    assert len(world.timers) == 2 and world.timers[-1].started and not world.timers[-1].cancelled
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide", "show", "hide"]
+
+
+def test_result_not_kept_earlier_is_not_kept_after_setting_is_turned_on() -> None:
+    world = OverlayWorld(keep=False)
+    run_voice_command(world.overlay)
+    world.timers[-1].action()  # без keep оверлей ушёл через 3 с
+    world.keep = True
+    world.overlay.refresh()
+    world.overlay.voice_state("listening")  # только «Джарвис», фраза не прозвучала
+    world.overlay.voice_state("idle")
+    assert world.timers[-1].started and not world.timers[-1].cancelled
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide", "show", "hide"]
+
+
+def test_result_is_not_kept_without_setting_or_when_hidden() -> None:
+    world = OverlayWorld()
+    run_voice_command(world.overlay)
+    world.timers[-1].action()
+    assert world.calls == ["show", "hide"]
+
+    world = OverlayWorld(enabled=False, keep=True)  # оверлей выключен — держать нечего
+    run_voice_command(world.overlay)
+    assert world.calls == [] and not world.overlay.visible
 
 
 def test_overlay_errors_do_not_break_voice() -> None:

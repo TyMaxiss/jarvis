@@ -108,6 +108,10 @@ class Api:
         self._controller.send_text(str(text))
 
     @_logged
+    def overlay_dismiss(self) -> None:
+        self._controller.overlay_dismiss()
+
+    @_logged
     def confirm_answer(self, question_id: str, yes: bool) -> None:
         self._controller.confirm_answer(str(question_id), bool(yes))
 

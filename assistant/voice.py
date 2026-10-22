@@ -108,6 +108,14 @@ class Spotter(Protocol):
     def reset(self) -> None: ...
 
 
+class Dictator(Protocol):
+    """Слова фразы по ходу речи (Dictation): accept отдаёт услышанное, когда оно изменилось."""
+
+    def accept(self, block: np.ndarray) -> str | None: ...
+
+    def reset(self) -> None: ...
+
+
 class Transcriber(Protocol):
     def transcribe(self, audio: np.ndarray) -> Transcript: ...
 
@@ -158,6 +166,7 @@ class VoiceLoop:
         on_stop: что ещё сделать по «стоп», кроме остановки речи (прервать задачу).
         busy: конвейер выполняет задачу не из голоса (текст, горячая клавиша команды) —
             тогда цикл в покое слушает только «стоп».
+        dictation: слова фразы по ходу речи для оверлея (сообщаются как partial); None — без них.
     """
 
     def __init__(
@@ -178,6 +187,7 @@ class VoiceLoop:
         stop_spotter: Spotter | None = None,
         on_stop: Callable[[], None] | None = None,
         busy: Callable[[], bool] | None = None,
+        dictation: Dictator | None = None,
     ) -> None:
         self._source = source
         self._vad = vad
@@ -199,6 +209,8 @@ class VoiceLoop:
         self._stop_spotter = stop_spotter
         self._on_stop = on_stop
         self._busy = busy
+        self._dictation = dictation
+        self._dictated = ""  # что уже показано из слов текущей фразы
         self._stop_words = frozenset(" ".join((*STOP_PHRASES, self._wake_phrase)).split())
         self._named_stops = [f"{self._wake_phrase} {phrase}" for phrase in STOP_PHRASES]
         self._events: queue.Queue[str] = queue.Queue()
@@ -313,6 +325,7 @@ class VoiceLoop:
 
         if self.state is VoiceState.HOLDING:
             self._hold_buffer.append(block)
+            self._dictate(block)
             if len(self._hold_buffer) * BLOCK_MS >= self._settings.max_phrase_seconds * 1000:
                 self._process(np.concatenate(self._hold_buffer), "hold")
             return
@@ -323,13 +336,20 @@ class VoiceLoop:
         elif self.state is VoiceState.LISTENING:
             if event is SegmentEvent.START:
                 self._set_state(VoiceState.CAPTURING)
+                # Начало фразы (с запасом до неё) уже в сегментаторе — слова считаются и по нему.
+                audio = self._segmenter.current_audio()
+                for start in range(0, len(audio) - BLOCK_SIZE + 1, BLOCK_SIZE):
+                    self._dictate(audio[start : start + BLOCK_SIZE])
             elif self._clock_ms >= self._deadline_ms and not self._segmenter.in_speech:
                 self._enter_idle()
         elif self.state is VoiceState.CAPTURING:
             if event is SegmentEvent.END:
                 self._process(self._segmenter.segment_audio, "listen")
             elif event is SegmentEvent.DISCARD:
+                self._forget_dictation()  # это был шум: показанные «слова» убираем
                 self._set_state(VoiceState.LISTENING)
+            else:
+                self._dictate(block)
 
     # --- Состояния ------------------------------------------------------------------
 
@@ -494,6 +514,28 @@ class VoiceLoop:
         for spotter in (self._spotter, self._stop_spotter):
             if spotter is not None:
                 spotter.reset()
+        # Фраза оборвалась (ассистент заговорил, микрофон занят подтверждением): слова — с экрана.
+        self._forget_dictation()
+
+    def _dictate(self, block: np.ndarray) -> None:
+        """Слова текущей фразы по ходу речи — в оверлей (partial), когда они изменились."""
+        if self._dictation is None:
+            return
+        try:
+            text = self._dictation.accept(block)
+        except Exception:
+            log.debug("Слова по ходу речи не распознались", exc_info=True)
+            return
+        if text is not None and text != self._dictated:
+            self._dictated = text
+            self._report("partial", text)
+
+    def _forget_dictation(self) -> None:
+        if self._dictation is not None:
+            self._dictation.reset()
+        if self._dictated:
+            self._dictated = ""
+            self._report("partial", "")
 
     def handle_events(self) -> None:
         """Обрабатывает накопившиеся события горячих клавиш (вызывается в потоке цикла)."""
@@ -517,6 +559,9 @@ class VoiceLoop:
             elif event == "hold_start" and self.state is not VoiceState.PROCESSING:
                 self._source.flush()
                 self._hold_buffer = []
+                if self._dictation is not None:
+                    self._dictation.reset()
+                self._dictated = ""
                 self._set_state(VoiceState.HOLDING)
             elif event == "hold_end" and self.state is VoiceState.HOLDING:
                 audio = np.concatenate(self._hold_buffer) if self._hold_buffer else np.zeros(0, np.int16)
@@ -546,6 +591,7 @@ class VoiceLoop:
         self._set_state(VoiceState.PROCESSING)
         self._report("recognizing")
         self._hold_buffer = []
+        self._dictated = ""  # показанные слова дальше сменит текст Whisper — стирать их не нужно
         if len(audio) < BLOCK_SIZE * 4:  # меньше ~130 мс — не фраза
             self._enter_idle()
             return

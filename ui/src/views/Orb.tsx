@@ -1,21 +1,24 @@
-// Оверлей «Сфера»: шар из синих слоёв дышит с голосом, под ним — карточка: что происходит, что
-// услышано и чем кончилось. Окно обрезано по кругу шара и карточке (windows.py, ORB_SHAPE) и
-// выезжает снизу, как плашка; внутренние слои при этом «распускаются» по событию overlay.
+// Оверлей «Сфера»: шар из синих слоёв дышит с голосом, под ним — карточка: что происходит, какие
+// слова слышно, что услышано и чем кончилось. Окно обрезано по кругу шара и карточке (windows.py,
+// ORB_SHAPE) и выезжает снизу, как плашка; внутренние слои при этом «распускаются» по событию
+// overlay. С «Эффектами прозрачности» Windows (glass) внешнее кольцо и карточка полупрозрачные.
 
-import { Check, CircleAlert, LoaderCircle, Mic, ShieldQuestionMark, Square, X } from 'lucide-react'
+import { Check, CircleAlert, LoaderCircle, Mic, MicOff, ShieldQuestionMark, Square, X } from 'lucide-react'
 import { useEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { cx } from '../components/ui'
 import { call } from '../lib/bridge'
-import { orbCard, type Outcome, type OverlayState } from '../lib/overlay'
+import { orbCard, type OrbCard, type Outcome, type OverlayState } from '../lib/overlay'
 
-// Внешний слой — неподвижный диск по форме окна. Внутренние слои снаружи внутрь: размер (доля шара),
-// непрозрачность синего поверх диска, насколько слой растёт с голосом, период перетекания (с) и сдвиг
-// от центра (пиксели) — слои не концентричны, как на эскизе.
+// Внешний слой — неподвижный диск по форме окна (с glass — полупрозрачный). Внутренние слои снаружи
+// внутрь: размер (доля шара), цвет, насколько слой растёт с голосом, период перетекания (с) и сдвиг от
+// центра (пиксели) — слои не концентричны, как на эскизе. Цвета непрозрачные: это синий #4486ff
+// с непрозрачностью 0.42, 0.64, 0.8 и 1 поверх диска #1e2f51 — сквозь кольцо видно рабочий стол,
+// сквозь внутренние слои — нет.
 const LAYERS = [
-  { size: 0.82, alpha: 0.42, gain: 0.09, period: 19, x: -5, y: 3, reverse: true },
-  { size: 0.64, alpha: 0.64, gain: 0.14, period: 16, x: 6, y: 1 },
-  { size: 0.46, alpha: 0.8, gain: 0.21, period: 13, x: 9, y: -3, reverse: true },
-  { size: 0.34, alpha: 1, gain: 0.3, period: 11, x: 5, y: -6 },
+  { size: 0.82, color: 'rgb(46 84 154)', gain: 0.09, period: 19, x: -5, y: 3, reverse: true },
+  { size: 0.64, color: 'rgb(60 116 219)', gain: 0.14, period: 16, x: 6, y: 1 },
+  { size: 0.46, color: 'rgb(66 130 248)', gain: 0.21, period: 13, x: 9, y: -3, reverse: true },
+  { size: 0.34, color: 'rgb(68 134 255)', gain: 0.3, period: 11, x: 5, y: -6 },
 ]
 const DOTS = 12
 
@@ -23,21 +26,23 @@ interface Props {
   state: OverlayState
   level: number // громкость микрофона 0..1
   present: boolean // окно показано (событие overlay)
+  glass?: boolean // окно смешивается с рабочим столом: кольцо и карточка полупрозрачные
   framed?: boolean // в браузере (?mock) — границы окна пунктиром
 }
 
-export function Orb({ state, level, present, framed = false }: Props) {
+export function Orb({ state, level, present, glass = false, framed = false }: Props) {
   const stage = useRef<HTMLDivElement>(null)
   const voice = !state.confirm && (state.mode === 'listening' || state.mode === 'recognizing')
   useSmoothLevel(stage, voice ? Math.min(1, level * 1.6) : 0)
 
   const card = orbCard(state)
-  const mode = state.confirm ? 'confirm' : state.mode
   return (
     <div
       ref={stage}
-      className={cx('orb-stage', present && 'orb-present', framed && 'orb-framed')}
-      data-mode={mode}
+      className={cx('orb-stage', present && 'orb-present', glass && 'orb-glass', framed && 'orb-framed')}
+      data-mode={card.badge}
+      // Клик прячет сферу (и итог команды, который она держит), если она не ждёт «Да / Нет».
+      onClick={state.confirm ? undefined : () => void call('overlay_dismiss')}
     >
       <div className="orb" aria-hidden="true">
         <span className="orb-disc" />
@@ -50,7 +55,7 @@ export function Orb({ state, level, present, framed = false }: Props) {
                 style={
                   {
                     '--size': `${layer.size * 100}%`,
-                    '--alpha': layer.alpha,
+                    '--color': layer.color,
                     '--gain': layer.gain,
                     '--x': `${layer.x}px`,
                     '--y': `${layer.y}px`,
@@ -66,15 +71,15 @@ export function Orb({ state, level, present, framed = false }: Props) {
       </div>
       <div className="orb-card">
         <div className="flex items-center gap-3">
-          <Badge mode={mode} />
-          <div aria-live="polite" className={cx('min-w-0 flex-1 truncate text-[14px]', card.heard ? 'font-medium text-text' : 'text-muted')}>
-            {card.title}
-          </div>
-          <Dots state={voice ? 'voice' : mode === 'working' ? 'working' : 'still'} />
+          <Badge mode={card.badge} />
+          <div className="min-w-0 flex-1 truncate text-[14px] text-muted">{card.status}</div>
+          <Dots state={voice ? 'voice' : card.badge === 'working' ? 'working' : 'still'} />
         </div>
         {state.confirm ? (
-          <div className="flex items-end gap-3">
-            <div className="line-clamp-2 min-w-0 flex-1 text-[14px] leading-5 font-medium text-text">{state.confirm.question}</div>
+          <div className="mt-auto flex items-end gap-3">
+            <div aria-live="polite" className="line-clamp-2 min-w-0 flex-1 text-[15px] leading-5 font-semibold text-text">
+              {card.text}
+            </div>
             <div className="flex shrink-0 gap-1.5">
               <button
                 type="button"
@@ -93,26 +98,41 @@ export function Orb({ state, level, present, framed = false }: Props) {
             </div>
           </div>
         ) : (
-          card.line && <OutcomeLine outcome={card.line} />
+          <>
+            <Phrase card={card} />
+            {card.line && <OutcomeLine outcome={card.line} />}
+          </>
         )}
       </div>
     </div>
   )
 }
 
+/** Крупно — фраза: слова, которые ещё говорят (за ними мигает курсор), или фраза команды. */
+function Phrase({ card }: { card: OrbCard }) {
+  return (
+    <div aria-live="polite" className="orb-phrase">
+      <span className="truncate">{card.text}</span>
+      {card.live && <span className="orb-caret" aria-hidden="true" />}
+    </div>
+  )
+}
+
 /** Синий кружок слева: микрофон, пока слушает; затем ход и итог команды. */
-function Badge({ mode }: { mode: string }) {
-  const icons: Record<string, ReactNode> = {
+function Badge({ mode }: { mode: OrbCard['badge'] }) {
+  const icons: Record<OrbCard['badge'], ReactNode> = {
     listening: <Mic size={15} strokeWidth={2.2} />,
     recognizing: <Mic size={15} strokeWidth={2.2} />,
     working: <LoaderCircle size={15} strokeWidth={2.4} className="animate-spin-slow" />,
     done: <Check size={15} strokeWidth={2.6} />,
     error: <X size={15} strokeWidth={2.6} />,
     stopped: <Square size={11} strokeWidth={0} fill="currentColor" />,
+    idle: <MicOff size={15} strokeWidth={2.2} />,
     confirm: <ShieldQuestionMark size={15} strokeWidth={2.2} />,
   }
+  const tone = mode === 'error' ? 'error' : mode === 'stopped' || mode === 'idle' ? 'muted' : 'blue'
   return (
-    <span className="orb-badge" data-tone={mode === 'error' ? 'error' : mode === 'stopped' ? 'muted' : 'blue'}>
+    <span className="orb-badge" data-tone={tone}>
       {icons[mode]}
     </span>
   )
@@ -139,12 +159,12 @@ function OutcomeLine({ outcome }: { outcome: Outcome }) {
   return (
     <div
       className={cx(
-        'flex items-start gap-2.5 text-[14.5px] leading-5',
+        'mt-auto flex items-start gap-2.5 text-[14.5px] leading-5',
         outcome.tone === 'ok' ? 'text-ok' : outcome.tone === 'error' ? 'text-danger' : 'text-muted',
       )}
     >
       {icon && <span className="mt-[1.5px] shrink-0">{icon}</span>}
-      <span className="line-clamp-3 min-w-0">{outcome.text}</span>
+      <span className="min-w-0 truncate">{outcome.text}</span>
     </div>
   )
 }

@@ -1,7 +1,9 @@
 """Окна pywebview: главное, оверлей без фокуса и быстрый чат.
 
 Оверлей показывается через WinAPI (без активации) и выезжает снизу (slide.py); окно сферы
-обрезано по форме шара и карточки. Остальные окна — средствами pywebview.
+обрезано по форме шара и карточки, а с «Эффектами прозрачности» Windows ещё и смешивается
+с рабочим столом по альфа-каналу (полупрозрачные внешнее кольцо и карточка). Остальные окна —
+средствами pywebview.
 Окна без рамки: перетаскивание — за элементы с классом pywebview-drag-region, размер —
 уголком в интерфейсе, «развернуть» — на рабочую область монитора.
 """
@@ -28,9 +30,9 @@ OVERLAY_MARGIN = 24  # от панели задач, логические пик
 OVERLAY_RADIUS = 8  # скругление углов окна в Windows 11, логические пиксели
 # Форма окна сферы, логические пиксели (числа — из ui/src/index.css, их сверяет тест): круг шара
 # 378 с левым верхним углом в (31, 17) и карточка 358×126 со скруглением 18 в (41, 266) — точно
-# по их краю: окно непрозрачное, за краем фигур была бы видна заливка формы. Скруглённые
-# прямоугольники: left, top, right, bottom (включительно), радиус скругления (радиус в полстороны —
-# круг). Вне формы окна нет: ни фона, ни кликов.
+# по их краю: без «Эффектов прозрачности» окно непрозрачное, и за краем фигур была бы видна
+# заливка формы. Скруглённые прямоугольники: left, top, right, bottom (включительно), радиус
+# скругления (радиус в полстороны — круг). Вне формы окна нет: ни фона, ни кликов.
 ORB_SHAPE = ((31, 17, 408, 394, 189), (41, 266, 398, 391, 18))
 # Фон окна до загрузки страницы — как у интерфейса, чтобы не мигало белым.
 BACKGROUNDS = {"dark": ("#0F1013", "#15161A"), "light": ("#F6F6F8", "#FFFFFF")}
@@ -90,6 +92,13 @@ class Windows:
         self._overlay_look = "classic"  # каким окно оверлея сделано сейчас: непрозрачным, скруглённым
         self._overlay_shape: tuple[tuple[int, ...], ...] | None = None  # форма окна сферы, пиксели
         self._overlay_region: int | None = None  # сколько пикселей окна над краем видно сейчас
+        self._appear_style = self._overlay_style  # оформление, с которым оверлей показан сейчас
+        self._glass_wanted = False  # оверлей показан полупрозрачным (так сказано и странице)
+        self._overlay_glass = False  # окно оверлея сейчас смешивается с рабочим столом
+        self._glass_works = True  # Windows приняла прозрачность окна (если нет — больше не пробуем)
+        # Показанный оверлей устарел (выключили «Эффекты прозрачности»): его прячут, следующий
+        # показ будет уже по-новому. Подставляет UiApp.
+        self.on_overlay_stale: Callable[[], None] | None = None
         self._backdrop_guard: Callable[[Any, Any], None] | None = None  # обработчик настроек Windows
         self._visible = {"main": not start_hidden, "overlay": False, "chat": False}
         background, surface = BACKGROUNDS.get(theme, BACKGROUNDS["dark"])
@@ -152,12 +161,20 @@ class Windows:
             from Microsoft.Win32 import SystemEvents  # type: ignore[import-not-found]
 
             def on_change(sender: Any, args: Any) -> None:
-                self._win32.remove_backdrop(self._handles.get("overlay", 0))
+                self._settings_changed()
 
             SystemEvents.UserPreferenceChanged += on_change
             self._backdrop_guard = on_change  # обработчик живёт, пока живут окна
         except Exception:
             log.debug("Не удалось подписаться на изменение настроек Windows", exc_info=True)
+
+    def _settings_changed(self) -> None:
+        """Настройки Windows изменились: снова без Mica, а если оверлей показан не с той прозрачностью,
+        которую теперь просят «Эффекты прозрачности», — он устарел (его спрячут)."""
+        self._win32.remove_backdrop(self._handles.get("overlay", 0))
+        stale = self._wants_glass(self._appear_style) != self._glass_wanted
+        if stale and self._visible["overlay"] and self.on_overlay_stale is not None:
+            self.on_overlay_stale()
 
     @staticmethod
     def _clear_background(window: Any) -> None:
@@ -166,7 +183,9 @@ class Windows:
         try:
             from System.Drawing import Color  # type: ignore[import-not-found]
 
-            window.native.BackColor = Color.Black  # видна разве что в сглаженных краях шара и карточки
+            # Чёрный — прозрачный, когда окно смешивается с рабочим столом (overlay_glass); иначе он
+            # виден разве что в сглаженных краях шара и карточки.
+            window.native.BackColor = Color.Black
             window.native.webview.DefaultBackgroundColor = Color.Transparent
         except Exception:
             log.warning("Фон оверлея не сделан прозрачным", exc_info=True)
@@ -204,6 +223,10 @@ class Windows:
     def show(self, name: str) -> None:
         self._visible[name] = True
         if name == "overlay":
+            # Оформление и прозрачность решаются здесь, один раз на показ: их же узнаёт страница
+            # (overlay_glass), а окно под них перестраивает поток анимации (_overlay_appear).
+            self._appear_style = self._overlay_style
+            self._glass_wanted = self._wants_glass(self._appear_style)
             self._overlay.show()
             return
         window = self._windows[name]
@@ -224,15 +247,26 @@ class Windows:
         if style in OVERLAY_SIZES:
             self._overlay_style = style
 
+    def overlay_glass(self) -> bool:
+        """Показанный оверлей полупрозрачный: окно сферы смешивается с рабочим столом, внешнее
+        кольцо шара и карточка — как стекло."""
+        return self._glass_wanted
+
+    def _wants_glass(self, style: str) -> bool:
+        """Сфера полупрозрачная только с «Эффектами прозрачности» Windows: кто их выключил, видит её
+        непрозрачной. Плашка всегда непрозрачная."""
+        return style == "orb" and self._glass_works and self._win32.transparency_enabled()
+
     def _overlay_appear(self) -> Track:
         """Ставит оверлей внизу по центру монитора с курсором — за краем, невидимым — и показывает
         без фокуса. Окно сферы — только форма шара и карточки (ORB_SHAPE)."""
-        hwnd, style = self._handle("overlay"), self._overlay_style
+        hwnd, style = self._handle("overlay"), self._appear_style
         # Без подложки Windows (Mica) — на случай, если pywebview поставил её снова — и без фокуса:
         # пользователь продолжает печатать в своём окне.
         self._win32.remove_backdrop(hwnd)
         self._win32.make_overlay(hwnd)
         self._apply_overlay_look(hwnd, style)
+        self._apply_overlay_glass(hwnd, self._glass_wanted)
         area = self._win32.work_area()
         scale = self._win32.dpi_scale(hwnd)
         width, height = (int(side * scale) for side in OVERLAY_SIZES[style])
@@ -250,14 +284,27 @@ class Windows:
     def _apply_overlay_look(self, hwnd: int, style: str) -> None:
         """Окно оверлея под оформление: сфере — без рамки и скругления Windows, плашке — скруглённое.
 
-        Окно сферы непрозрачное, его форма — только регион (ORB_SHAPE): им же плашка выезжает
-        из-за панели задач. Серый прямоугольник вокруг шара в 0.7.0–0.7.2 был подложкой Mica,
-        которую pywebview ставит окнам в тёмной теме Windows (её снимает remove_backdrop).
+        Форма окна сферы — регион (ORB_SHAPE): им же плашка выезжает из-за панели задач. Серый
+        прямоугольник вокруг шара в 0.7.0–0.7.2 был подложкой Mica, которую pywebview ставит окнам
+        в тёмной теме Windows (её снимает remove_backdrop).
         """
         if style == self._overlay_look:
             return
         self._win32.round_corners(hwnd, rounded=style != "orb")
         self._overlay_look = style
+
+    def _apply_overlay_glass(self, hwnd: int, glass: bool) -> None:
+        """Прозрачность окна оверлея по альфа-каналу страницы (сфере с «Эффектами прозрачности»)."""
+        if glass == self._overlay_glass:
+            return
+        if self._win32.set_transparent(hwnd, glass) or not glass:
+            self._overlay_glass = glass
+            return
+        if hwnd:
+            # Без прозрачности полупрозрачные места страницы легли бы на чёрный: со следующего показа
+            # сфера непрозрачная.
+            self._glass_works = False
+            log.warning("Windows не приняла прозрачность окна сферы — дальше она будет непрозрачной")
 
     def _overlay_place(self, track: Track, y: int) -> None:
         """Кадр анимации: оверлей сдвинут, а то, что ниже края рабочей области, обрезано."""

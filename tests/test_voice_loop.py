@@ -19,6 +19,7 @@ from tests.conftest import wait_until
 from tests.voice_fakes import (
     STOP,
     WAKE,
+    FakeDictation,
     FakeSource,
     FakeSpeech,
     FakeSpotter,
@@ -74,6 +75,7 @@ class Harness:
         confirmer: object | None = None,
         stop_spotter: object | None = None,
         busy: Callable[[], bool] | None = None,
+        dictation: FakeDictation | None = None,
     ) -> None:
         self.handled: list[str] = []
         self.source = FakeSource(audio)
@@ -109,6 +111,7 @@ class Harness:
             stop_spotter=stop_spotter or (FakeSpotter(word="стоп", value=STOP) if stop else None),  # type: ignore[arg-type]
             on_stop=self.stopped.set,
             busy=busy,
+            dictation=dictation,
         )
 
     def run(self) -> Harness:
@@ -129,6 +132,54 @@ def test_only_name_then_command() -> None:
     assert h.handled == ["Сделай громче."]
     assert h.speech.sounds == 1  # сигнал «слушаю» после имени
     assert h.stt.calls == [5002]  # для одного имени Whisper не нужен
+
+
+def test_words_are_shown_while_the_command_is_said() -> None:
+    # После имени: пока говорят команду, оверлей получает слова (partial), потом — текст Whisper.
+    audio = np.concatenate([silence(300), speech(WAKE, 500), silence(1000), speech(5002, 800), silence(1200)])
+    h = Harness(audio, dictation=FakeDictation()).run()
+    events = h.status.events
+    partials = [detail for state, detail in events if state == "partial"]
+    assert partials == ["сделай", "сделай громче"]
+    first = events.index(("partial", "сделай"))
+    assert events.index(("capturing", "")) < first < events.index(("recognizing", ""))
+    assert events.index(("recognizing", "")) < events.index(("recognized", "Сделай громче."))
+    assert h.handled == ["Сделай громче."]
+
+
+def test_name_with_command_in_one_breath_has_no_live_words() -> None:
+    # «Джарвис, открой ютуб» одной фразой: пока она не кончилась, неизвестно, к нам ли она.
+    audio = np.concatenate([silence(500), speech(WAKE, 300), speech(5001, 700), silence(1200)])
+    h = Harness(audio, dictation=FakeDictation()).run()
+    assert not [event for event in h.status.events if event[0] == "partial"]
+    assert h.handled == ["Джарвис, открой ютуб."]
+
+
+def test_noise_clears_live_words() -> None:
+    # Короткий шум после имени детектор речи отбрасывает: показанные «слова» убираются.
+    settings = VoiceSettings(followup_seconds=3, listen_timeout=3)
+    audio = np.concatenate([silence(300), speech(WAKE, 500), silence(1000), speech(5002, 200), silence(1500)])
+    h = Harness(audio, settings=settings, dictation=FakeDictation(words_every=2)).run()
+    partials = [detail for state, detail in h.status.events if state == "partial"]
+    assert partials and partials[-1] == "" and not h.handled
+
+
+def test_live_words_are_cleared_when_assistant_starts_speaking() -> None:
+    # Посреди фразы ассистент заговорил (напоминание): фраза оборвалась — её слова убираются с экрана.
+    audio = np.concatenate([silence(300), speech(WAKE, 500), silence(1000), speech(5002, 800), silence(1500)])
+    h = Harness(audio, dictation=FakeDictation(words_every=3))
+    read = h.source.read
+
+    def read_and_speak(timeout: float) -> np.ndarray | None:
+        block = read(timeout)
+        if h.source.reads == 68:  # слова уже показаны, фраза ещё говорится
+            h.speech.remaining = 20
+        return block
+
+    h.source.read = read_and_speak  # type: ignore[method-assign]
+    h.run()
+    partials = [detail for state, detail in h.status.events if state == "partial"]
+    assert partials[:2] == ["сделай", "сделай громче"] and partials[-1] == ""
 
 
 def test_command_said_during_chime_is_not_cut() -> None:

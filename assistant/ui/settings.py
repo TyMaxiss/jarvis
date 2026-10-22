@@ -51,7 +51,7 @@ UI_FIELDS: dict[str, frozenset[str]] = {
     "tts": frozenset(
         {"engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "rate", "volume"}
     ),
-    "ui": frozenset({"theme", "accent", "overlay", "overlay_style", "quick_chat_key"}),
+    "ui": frozenset({"theme", "accent", "overlay", "overlay_style", "overlay_keep", "quick_chat_key"}),
     "llm": frozenset({"enabled"}),
 }
 # Что применяется сразу; остальное — после перезапуска (голос, распознавание, голос озвучки, имя).
@@ -473,4 +473,6 @@ def silero_ready(config: AppConfig) -> bool:
 
 def ui_view(config: AppConfig) -> dict[str, Any]:
     """Раздел ui для интерфейса."""
-    return config.ui.model_dump(include={"theme", "accent", "overlay", "overlay_style", "quick_chat_key"})
+    return config.ui.model_dump(
+        include={"theme", "accent", "overlay", "overlay_style", "overlay_keep", "quick_chat_key"}
+    )

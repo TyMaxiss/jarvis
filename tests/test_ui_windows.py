@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any
@@ -189,6 +189,17 @@ def near(color: tuple[int, ...], expected: tuple[int, int, int], tolerance: int 
     return all(abs(a - b) <= tolerance for a, b in zip(color, expected, strict=True))
 
 
+def blend(color: tuple[int, int, int], alpha: float) -> tuple[int, int, int]:
+    """Цвет с непрозрачностью alpha поверх пурпурного окна (как его смешает Windows)."""
+    r, g, b = (round(alpha * top + (1 - alpha) * under) for top, under in zip(color, MAGENTA, strict=True))
+    return r, g, b
+
+
+# Полупрозрачные кольцо и карточка сферы поверх пурпурного (ui/src/index.css, .orb-glass).
+GLASS_DISC = blend((26, 50, 104), 0.6)
+GLASS_CARD = blend((22, 24, 28), 0.8)
+
+
 DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE, DWMSBT_MAINWINDOW = 38, 1, 2  # подложка окна: нет, Mica
 HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x001A, 0x0002
 
@@ -222,34 +233,50 @@ def broadcast_settings_change() -> None:
     )
 
 
+class Personalize:
+    """Оформление Windows (HKCU\\…\\Themes\\Personalize) на время теста; restore возвращает прежнее."""
+
+    def __init__(self) -> None:
+        self._before: dict[str, int | None] = {}
+
+    def set(self, name: str, value: int) -> None:
+        import winreg
+
+        from assistant.ui.win32 import PERSONALIZE_KEY
+
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY) as key:
+            if name not in self._before:
+                try:
+                    self._before[name] = winreg.QueryValueEx(key, name)[0]
+                except FileNotFoundError:
+                    self._before[name] = None
+            winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, value)
+
+    def restore(self) -> None:
+        import winreg
+
+        from assistant.ui.win32 import PERSONALIZE_KEY
+
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY) as key:
+            for name, before in self._before.items():
+                if before is None:
+                    with contextlib.suppress(FileNotFoundError):
+                        winreg.DeleteValue(key, name)
+                else:
+                    winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, before)
+
+
 @pytest.fixture
-def dark_app_mode() -> Iterator[Callable[[], None]]:
-    """Тёмная тема приложений Windows, как у пользователя: pywebview тогда ставит окнам подложку Mica.
-
-    Отдаёт функцию, которая возвращает прежнюю тему (её зовёт и сторож теста перед аварийным выходом).
-    """
-    import winreg
-
-    path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
-        try:
-            before: int | None = winreg.QueryValueEx(key, "AppsUseLightTheme")[0]
-        except FileNotFoundError:
-            before = None
-        winreg.SetValueEx(key, "AppsUseLightTheme", 0, winreg.REG_DWORD, 0)
-
-    def restore() -> None:
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
-            if before is None:
-                with contextlib.suppress(FileNotFoundError):
-                    winreg.DeleteValue(key, "AppsUseLightTheme")
-            else:
-                winreg.SetValueEx(key, "AppsUseLightTheme", 0, winreg.REG_DWORD, before)
-
+def personalize() -> Iterator[Personalize]:
+    """Как у пользователя: тёмная тема приложений (pywebview тогда ставит окнам подложку Mica)
+    и включённые «Эффекты прозрачности» (сфера полупрозрачная). Тест может их менять."""
+    look = Personalize()
     try:
-        yield restore
+        look.set("AppsUseLightTheme", 0)
+        look.set("EnableTransparency", 1)
+        yield look
     finally:
-        restore()
+        look.restore()
 
 
 def test_windows_load_interface_and_talk_to_python(
@@ -258,7 +285,7 @@ def test_windows_load_interface_and_talk_to_python(
     store: CommandStore,
     matcher: Matcher,
     capsys: pytest.CaptureFixture[str],
-    dark_app_mode: Callable[[], None],
+    personalize: Personalize,
 ) -> None:
     import webview
 
@@ -358,6 +385,15 @@ def test_windows_load_interface_and_talk_to_python(
                 results["orb_pixels_after"] = orb_pixels(results["orb_rect"], scale, "overlay-orb-after")
                 controller.overlay.hide_now()
                 results["orb_hidden"] = wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
+                # «Эффекты прозрачности» выключили: при следующем показе сфера непрозрачная.
+                personalize.set("EnableTransparency", 0)
+                time.sleep(0.6)  # уход доигран
+                controller.overlay.voice_state("listening")
+                wait(lambda: bool(winapi.api().IsWindowVisible(overlay)), 5)
+                time.sleep(1.2)  # выехала, слои распустились
+                results["opaque_pixels"] = orb_pixels(win32.window_rect(overlay), scale, "overlay-orb-opaque")
+                controller.overlay.hide_now()
+                wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
             finally:
                 under.close()
             results["orb_size"] = size
@@ -394,7 +430,7 @@ def test_windows_load_interface_and_talk_to_python(
         # Если окна так и не закрылись (WebView2 не запустился), тест не должен висеть до конца CI.
         if not finished.wait(180):
             print(f"Окна не закрылись за 180 с; результаты: {results}", flush=True)
-            dark_app_mode()  # os._exit не даст фикстуре вернуть тему
+            personalize.restore()  # os._exit не даст фикстуре вернуть тему
             os._exit(3)
 
     threading.Thread(target=watchdog, daemon=True).start()
@@ -423,8 +459,7 @@ def test_windows_load_interface_and_talk_to_python(
     assert any(kind for _, kind in results["overlay_fall"]), "уходя, оверлей не обрезался"
     # Сфера: выехала снизу на место своего размера, без фокуса; вне формы окна — пурпурное окно под
     # ним, в форме — диск, синий шар, кружок микрофона и тёмная карточка там, где им положено быть.
-    # Окно не прозрачное: пурпурный вокруг шара — только благодаря форме окна (как и у пользователя
-    # с выключенными «Эффектами прозрачности»), а карточка не просвечивает.
+    # С «Эффектами прозрачности» внешнее кольцо и карточка полупрозрачные: сквозь них — пурпурный.
     pixels = results["orb_pixels"]
     with capsys.disabled():
         print(f"\nЦвета сферы: {pixels}; путь: {results['orb_rise']}")
@@ -435,6 +470,7 @@ def test_windows_load_interface_and_talk_to_python(
     assert results["backdrops"] == expected and results["backdrops_after_change"] == expected, results
     after = results["orb_pixels_after"]
     assert all(near(after[point], MAGENTA) for point in ("corner", "beside", "ring")), after
+    assert near(after["disc"], GLASS_DISC), f"после смены настроек Windows кольцо не прозрачное: {after}"
     assert results["orb_hidden"] and results["orb_focus_kept"]
     assert tuple(results["orb_rect"][2:]) == results["orb_size"], results["orb_rect"]
     rise = results["orb_rise"]
@@ -444,11 +480,18 @@ def test_windows_load_interface_and_talk_to_python(
     assert all(near(pixels[point], MAGENTA) for point in ("corner", "beside", "ring")), (
         f"вокруг шара есть фон: {pixels}"
     )
-    assert near(pixels["disc"], (30, 47, 81)), f"нет тёмно-синего диска шара: {pixels}"
+    assert near(pixels["disc"], GLASS_DISC), f"внешнее кольцо шара не полупрозрачное: {pixels}"
     red, _, blue = pixels["orb"]
     assert blue >= 200 and blue - red >= 80, f"нет синего шара: {pixels}"
     assert near(pixels["badge"], (68, 134, 255), 30), f"карточка не на месте (нет кружка микрофона): {pixels}"
-    assert near(pixels["card"], (22, 24, 28), 8), f"нет непрозрачной тёмной карточки: {pixels}"
+    assert near(pixels["card"], GLASS_CARD), f"карточка не полупрозрачная: {pixels}"
+    # Без «Эффектов прозрачности» — как в 0.7.3: окно по форме, но кольцо и карточка непрозрачные.
+    opaque = results["opaque_pixels"]
+    with capsys.disabled():
+        print(f"Без «Эффектов прозрачности»: {opaque}")
+    assert all(near(opaque[point], MAGENTA) for point in ("corner", "beside", "ring")), opaque
+    assert near(opaque["disc"], (30, 47, 81)), f"нет непрозрачного тёмно-синего диска: {opaque}"
+    assert near(opaque["card"], (22, 24, 28), 8), f"нет непрозрачной тёмной карточки: {opaque}"
     assert results["chat_visible"] and results["chat_hidden"]
     assert results["chat_command"] == "сделай громче"
     width, height = results["resized"]

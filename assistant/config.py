@@ -323,6 +323,9 @@ class UiConfig(_Section):
         "classic",
         description="Оформление оверлея: classic — плашка, orb — сфера, которая отзывается на голос",
     )
+    overlay_keep: bool = Field(
+        True, description="Итог голосовой команды остаётся в оверлее до следующей фразы (или клика)"
+    )
     quick_chat_key: str = Field("ctrl+alt+enter", description="Окно для команды текстом")
     start_minimized: bool = Field(False, description="При запуске сразу свернуться в трей")
 

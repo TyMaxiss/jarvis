@@ -1,35 +1,55 @@
 // Оверлей внизу экрана в одном из двух оформлений: плашка («пилюля») или сфера (Orb.tsx).
-// Окно показывает и прячет Python; здесь только отрисовка событий: «Слушаю…» с волной,
-// распознанный текст, шаги, ответ, «Да / Нет».
+// Окно показывает и прячет Python; здесь только отрисовка событий: «Слушаю…» с волной, слова
+// по ходу речи, распознанный текст, шаги, ответ, «Да / Нет». Клик по оверлею его прячет.
 
-import { CircleAlert, CircleCheck, CircleStop } from 'lucide-react'
-import { useEffect, useReducer, useState } from 'react'
+import { CircleAlert, CircleCheck, CircleStop, MicOff } from 'lucide-react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { cx } from '../components/ui'
 import { call } from '../lib/bridge'
-import { initialOverlay, overlayLines, overlayReduce, type OverlayState } from '../lib/overlay'
+import { initialOverlay, overlayLines, overlayReduce, shown, type OverlayState } from '../lib/overlay'
 import { useAppState, useAssistantEvent } from '../lib/store'
 import { Orb } from './Orb'
+
+const STYLE_SWITCH_MS = 300 // дольше, чем оверлей уезжает (slide.py, HIDE_TIME)
 
 export function Overlay({ framed = false }: { framed?: boolean }) {
   const app = useAppState()
   const [state, dispatch] = useReducer(overlayReduce, initialOverlay)
   const [level, setLevel] = useState(0)
   const [present, setPresent] = useState(false)
+  const [glass, setGlass] = useState(false)
   useAssistantEvent((event) => {
     if (event.type === 'level') setLevel(event.payload.value)
     else {
-      if (event.type === 'overlay') setPresent(event.payload.visible)
+      if (event.type === 'overlay') {
+        setPresent(event.payload.visible)
+        // Прозрачность окна Python ставит при показе — пока окно уезжает, сфера не меняется.
+        if (event.payload.visible) setGlass(event.payload.glass ?? false)
+      }
       dispatch(event)
     }
   })
   // Оформление меняется, только пока оверлей спрятан: окно под новое оформление Python
-  // перестроит при следующем показе.
+  // перестроит при следующем показе. Уезжающее окно ещё прежней формы — ждём, пока оно уедет.
   const wanted = app?.ui.overlay_style ?? 'classic'
   const [style, setStyle] = useState(wanted)
+  const hiddenAt = useRef(0) // когда показанный оверлей начал уезжать
+  const wasPresent = useRef(false)
   useEffect(() => {
-    if (!present) setStyle(wanted)
-  }, [wanted, present])
-  if (style === 'orb') return <Orb state={state} level={level} present={present} framed={framed} />
+    if (wasPresent.current && !present) hiddenAt.current = Date.now()
+    wasPresent.current = present
+  }, [present])
+  useEffect(() => {
+    if (present || style === wanted) return
+    const wait = hiddenAt.current + STYLE_SWITCH_MS - Date.now()
+    if (wait <= 0) {
+      setStyle(wanted)
+      return
+    }
+    const timer = window.setTimeout(() => setStyle(wanted), wait)
+    return () => window.clearTimeout(timer)
+  }, [wanted, present, style])
+  if (style === 'orb') return <Orb state={state} level={level} present={present} glass={glass} framed={framed} />
   return <Pill state={state} level={level} framed={framed} />
 }
 
@@ -39,6 +59,8 @@ function Pill({ state, level, framed }: { state: OverlayState; level: number; fr
 
   return (
     <div
+      // Клик прячет плашку (и итог команды, который она держит), если она не ждёт «Да / Нет».
+      onClick={state.confirm ? undefined : () => void call('overlay_dismiss')}
       className={cx(
         'flex items-center gap-3.5 bg-surface px-4',
         // В браузере (?mock) окна нет — рисуем его границы сами.
@@ -72,10 +94,12 @@ function Pill({ state, level, framed }: { state: OverlayState; level: number; fr
   )
 }
 
-function StatusIcon({ state, level }: { state: OverlayState; level: number }) {
+function StatusIcon({ state: input, level }: { state: OverlayState; level: number }) {
+  const state = shown(input)
   if (state.mode === 'done' && !state.confirm) return <CircleCheck size={22} className="shrink-0 text-ok" />
   if (state.mode === 'stopped') return <CircleStop size={22} className="shrink-0 text-muted" />
   if (state.mode === 'error' && !state.confirm) return <CircleAlert size={22} className="shrink-0 text-danger" />
+  if (state.mode === 'idle') return <MicOff size={22} className="shrink-0 text-muted" />
   if (state.mode === 'listening') return <Wave level={level} />
   return (
     <span className="relative h-[22px] w-[22px] shrink-0">

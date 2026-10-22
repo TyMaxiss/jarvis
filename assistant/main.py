@@ -316,6 +316,7 @@ def start_voice(
     *,
     handle_text: Callable[[str, Confirmer | None], Any] | None = None,
     hotkeys_paused: threading.Event | None = None,
+    live_words: bool = False,
 ) -> VoiceRuntime:
     """Запускает микрофон, распознавание и голосовой цикл; недостающие модели скачивает.
 
@@ -324,6 +325,7 @@ def start_voice(
         out: куда писать ход запуска (консоль или окна).
         handle_text: обработка фразы; по умолчанию — конвейер с голосовым подтверждением.
         hotkeys_paused: пока установлено, горячие клавиши не срабатывают.
+        live_words: сообщать слова фразы по ходу речи (оверлей окон их показывает).
 
     Raises:
         VoiceSetupError: микрофона нет, нечем активировать или не загрузилась модель.
@@ -331,7 +333,7 @@ def start_voice(
     from assistant.audio.capture import CaptureError, MicrophoneCapture
     from assistant.audio.sounds import SOUND_RATE, listen_chime
     from assistant.audio.vad import SegmenterSettings, SileroVAD, SpeechSegmenter
-    from assistant.audio.wakeword import phrase_spotter, wake_spotter
+    from assistant.audio.wakeword import Dictation, phrase_spotter, wake_spotter
     from assistant.hotkeys import HotkeyError, HotkeyManager
     from assistant.stt.whisper_stt import ModelDownloadError, WhisperSTT
     from assistant.voice import STOP_PHRASES, STOP_SOUNDALIKES, VoiceLoop, VoiceSettings
@@ -431,6 +433,7 @@ def start_voice(
             stop_spotter=stop_spotter,
             on_stop=pipeline.stop,
             busy=lambda: pipeline.busy,
+            dictation=Dictation(vosk_model) if live_words and vosk_model is not None else None,
         )
         # Кнопка, Ctrl+Alt+Q и «стоп» из текста останавливают и прослушивание.
         pipeline.on_stop.append(loop.interrupt)
@@ -850,7 +853,7 @@ def run_ui(
     )
     controller.startup_issues = [str(issue) for issue in core.loaded.issues]
     confirmer.on_change = controller.overlay.confirming
-    status = VoiceStatus(activity, controller.on_voice_state)
+    status = VoiceStatus(activity, controller.on_voice_state, controller.overlay.command_done)
 
     def handle_voice(text: str, _: Confirmer | None) -> Any:
         # Голосовая команда подтверждается и голосом, и кнопками в оверлее.
@@ -860,7 +863,7 @@ def run_ui(
         fetch_voice(config, speech, progress)
         return start_voice(
             config, core.pipeline, core.normalizer, status, speech, core.store, core.index, progress,
-            handle_text=handle_voice, hotkeys_paused=hotkeys_paused,
+            handle_text=handle_voice, hotkeys_paused=hotkeys_paused, live_words=True,
         )  # fmt: skip
 
     problem = ""

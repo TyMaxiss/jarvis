@@ -274,6 +274,7 @@ function makeState(): AppState {
       accent: '#7c6cff',
       overlay: true,
       overlay_style: params.get('style') === 'orb' ? 'orb' : 'classic',
+      overlay_keep: true,
       quick_chat_key: 'ctrl+alt+enter',
     },
   }
@@ -487,6 +488,7 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
       void simulate(text)
     },
     async confirm_answer() {},
+    async overlay_dismiss() {},
     async set_volume(percent: number) {
       state.volume.percent = percent
       return structuredClone(state)

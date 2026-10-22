@@ -42,6 +42,7 @@ class FakeHost:
         self.calls: list[tuple[Any, ...]] = []
         self.shown: set[str] = {"main"}
         self.scripts: dict[str, list[str]] = {}
+        self.glass = False  # окно сферы смешивается с рабочим столом
 
     def show(self, name: str) -> None:
         self.calls.append(("show", name))
@@ -65,6 +66,9 @@ class FakeHost:
 
     def set_overlay_style(self, style: str) -> None:
         self.calls.append(("overlay_style", style))
+
+    def overlay_glass(self) -> bool:
+        return self.glass
 
     def sender(self, name: str) -> Callable[[str], None]:
         return lambda script: self.scripts.setdefault(name, []).append(script)

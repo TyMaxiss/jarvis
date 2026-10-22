@@ -147,6 +147,7 @@ ui:
   accent: "#7c6cff"              # акцентный цвет
   overlay: true                  # оверлей внизу экрана: что услышал и что делает
   overlay_style: classic         # classic — плашка, orb — сфера, которая отзывается на голос
+  overlay_keep: true             # итог голосовой команды виден до следующей фразы (клик — спрятать)
   quick_chat_key: ctrl+alt+enter # окно для команды текстом
   start_minimized: false         # true — при запуске сразу свернуться в трей
 

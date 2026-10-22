@@ -252,10 +252,20 @@ class FakeWindow:
         self.hidden += 1
 
 
+class Look:
+    """«Эффекты прозрачности» Windows и то, принимает ли Windows прозрачность окна."""
+
+    transparency = True
+    accepts = True
+
+
 @pytest.fixture
 def desktop(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
-    """WinAPI оверлея: монитор 1920×1080 с панелью задач 40 пикселей, масштаб 150 %."""
+    """WinAPI оверлея: монитор 1920×1080 с панелью задач 40 пикселей, масштаб 150 %,
+    «Эффекты прозрачности» включены (Look)."""
     calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(Look, "transparency", True)
+    monkeypatch.setattr(Look, "accepts", True)
 
     size = [(720, 96)]  # окно создано плашкой
 
@@ -270,6 +280,13 @@ def desktop(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
     monkeypatch.setattr(win32, "remove_backdrop", record("no_backdrop"))
     monkeypatch.setattr(win32, "round_corners", record("corners"))
     monkeypatch.setattr(win32, "set_bounds", set_bounds)
+
+    def set_transparent(hwnd: int, on: bool) -> bool:
+        calls.append(("glass", hwnd, on))
+        return Look.accepts
+
+    monkeypatch.setattr(win32, "set_transparent", set_transparent)
+    monkeypatch.setattr(win32, "transparency_enabled", lambda: Look.transparency)
     monkeypatch.setattr(win32, "show_without_focus", record("show"))
     monkeypatch.setattr(win32, "move_window", record("move"))
     monkeypatch.setattr(win32, "clip_window", record("clip"))
@@ -356,10 +373,11 @@ def test_orb_window_is_shaped_like_orb_and_card_and_slides_in(desktop: list[tupl
     host.show("overlay")
     assert wait_for(lambda: ("move", 42, 630, 374) in desktop)
     # Сфера 440×420 при 150 % — 660×630; окно — только круг шара и карточка, выезжает снизу.
-    assert desktop[:6] == [
+    assert desktop[:7] == [
         ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("corners", 42, False),  # прямые углы без рамки: окно и так по форме шара
+        ("glass", 42, True),  # смешивается с рабочим столом: кольцо и карточка полупрозрачные
         ("bounds", 42, 630, 374, 660, 630),
         ("shape", 42, shape, 0),  # до показа: не видно ничего
         ("show", 42, 630, 1040),
@@ -393,12 +411,61 @@ def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) 
         ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("corners", 42, True),
+        ("glass", 42, False),  # плашка непрозрачная
         ("bounds", 42, 600, 908, 720, 96),
         ("clip", 42, 720, 0, 12),
         ("show", 42, 600, 1040),
         ("move", 42, 600, 908),
         ("clip", 42, 720, None, 12),
     ]
+    host.quit()
+
+
+def test_orb_is_opaque_without_transparency_effects(desktop: list[tuple[Any, ...]]) -> None:
+    host, overlay = make_windows(animate=False, overlay_style="orb")
+    Look.transparency = False  # «Эффекты прозрачности» выключены в Windows
+    host.show("overlay")
+    assert not host.overlay_glass(), "страница рисует сферу непрозрачной"
+    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert not [call for call in desktop if call[0] == "glass"], "окно остаётся непрозрачным"
+    host.quit()
+
+
+def test_orb_is_opaque_if_windows_refuses_transparency(desktop: list[tuple[Any, ...]]) -> None:
+    Look.accepts = False
+    host, overlay = make_windows(animate=False, overlay_style="orb")
+    host.show("overlay")
+    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert ("glass", 42, True) in desktop
+    host.hide("overlay")
+    assert wait_for(lambda: overlay.hidden == 1)
+    desktop.clear()
+    host.show("overlay")  # больше не пробует: и окно, и страница — непрозрачные
+    assert not host.overlay_glass()
+    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert not [call for call in desktop if call[0] == "glass"]
+    host.quit()
+
+
+def test_overlay_shown_with_old_transparency_is_hidden_on_settings_change(
+    desktop: list[tuple[Any, ...]],
+) -> None:
+    host, overlay = make_windows(animate=False, overlay_style="orb")
+    stale: list[bool] = []
+    host.on_overlay_stale = lambda: stale.append(True)
+    host.show("overlay")
+    assert host.overlay_glass()
+    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    desktop.clear()
+    host._settings_changed()  # что-то другое в настройках Windows — оверлей на месте
+    assert stale == [] and desktop == [("no_backdrop", 42)]  # Mica снимается при каждой смене настроек
+    Look.transparency = False  # выключили «Эффекты прозрачности», пока сфера на экране
+    host._settings_changed()
+    assert stale == [True]
+    host.hide("overlay")
+    stale.clear()
+    host._settings_changed()  # спрятанный оверлей перестроится при следующем показе
+    assert stale == []
     host.quit()
 
 

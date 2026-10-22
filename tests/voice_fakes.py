@@ -199,3 +199,25 @@ class RecordingStatus:
 
     def voice_result(self, result: object) -> None:
         self.results.append(result)
+
+
+class FakeDictation:
+    """Vosk по ходу речи: слово за каждые words_every блоков речи (значение блока > 1000)."""
+
+    def __init__(self, words: tuple[str, ...] = ("сделай", "громче"), words_every: int = 5) -> None:
+        self._words = words
+        self._every = words_every
+        self._blocks = 0
+        self.resets = 0
+
+    def accept(self, block: np.ndarray) -> str | None:
+        if abs(int(block[0])) <= 1000:
+            return None
+        self._blocks += 1
+        if self._blocks % self._every:
+            return None
+        return " ".join(self._words[: self._blocks // self._every]) or None
+
+    def reset(self) -> None:
+        self._blocks = 0
+        self.resets += 1

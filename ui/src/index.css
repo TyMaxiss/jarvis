@@ -146,6 +146,8 @@ select {
 /* --- Сфера: оверлей с шаром, который отзывается на голос (views/Orb.tsx) ------------------
    Окно 440×420 обрезано по кругу шара и по карточке (windows.py, ORB_SHAPE — числа ниже с ним
    совпадают): вне этой фигуры окна нет совсем, даже если Windows не показывает прозрачность.
+   .orb-glass — окно смешивается с рабочим столом («Эффекты прозрачности» Windows): внешнее
+   кольцо и карточка полупрозрачные; без него — непрозрачные.
    --level (0..1) — громкость микрофона, её каждый кадр выставляет страница. Свойство translate —
    только в правилах без transform: сборщик CSS выбрасывает translate, если рядом есть transform. */
 body.overlay-window {
@@ -173,12 +175,17 @@ body.overlay-window {
   height: 378px;
 }
 
-/* Внешний слой — неподвижный непрозрачный диск точно по форме окна (цвет внешнего слоя эскиза). */
+/* Внешний слой — неподвижный диск точно по форме окна (цвет внешнего слоя эскиза). */
 .orb-disc {
   position: absolute;
   inset: 0;
   border-radius: 50%;
   background: #1e2f51;
+}
+
+/* Полупрозрачный — чуть синее: на светлом рабочем столе тёмно-синий с прозрачностью сереет. */
+.orb-glass .orb-disc {
+  background: rgb(26 50 104 / 0.6);
 }
 
 /* Внутренние слои распускаются, когда окно показано, и сворачиваются, когда оно уезжает. */
@@ -210,7 +217,7 @@ body.overlay-window {
   animation: orb-think 1.5s ease-in-out infinite;
 }
 
-/* Слой: синий нужной прозрачности поверх диска; форма медленно перетекает и вращается, размер
+/* Слой: свой оттенок синего (Orb.tsx, LAYERS); форма медленно перетекает и вращается, размер
    растёт с голосом. */
 .orb-layer {
   position: absolute;
@@ -220,7 +227,7 @@ body.overlay-window {
   height: var(--size);
   translate: calc(-50% + var(--x)) calc(-50% + var(--y));
   scale: calc(1 + var(--level) * var(--gain));
-  background: rgb(68 134 255 / var(--alpha));
+  background: var(--color);
   border-radius: 50%;
   animation: orb-morph 20s linear infinite;
 }
@@ -234,12 +241,16 @@ body.overlay-window {
   height: 126px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   padding: 14px 16px 16px;
   border-radius: 18px;
   border: 1px solid rgb(255 255 255 / 0.13);
-  /* Непрозрачная: окно сферы не смешивается с рабочим столом (windows.py, ORB_SHAPE). */
   background: rgb(22 24 28);
+}
+
+/* Стеклянная: сквозь неё размыто видно шар, а у нижних углов — рабочий стол. */
+.orb-glass .orb-card {
+  background: rgb(22 24 28 / 0.8);
+  backdrop-filter: blur(22px) saturate(1.5);
 }
 
 :root[data-theme='light'] .orb-card {
@@ -248,6 +259,34 @@ body.overlay-window {
   /* На белой карточке зелёный и красный темнее — иначе их плохо видно. */
   --ok: #138a55;
   --danger: #d23f3f;
+}
+
+:root[data-theme='light'] .orb-glass .orb-card {
+  background: rgb(255 255 255 / 0.82);
+}
+
+/* Фраза крупно: слова по ходу речи (с курсором) или распознанная команда. */
+.orb-phrase {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 26px;
+  margin-top: 9px;
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 26px;
+}
+
+.orb-caret {
+  width: 2px;
+  height: 21px;
+  margin-left: 2px;
+  flex-shrink: 0;
+  border-radius: 1px;
+  background: #4486ff;
+  animation: orb-caret 1.06s steps(1) infinite;
 }
 
 .orb-badge {
@@ -358,6 +397,12 @@ body.overlay-window {
   }
   50% {
     --bounce: 1;
+  }
+}
+
+@keyframes orb-caret {
+  50% {
+    opacity: 0;
   }
 }
 

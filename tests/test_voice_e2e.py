@@ -33,7 +33,14 @@ import pytest
 
 from assistant.audio.capture import ArraySource, resample, to_int16
 from assistant.audio.vad import SegmentEvent, SileroVAD, SpeechSegmenter
-from assistant.audio.wakeword import GrammarSpotter, SpotResult, load_vosk_model, phrase_spotter, wake_spotter
+from assistant.audio.wakeword import (
+    Dictation,
+    GrammarSpotter,
+    SpotResult,
+    load_vosk_model,
+    phrase_spotter,
+    wake_spotter,
+)
 from assistant.config import AppConfig
 from assistant.nlu.matcher import Matcher
 from assistant.nlu.normalize import Normalizer
@@ -421,6 +428,24 @@ def test_phrase_without_name_is_ignored(
 ) -> None:
     audio = np.concatenate([gap(1.0), say(piper, phrase), gap(1.5)])
     assert run_loop(audio, vosk_model, stt) == ([], 0)  # ни команды, ни сигнала «слушаю»
+
+
+@pytest.mark.parametrize("phrase", ["Сделай громче", "Который час"])
+def test_dictation_shows_words_while_speaking(any_piper: PiperTTS, vosk_model: object, phrase: str) -> None:
+    # Оверлей показывает слова по ходу речи: первые — ещё до конца фразы, последние — вся фраза.
+    audio = say(any_piper, phrase)
+    dictation = Dictation(vosk_model)
+    shown: list[tuple[int, str]] = []
+    for start in range(0, len(audio) - 511, 512):
+        text = dictation.accept(audio[start : start + 512])
+        if text is not None:
+            shown.append((start, text))
+    assert shown, "слов по ходу речи нет"
+    first, last = shown[0], shown[-1][1]
+    assert first[0] < len(audio) * 0.8, f"первые слова — только в конце фразы: {shown}"
+    assert phrase.lower().split()[-1][:5] in last, f"в конце нет последнего слова: {shown}"
+    dictation.reset()
+    assert dictation.accept(gap(0.1)[:512]) in (None, "")
 
 
 @pytest.mark.parametrize(

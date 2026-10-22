@@ -1,7 +1,9 @@
 // Оверлей в браузере (?view=overlay&mock): события, которые прислал бы Python.
 // Без параметров команды идут по кругу; ?scene=… застывает на одном состоянии (для снимков):
-// listening, followup (слушает после «YouTube открыт», как на эскизе), working, done, error, confirm.
-// ?level=0.6 — постоянная громкость вместо «речи».
+// listening, words (слова по ходу речи), followup (слушает после «YouTube открыт»), working, done,
+// kept (итог команды, когда голос уже не слушает), error, confirm.
+// ?level=0.6 — постоянная громкость вместо «речи»; ?glass — сфера полупрозрачная (как в Windows
+// с «Эффектами прозрачности»).
 
 import type { AssistantEvent, RecentItem } from './types'
 
@@ -24,6 +26,10 @@ function speech(started: number, now: number): number {
 /** Сцены: что прислать, чтобы оверлей застыл в нужном состоянии. */
 const scenes: Record<string, AssistantEvent[]> = {
   listening: [{ type: 'voice', payload: { state: 'listening', detail: '' } }],
+  words: [
+    { type: 'voice', payload: { state: 'capturing', detail: '' } },
+    { type: 'partial', payload: { text: 'сделай громче' } },
+  ],
   followup: [
     { type: 'recognized', payload: { text: 'открой ютуб' } },
     result('открой ютуб', 'YouTube открыт'),
@@ -34,6 +40,12 @@ const scenes: Record<string, AssistantEvent[]> = {
     { type: 'step', payload: { number: 1, total: 2, action: 'open_url', text: 'Открываю YouTube', ok: true } },
   ],
   done: [{ type: 'recognized', payload: { text: 'открой ютуб' } }, result('открой ютуб', 'YouTube открыт')],
+  kept: [
+    { type: 'recognized', payload: { text: 'Сделай громче.' } },
+    result('Сделай громче.', 'Громкость увеличена'),
+    { type: 'voice', payload: { state: 'listening', detail: '' } },
+    { type: 'voice', payload: { state: 'idle', detail: '' } },
+  ],
   error: [{ type: 'recognized', payload: { text: 'сделай кофе' } }, result('сделай кофе', 'Не знаю такой команды', false)],
   confirm: [
     { type: 'recognized', payload: { text: 'выключи компьютер' } },
@@ -50,20 +62,27 @@ export function startOverlayDemo(emit: Emit, params: URLSearchParams): void {
     emit({ type: 'level', payload: { value } })
   }, 70)
 
+  const glass = params.has('glass')
   const scene = params.get('scene')
   if (scene && scenes[scene]) {
-    emit({ type: 'overlay', payload: { visible: true } })
+    emit({ type: 'overlay', payload: { visible: true, glass } })
     for (const event of scenes[scene]) emit(event)
-    speaking = scene === 'listening' || scene === 'followup'
+    speaking = scene === 'listening' || scene === 'words' || scene === 'followup'
     return
   }
 
   void (async () => {
     for (;;) {
       emit({ type: 'voice', payload: { state: 'listening', detail: '' } })
-      emit({ type: 'overlay', payload: { visible: true } })
+      emit({ type: 'overlay', payload: { visible: true, glass } })
+      await pause(700)
+      emit({ type: 'voice', payload: { state: 'capturing', detail: '' } })
       speaking = true
-      await pause(2600)
+      for (const words of ['открой', 'открой ютуб']) {
+        await pause(900)
+        emit({ type: 'partial', payload: { text: words } })
+      }
+      await pause(700)
       speaking = false
       emit({ type: 'voice', payload: { state: 'recognizing', detail: '' } })
       await pause(600)

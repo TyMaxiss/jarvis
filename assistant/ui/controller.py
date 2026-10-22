@@ -82,6 +82,8 @@ class WindowHost(Protocol):
 
     def set_overlay_style(self, style: str) -> None: ...
 
+    def overlay_glass(self) -> bool: ...
+
     def sender(self, name: str) -> Callable[[str], None]: ...
 
     def quit(self) -> None: ...
@@ -215,7 +217,10 @@ class UiController:
         self.editor = CommandEditor(commands, executor.registry, lambda: pipeline.matcher)
         pipeline.on_stop.append(self._stopped_by_user)
         self.overlay = OverlayController(
-            show=self._show_overlay, hide=self._hide_overlay, enabled=lambda: self.config.ui.overlay
+            show=self._show_overlay,
+            hide=self._hide_overlay,
+            enabled=lambda: self.config.ui.overlay,
+            keep=lambda: self.config.ui.overlay_keep,
         )
 
     # --- Состояние -------------------------------------------------------------------
@@ -227,7 +232,7 @@ class UiController:
         first = not self.bus.attached(name)
         self.bus.attach(name, self.host.sender(name))
         if name == "overlay":
-            self.bus.emit("overlay", {"visible": self.overlay.visible}, to=["overlay"])
+            self._overlay_event(self.overlay.visible)
         if not first or name != "main":
             return
         if self.startup_issues:
@@ -481,16 +486,27 @@ class UiController:
         показывает «Остановлено»."""
         self.confirmer.cancel_all()
         self.bus.emit("stopped", {})
+        self.overlay.stopped()
 
     def _show_overlay(self) -> None:
         """Окно оверлея показывается, а страница узнаёт об этом: сфера проигрывает появление."""
         self._host_call("show", "overlay")
-        self.bus.emit("overlay", {"visible": True}, to=["overlay"])
+        self._overlay_event(True)
 
     def _hide_overlay(self) -> None:
         """Страница проигрывает уход, окно прячется (сфера — когда уход доигран)."""
-        self.bus.emit("overlay", {"visible": False}, to=["overlay"])
+        self._overlay_event(False)
         self._host_call("hide", "overlay")
+
+    def _overlay_event(self, visible: bool) -> None:
+        """Окно оверлея показано или прячется; glass — окно смешивается с рабочим столом по альфа-
+        каналу (сфера рисует полупрозрачные внешнее кольцо и карточку, иначе — непрозрачные)."""
+        glass = self.host is not None and self.host.overlay_glass()
+        self.bus.emit("overlay", {"visible": visible, "glass": glass}, to=["overlay"])
+
+    def overlay_dismiss(self) -> None:
+        """Клик по оверлею: спрятать его (и итог команды, который он держит)."""
+        self.overlay.hide_now()
 
     def level_meter(self, on: bool) -> None:
         self._meter = on
@@ -770,8 +786,13 @@ class UiController:
             self.on_chat_key(config.ui.quick_chat_key)
         if not config.ui.overlay:
             self.overlay.hide_now()
+        elif previous.ui.overlay_keep != config.ui.overlay_keep:
+            self.overlay.refresh()
         if previous.ui.overlay_style != config.ui.overlay_style:
             self._host_call("set_overlay_style", config.ui.overlay_style)
+            # Окно и страница меняют оформление при следующем показе — оверлей, который держит
+            # итог команды, прячется, чтобы этот показ не ждал клика.
+            self.overlay.hide_now()
         self.push_state()
 
     def _apply_llm(self, llm: LlmConfig) -> None:

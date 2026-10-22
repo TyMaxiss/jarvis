@@ -41,6 +41,7 @@ DWMWCP_DONOTROUND, DWMWCP_ROUND = 1, 2
 DWMWA_BORDER_COLOR = 34
 DWMWA_COLOR_NONE, DWMWA_COLOR_DEFAULT = 0xFFFFFFFE, 0xFFFFFFFF
 DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE = 38, 1
+DWM_BB_ENABLE, DWM_BB_BLURREGION = 0x1, 0x2
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x8, 0x4000
@@ -48,6 +49,9 @@ MB_ICONWARNING, MB_YESNO, IDYES = 0x30, 0x4, 6
 FRAME_TIME = 1 / 60  # с: кадр, если не удалось дождаться его у Windows
 # Модификаторы для RegisterHotKey по виртуальным кодам клавиш из parse_hotkey.
 _MODIFIERS = {0x11: MOD_CONTROL, 0x12: MOD_ALT, 0x10: MOD_SHIFT, 0x5B: MOD_WIN, 0x5C: MOD_WIN}
+
+# «Эффекты прозрачности» Windows (Параметры → Персонализация → Цвета).
+PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
 # Evergreen WebView2 Runtime (learn.microsoft.com: «Detect if a WebView2 Runtime is already installed»).
 WEBVIEW2_CLIENT = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -60,6 +64,15 @@ class MONITORINFO(ctypes.Structure):
         ("rcMonitor", wintypes.RECT),
         ("rcWork", wintypes.RECT),
         ("dwFlags", wintypes.DWORD),
+    )
+
+
+class DWM_BLURBEHIND(ctypes.Structure):
+    _fields_ = (
+        ("dwFlags", wintypes.DWORD),
+        ("fEnable", wintypes.BOOL),
+        ("hRgnBlur", wintypes.HRGN),
+        ("fTransitionOnMaximized", wintypes.BOOL),
     )
 
 
@@ -130,6 +143,9 @@ class _Win32:
             wintypes.DWORD,
         )
         self.DwmFlush = fn(dwmapi, "DwmFlush", ctypes.c_long)
+        self.DwmEnableBlurBehindWindow = fn(
+            dwmapi, "DwmEnableBlurBehindWindow", ctypes.c_long, hwnd, ctypes.POINTER(DWM_BLURBEHIND)
+        )
 
 
 @functools.cache
@@ -328,6 +344,41 @@ def remove_backdrop(hwnd: int) -> bool:
     backdrop = ctypes.c_int(DWMSBT_NONE)
     size = ctypes.sizeof(backdrop)
     return api.DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(backdrop), size) == 0
+
+
+def transparency_enabled() -> bool:
+    """Включены ли в Windows «Эффекты прозрачности» (Параметры → Персонализация → Цвета).
+
+    Значения в реестре нет — значит, не выключали (по умолчанию Windows они включены).
+    """
+    if not winapi.IS_WINDOWS:
+        return False
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY) as key:
+            return bool(winreg.QueryValueEx(key, "EnableTransparency")[0])
+    except OSError:
+        return True
+
+
+def set_transparent(hwnd: int, on: bool) -> bool:
+    """Окно смешивается с тем, что под ним, по альфа-каналу своих пикселей; False — непрозрачное.
+
+    Размытие под окном включается с пустой областью: Windows 8 и новее тогда не размывают, а
+    только учитывают прозрачность (так прозрачны окна Tauri и winit). Подложку Mica при этом надо
+    снять (remove_backdrop): с ней прозрачные места окна — серые. Возвращает, приняла ли Windows.
+    """
+    api = _api()
+    if api is None or not hwnd:
+        return False
+    region = api.CreateRectRgn(0, 0, -1, -1) if on else None
+    blur = DWM_BLURBEHIND(DWM_BB_ENABLE | (DWM_BB_BLURREGION if on else 0), on, region, False)
+    try:
+        return api.DwmEnableBlurBehindWindow(hwnd, ctypes.byref(blur)) == 0
+    finally:
+        if region:
+            api.DeleteObject(region)
 
 
 def bring_to_front(hwnd: int) -> bool:

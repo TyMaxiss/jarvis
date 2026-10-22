@@ -1,4 +1,5 @@
-"""Распознавание ограниченного набора слов через Vosk: имя ассистента, «да/нет».
+"""Распознавание через Vosk: ограниченный набор слов (имя ассистента, «да/нет») и слова
+фразы по ходу речи для оверлея (Dictation).
 
 Распознаватель с грамматикой ["джарвис", "[unk]"] лёгкий и работает без интернета.
 С маленькой грамматикой Vosk склонен «натягивать» любую речь на известные слова:
@@ -170,6 +171,39 @@ class GrammarSpotter:
     def reset(self) -> None:
         """Забывает услышанное."""
         self._recognizer.Reset()
+
+
+class Dictation:
+    """Слова фразы по ходу речи — для оверлея: Vosk со всем словарём модели, без грамматики.
+
+    Только чтобы человек видел, что его слышат: точный текст фразы потом даёт Whisper.
+    """
+
+    def __init__(self, model: Any) -> None:
+        import vosk
+
+        self._recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+        self._done: list[str] = []  # куски фразы, которые Vosk уже закончил (после пауз)
+        self._text = ""
+
+    def accept(self, block: np.ndarray) -> str | None:
+        """Подаёт блок звука. Возвращает услышанное с начала фразы, если оно изменилось."""
+        if self._recognizer.AcceptWaveform(block.astype(np.int16).tobytes()):
+            if piece := _normalize(json.loads(self._recognizer.Result()).get("text", "")):
+                self._done.append(piece)
+            current = ""
+        else:
+            current = _normalize(json.loads(self._recognizer.PartialResult()).get("partial", ""))
+        text = " ".join([*self._done, current]).strip()
+        if text == self._text:
+            return None
+        self._text = text
+        return text
+
+    def reset(self) -> None:
+        """Новая фраза."""
+        self._recognizer.Reset()
+        self._done, self._text = [], ""
 
 
 def phrase_spotter(model: Any, phrases: Iterable[str], exclude_decoys: Iterable[str] = ()) -> GrammarSpotter:

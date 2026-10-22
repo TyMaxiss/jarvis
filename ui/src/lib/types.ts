@@ -239,6 +239,7 @@ export interface UiSettings {
   accent: string
   overlay: boolean
   overlay_style: OverlayStyle
+  overlay_keep: boolean // итог голосовой команды виден до следующей фразы
   quick_chat_key: string
 }
 
@@ -358,6 +359,7 @@ export type AssistantEvent =
   | { type: 'voice_progress'; payload: { text: string; fraction: number | null } }
   | { type: 'level'; payload: { value: number } }
   | { type: 'recognized'; payload: { text: string; source?: 'voice' | 'text' | 'hotkey' } }
+  | { type: 'partial'; payload: { text: string } } // слова фразы по ходу речи — только оверлею
   | { type: 'step'; payload: Step }
   | { type: 'reply'; payload: { text: string } }
   | { type: 'result'; payload: RecentItem }
@@ -369,7 +371,8 @@ export type AssistantEvent =
   | { type: 'update'; payload: UpdateState }
   | { type: 'busy'; payload: { busy: boolean } }
   | { type: 'stopped'; payload: Record<string, never> } // остановили: кнопка, Ctrl+Alt+Q или «стоп»
-  | { type: 'overlay'; payload: { visible: boolean } } // окно оверлея показано или прячется
+  // Окно оверлея показано или прячется; glass — окно смешивается с рабочим столом (сфера полупрозрачная).
+  | { type: 'overlay'; payload: { visible: boolean; glass?: boolean } }
 
 export type WindowName = 'main' | 'overlay' | 'chat'
 
@@ -388,6 +391,7 @@ export interface AssistantApi {
   voice_stop(): Promise<void> // остановить задачу, речь и прослушивание (как Ctrl+Alt+Q)
   send_text(text: string): Promise<void>
   confirm_answer(id: string, yes: boolean): Promise<void>
+  overlay_dismiss(): Promise<void>
   set_volume(percent: number): Promise<AppState>
   toggle_mute(): Promise<AppState>
   run_scenario(id: string): Promise<void>

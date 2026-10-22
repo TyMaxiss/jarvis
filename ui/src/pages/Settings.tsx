@@ -350,6 +350,14 @@ export function SettingsPage({ updates }: { updates: UpdateState }) {
             onChange={(overlay_style) => update('ui', { overlay_style })}
           />
         </Field>
+        <Field label="Итог голосовой команды" hint="Виден в оверлее до следующей фразы; клик по оверлею — спрятать">
+          <Toggle
+            label="Итог голосовой команды"
+            checked={ui.overlay_keep}
+            disabled={!ui.overlay}
+            onChange={(overlay_keep) => update('ui', { overlay_keep })}
+          />
+        </Field>
         {general.autostart !== null && (
           <Field label="Запускать вместе с Windows" hint="Сразу в трей; ярлык — в папке «Автозагрузка»">
             <Toggle

@@ -25,7 +25,7 @@ from assistant.safety.confirm import StaticConfirmer
 from assistant.safety.policy import SafetyPolicy
 from assistant.timers import Alarms, local_now
 from assistant.ui import controller as controller_module
-from assistant.ui.activity import Activity
+from assistant.ui.activity import Activity, VoiceStatus
 from assistant.ui.confirm import UiConfirmer
 from assistant.ui.controller import UiController
 from assistant.ui.settings import SettingsStore
@@ -246,15 +246,50 @@ def test_overlay_style_applies_without_restart(world: SimpleNamespace) -> None:
 def test_overlay_page_learns_when_overlay_shows_and_hides(world: SimpleNamespace) -> None:
     controller, bus = world.controller, world.bus
     controller.window_ready("overlay")  # страница загрузилась, пока оверлей спрятан
+    world.host.glass = True  # сфера с «Эффектами прозрачности» Windows: страница рисует её полупрозрачной
     controller.overlay.voice_state("listening")
-    controller.overlay.hide_now()
+    controller.overlay_dismiss()  # клик по оверлею
     presence = [(payload, to) for kind, payload, to in bus.events if kind == "overlay"]
     assert presence == [
-        ({"visible": False}, ("overlay",)),
-        ({"visible": True}, ("overlay",)),
-        ({"visible": False}, ("overlay",)),
+        ({"visible": False, "glass": False}, ("overlay",)),
+        ({"visible": True, "glass": True}, ("overlay",)),
+        ({"visible": False, "glass": True}, ("overlay",)),
     ]
     assert world.host.calls == [("show", "overlay"), ("hide", "overlay")]
+
+
+def test_voice_command_result_stays_until_next_phrase(world: SimpleNamespace) -> None:
+    controller, host = world.controller, world.host
+    status = VoiceStatus(controller.activity, controller.on_voice_state, controller.overlay.command_done)
+    for state in ("listening", "capturing", "recognizing", "processing"):
+        status.voice_status(state)
+    status.voice_status("recognized", "сделай громче")
+    status.voice_result(controller.pipeline.handle_text("сделай громче", "voice"))
+    status.voice_status("listening")  # продолжение без имени
+    status.voice_status("idle")
+    assert controller.overlay.visible and host.calls == [("show", "overlay")]  # итог на экране
+    assert controller.overlay._timer is None  # и прятать его никто не собирается
+    # Выключили в настройках — итог больше не держится: оверлей уйдёт через 3 с.
+    result = controller.save_settings({"ui": {"overlay_keep": False}})
+    assert result["ok"] and not result["restart"] and result["settings"]["ui"]["overlay_keep"] is False
+    assert "overlay_keep: false" in world.config_path.read_text(encoding="utf-8")
+    assert controller.overlay._timer is not None
+    controller.overlay_dismiss()
+    assert host.calls == [("show", "overlay"), ("hide", "overlay")]
+
+
+def test_overlay_style_change_hides_overlay_that_holds_result(world: SimpleNamespace) -> None:
+    controller, host = world.controller, world.host
+    controller.save_settings({"ui": {"overlay_keep": True}})
+    for state in ("listening", "recognizing", "processing"):
+        controller.on_voice_state(state)
+    controller.overlay.command_done()
+    controller.on_voice_state("idle")
+    assert controller.overlay.visible
+    controller.save_settings({"ui": {"overlay_style": "orb"}})
+    # Новое оформление — со следующего показа, а не после клика по оверлею.
+    assert host.calls == [("show", "overlay"), ("overlay_style", "orb"), ("hide", "overlay")]
+    assert not controller.overlay.visible
 
 
 def test_command_line_dry_run_is_not_turned_off(world: SimpleNamespace) -> None:

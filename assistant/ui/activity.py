@@ -52,6 +52,10 @@ class Activity:
             self._reply = ""
         self._events.emit("recognized", {"text": text, "source": source})
 
+    def partial(self, text: str) -> None:
+        """Слова фразы по ходу речи (до Whisper) — только оверлею, он их и показывает."""
+        self._events.emit("partial", {"text": text}, to=["overlay"])
+
     def step(self, number: int, total: int | None, action: str, text: str, ok: bool) -> None:
         """Выполнен шаг команды или вызов инструмента нейросетью."""
         payload = {"number": number, "total": total, "action": action, "text": text, "ok": ok}
@@ -107,22 +111,32 @@ class VoiceStatus:
     Args:
         activity: текущая команда.
         on_state: состояние голоса изменилось (idle, listening… paused).
+        on_result: голосовая команда выполнена (оверлей держит её итог).
     """
 
-    def __init__(self, activity: Activity, on_state: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        activity: Activity,
+        on_state: Callable[[str], None],
+        on_result: Callable[[], None] | None = None,
+    ) -> None:
         self._activity = activity
         self._on_state = on_state
+        self._on_result = on_result
 
     def voice_status(self, state: str, detail: str = "") -> None:
         if state == "recognized":
             self._activity.begin(detail, "voice")
+        elif state == "partial":
+            self._activity.partial(detail)
         elif state in VOICE_STATES:
             self._on_state(state)
         elif state == "latency":
             log.debug("Голос: %s", detail)
 
     def voice_result(self, result: Any) -> None:
-        self._activity.finish(result, "voice")
+        if self._activity.finish(result, "voice") is not None and self._on_result is not None:
+            self._on_result()
 
 
 class UiSpeaker:

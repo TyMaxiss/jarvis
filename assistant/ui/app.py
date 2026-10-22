@@ -101,6 +101,7 @@ class UiApp:
             webview, urls, apis, config.ui.theme, self._start_hidden, overlay_style=config.ui.overlay_style
         )
         controller.host = windows
+        windows.on_overlay_stale = controller.overlay.hide_now
         controller.voice_problem = self._voice_problem
         controller.voice_loading = self._voice_starter is not None
         controller.on_chat_key = self._bind_chat_key

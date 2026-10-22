@@ -191,7 +191,9 @@ def test_settings_view_matches_interface(settings: SettingsStore) -> None:
     assert set(view["tts"]) == {
         "engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "rate", "volume",
     }  # fmt: skip
-    assert set(view["ui"]) == {"theme", "accent", "overlay", "overlay_style", "quick_chat_key"}
+    assert set(view["ui"]) == {
+        "theme", "accent", "overlay", "overlay_style", "overlay_keep", "quick_chat_key",
+    }  # fmt: skip
     assert set(view["choices"]) == {
         "microphones", "piper_voices", "sapi_voices", "stt_models", "silero_speakers", "edge_voices",
         "silero_ready",
