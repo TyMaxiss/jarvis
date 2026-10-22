@@ -52,6 +52,34 @@ class TestConfig:
         example = (ROOT / "config.example.yaml").read_text(encoding="utf-8").splitlines()
         assert [line for line in example if "overlay_keep" in line] == [*OLD_EXAMPLE_LINES.values()]
 
+    def test_config_survives_failed_migration_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Записать не вышло (диск полон, файл занят) — config.yaml как был, а замена действует в памяти;
+        # первое же сохранение настроек сохранит и её.
+        import os
+
+        from assistant.ui.settings import SettingsStore
+
+        old = next(iter(OLD_EXAMPLE_LINES))
+        path = tmp_path / "config.yaml"
+        original = f"general:\n  name: пятница\nui:\n{old}\n"
+        path.write_text(original, encoding="utf-8")
+
+        def refuse(source: object, target: object) -> None:
+            raise OSError(28, "No space left on device")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "replace", refuse)
+            config = load_config(path)
+        assert config.ui.overlay_keep is False and config.general.name == "пятница"
+        assert path.read_text(encoding="utf-8") == original and [
+            item.name for item in tmp_path.iterdir()
+        ] == ["config.yaml"]
+        SettingsStore(path, tmp_path / ".env", environ={}).update({"ui": {"theme": "light"}})
+        saved = path.read_text(encoding="utf-8")
+        assert "overlay_keep: false" in saved and "theme: light" in saved and "name: пятница" in saved
+
     def test_own_overlay_keep_stays(self, tmp_path: Path) -> None:
         path = tmp_path / "config.yaml"
         path.write_text("ui:\n  overlay_keep: true\n", encoding="utf-8")  # включено в настройках

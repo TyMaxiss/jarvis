@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -406,30 +407,43 @@ def load_env(env_path: Path) -> None:
     os.environ.update(values)
 
 
-def migrate(path: Path) -> str:
-    """Читает config.yaml и меняет в нём строки, оставшиеся от примера прежней версии.
+def migrate_text(text: str) -> str:
+    """Текст config.yaml, в котором строки из примера прежней версии заменены новыми.
 
     Меняется только строка целиком, как её записал пример (OLD_EXAMPLE_LINES): своё значение
-    пользователя остаётся. Если файл не записался, замена действует до следующего запуска.
+    пользователя остаётся; переводы строк — как были.
+    """
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        if body in OLD_EXAMPLE_LINES:
+            lines[index] = OLD_EXAMPLE_LINES[body] + line[len(body) :]
+    return "".join(lines)
+
+
+def migrate(path: Path) -> str:
+    """Читает config.yaml и сохраняет его с заменами migrate_text, если они есть.
+
+    Файл заменяется целиком (через временный рядом): если записать не вышло, прежний остаётся как
+    был, а замены действуют до следующего запуска — их же применяет и сохранение настроек.
 
     Returns:
         Текст конфига после замен.
     """
     with path.open(encoding="utf-8", newline="") as file:  # переводы строк файла не меняются
         text = file.read()
-    lines = text.splitlines(keepends=True)
-    for index, line in enumerate(lines):
-        body = line.rstrip("\r\n")
-        if body in OLD_EXAMPLE_LINES:
-            lines[index] = OLD_EXAMPLE_LINES[body] + line[len(body) :]
-    fixed = "".join(lines)
+    fixed = migrate_text(text)
     if fixed != text:
+        temporary = path.with_name(path.name + ".tmp")
         try:
-            with path.open("w", encoding="utf-8", newline="") as file:
+            with temporary.open("w", encoding="utf-8", newline="") as file:
                 file.write(fixed)
+            os.replace(temporary, path)
             log.info("%s: настройки из примера прежней версии обновлены", path.name)
         except OSError as exc:
             log.warning("Не удалось обновить %s: %s", path.name, exc)
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
     return fixed
 
 

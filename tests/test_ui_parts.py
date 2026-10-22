@@ -130,6 +130,8 @@ def test_voice_status_reports_finished_commands_only() -> None:
     assert done == []
     status.voice_result(Result("сделай громче", "local", True))
     assert done == [True]
+    status.voice_failed("сделай кофе", "Ошибка — подробности в логе")  # упавшая команда — тоже итог
+    assert done == [True, True]
 
 
 def test_voice_status_reports_new_phrase_before_command_starts() -> None:

@@ -295,6 +295,19 @@ def test_voice_command_result_stays_until_next_phrase(world: SimpleNamespace) ->
     assert host.calls == [("show", "overlay"), ("hide", "overlay")]
 
 
+def test_failed_voice_command_result_is_kept_too(world: SimpleNamespace) -> None:
+    controller = world.controller
+    overlay = controller.overlay
+    controller.save_settings({"ui": {"overlay_keep": True}})
+    status = VoiceStatus(controller.activity, controller.on_voice_state, overlay.command_done, overlay.phrase)
+    for state in ("listening", "capturing", "recognizing", "processing"):
+        status.voice_status(state)
+    status.voice_status("recognized", "сделай кофе")
+    status.voice_failed("сделай кофе", "Ошибка — подробности в логе")  # конвейер упал с исключением
+    status.voice_status("idle")
+    assert overlay.visible and overlay._timer is None  # ошибка видна до следующей фразы, как любой итог
+
+
 def test_overlay_style_change_hides_overlay_that_holds_result(world: SimpleNamespace) -> None:
     controller, host = world.controller, world.host
     controller.save_settings({"ui": {"overlay_keep": True}})

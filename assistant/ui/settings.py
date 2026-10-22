@@ -21,7 +21,13 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.error import YAMLError
 
-from assistant.config import DEFAULT_LLM_PROFILES, AppConfig, LlmProfile, format_validation_error
+from assistant.config import (
+    DEFAULT_LLM_PROFILES,
+    AppConfig,
+    LlmProfile,
+    format_validation_error,
+    migrate_text,
+)
 from assistant.llm.keys import clean_key, format_problem
 from assistant.llm.providers import CUSTOM_KEY_ENV, CUSTOM_PROFILE, CUSTOM_TITLE, provider_info
 from assistant.tts.edge_tts import EDGE_VOICES
@@ -211,6 +217,7 @@ class SettingsStore:
         with self._lock:
             try:
                 text = self.config_path.read_text(encoding="utf-8") if self.config_path.exists() else ""
+                text = migrate_text(text)  # если при запуске замены не сохранились — сохранятся теперь
                 data = yaml.load(text) if text.strip() else CommentedMap()
             except (OSError, YAMLError) as exc:
                 raise SettingsError([f"Не удалось прочитать {self.config_path.name}: {exc}"]) from exc

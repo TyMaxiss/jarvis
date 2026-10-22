@@ -884,7 +884,7 @@ def run_ui(
         except Exception:
             # Окна узнают, что команда кончилась (иначе оверлей так и показывал бы «Выполняю…»),
             # а ошибку голосовой цикл запишет в лог и уйдёт в покой.
-            activity.failed(text, "voice", "Ошибка — подробности в логе")
+            status.voice_failed(text, "Ошибка — подробности в логе")
             raise
 
     def voice_starter(progress: Any) -> VoiceRuntime:

@@ -21,6 +21,7 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
   // следующем показе. Спрятанная сфера заранее становится такой, какой появится.
   const [glass, setGlass] = useState(false)
   const [nextGlass, setNextGlass] = useState(false)
+  const [snap, setSnap] = useState(false) // сфера мгновенно стала невидимой и ждёт кадра, чтобы раскрыться
   const turn = useRef(0) // номер события overlay: отложенное появление не переживает следующего
   const showing = useRef(false) // Python показал оверлей
   const hiddenAt = useRef(0) // когда показанный оверлей начал уезжать
@@ -33,11 +34,18 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
         if (showing.current && !visible) hiddenAt.current = Date.now()
         showing.current = visible
         setNextGlass(next)
-        if (visible && next !== glass) {
-          // Прозрачность сменилась, пока сфера была спрятана: сначала она невидимая в новом виде,
-          // и лишь потом раскрывается — иначе переходу (index.css, .orb-pop) не от чего начаться.
+        const switching = visible && next !== glass
+        setSnap(switching)
+        if (switching) {
+          // Прозрачность сменилась, пока сфера была спрятана: сначала она сразу невидимая в новом
+          // виде (orb-snap), и лишь кадром позже раскрывается — иначе переходу (index.css, .orb-pop)
+          // не от чего начаться.
           setGlass(next)
-          afterFrames(2, () => turn.current === mine && setPresent(true))
+          afterFrames(2, () => {
+            if (turn.current !== mine) return
+            setSnap(false)
+            setPresent(true)
+          })
         } else setPresent(visible)
       }
       dispatch(event)
@@ -61,7 +69,7 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
     const timer = window.setTimeout(apply, wait)
     return () => window.clearTimeout(timer)
   }, [wanted, nextGlass, present, style, glass])
-  if (style === 'orb') return <Orb state={state} level={level} present={present} glass={glass} framed={framed} />
+  if (style === 'orb') return <Orb state={state} level={level} present={present} glass={glass} snap={snap} framed={framed} />
   return <Pill state={state} level={level} framed={framed} />
 }
 

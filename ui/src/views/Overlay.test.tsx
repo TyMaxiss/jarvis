@@ -91,14 +91,14 @@ describe('Overlay', () => {
     // Прозрачность снова включили, пока сфера спрятана: сначала она невидимая и полупрозрачная,
     // а раскрывается кадром позже — иначе переходу не от чего начаться.
     await emit({ type: 'overlay', payload: { visible: true, glass: true } })
-    expect([stage().contains('orb-glass'), stage().contains('orb-present')]).toEqual([true, false])
+    expect(['orb-glass', 'orb-snap', 'orb-present'].map((name) => stage().contains(name))).toEqual([true, true, false])
     await frames()
-    expect(stage().contains('orb-present')).toBe(true)
+    expect([stage().contains('orb-snap'), stage().contains('orb-present')]).toEqual([false, true])
     // Спрятали, не дав раскрыться: отложенное появление не наступает.
     await emit({ type: 'overlay', payload: { visible: false, glass: false } })
     await emit({ type: 'overlay', payload: { visible: true, glass: false } })
     await emit({ type: 'overlay', payload: { visible: false, glass: false } })
     await frames()
-    expect(stage().contains('orb-present')).toBe(false)
+    expect([stage().contains('orb-present'), stage().contains('orb-snap')]).toEqual([false, false])
   })
 })

@@ -195,6 +195,12 @@ body.overlay-window {
     scale 220ms cubic-bezier(0.33, 1, 0.68, 1);
 }
 
+/* Прозрачность сменилась перед самым показом: сфера сразу невидимая, без перехода — раскрываться
+   ей предстоит из центра (Overlay.tsx). */
+.orb-snap .orb-pop {
+  transition: none;
+}
+
 /* Шар 378×378, центр в (220, 206). */
 .orb {
   position: absolute;

@@ -143,6 +143,12 @@ class VoiceStatus:
         if self._activity.finish(result, "voice") is not None and self._on_result is not None:
             self._on_result()
 
+    def voice_failed(self, text: str, reason: str) -> None:
+        """Голосовая команда упала с ошибкой: её итог — ошибка, оверлей держит его, как любой другой."""
+        self._activity.failed(text, "voice", reason)
+        if self._on_result is not None:
+            self._on_result()
+
 
 class UiSpeaker:
     """«Говорящий» для окон: каждая фраза ассистента добавляется к ответу текущей команды."""

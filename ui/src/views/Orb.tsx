@@ -29,10 +29,11 @@ interface Props {
   level: number // громкость микрофона 0..1
   present: boolean // окно показано (событие overlay)
   glass?: boolean // окно смешивается с рабочим столом: кольцо и карточка полупрозрачные
+  snap?: boolean // сфера сразу, без перехода, невидимая — сейчас начнёт раскрываться
   framed?: boolean // в браузере (?mock) — границы окна пунктиром
 }
 
-export function Orb({ state, level, present, glass = false, framed = false }: Props) {
+export function Orb({ state, level, present, glass = false, snap = false, framed = false }: Props) {
   const stage = useRef<HTMLDivElement>(null)
   const voice = !state.confirm && (state.mode === 'listening' || state.mode === 'recognizing')
   useSmoothLevel(stage, voice ? Math.min(1, level * 1.6) : 0)
@@ -41,7 +42,13 @@ export function Orb({ state, level, present, glass = false, framed = false }: Pr
   return (
     <div
       ref={stage}
-      className={cx('orb-stage', present && 'orb-present', glass && 'orb-glass', framed && 'orb-framed')}
+      className={cx(
+        'orb-stage',
+        present && 'orb-present',
+        glass && 'orb-glass',
+        snap && 'orb-snap',
+        framed && 'orb-framed',
+      )}
       data-mode={card.badge}
       // Клик прячет сферу (и итог команды, который она держит), если она не ждёт «Да / Нет».
       onClick={state.confirm ? undefined : () => void call('overlay_dismiss')}
