@@ -181,6 +181,30 @@ export interface AlarmItem {
   seconds: number // на сколько поставлен таймер
 }
 
+/** Новая версия — релиз на GitHub (assistant/updates.py, Release). */
+export interface UpdateInfo {
+  version: string
+  title: string
+  notes: string // что нового (описание релиза, Markdown)
+  page: string // страница релиза
+  installer: string
+  size: number // байт
+  sha256: string
+}
+
+/** Обновления (UiController.update_view). */
+export interface UpdateState {
+  supported: boolean // программа обновляется сама (собранный exe); из исходников — git pull и uv sync
+  version: string // эта версия
+  release: UpdateInfo | null // новая версия, если нашлась
+  checked: boolean // в этом запуске GitHub уже ответил
+  checking: boolean
+  installing: boolean // скачивается и ставится обновление
+  step: string // «Скачиваю обновление: 40% (20 МБ из 50 МБ)»
+  progress: number | null // доля сделанного (0–1); null — неизвестна
+  error: string
+}
+
 export interface AppState {
   name: string
   version: string
@@ -202,6 +226,7 @@ export interface AppState {
   recent: RecentItem[]
   scenarios: Scenario[]
   timers: AlarmItem[] // ближайшие первыми
+  update: UpdateState
   ui: UiSettings
 }
 
@@ -240,7 +265,12 @@ export interface Choice {
 export type TtsEngine = 'piper' | 'silero' | 'edge' | 'sapi'
 
 export interface Settings {
-  general: { name: string; dry_run: boolean; autostart: boolean | null } // null — автозапуск недоступен
+  general: {
+    name: string
+    dry_run: boolean
+    check_updates: boolean // раз в сутки проверять, не вышла ли новая версия
+    autostart: boolean | null // null — автозапуск недоступен
+  }
   voice: {
     enabled: boolean
     wake_word: boolean
@@ -331,6 +361,7 @@ export type AssistantEvent =
   | { type: 'commands'; payload: { count: number; issues: string[] } }
   | { type: 'toast'; payload: { kind: 'info' | 'error' | 'alarm'; text: string } } // alarm висит, пока не закроют
   | { type: 'chat_shown'; payload: Record<string, never> }
+  | { type: 'update'; payload: UpdateState }
 
 export type WindowName = 'main' | 'overlay' | 'chat'
 
@@ -367,5 +398,8 @@ export interface AssistantApi {
   command_run(form: CommandForm, phrase: string): Promise<{ ok: boolean; errors: string[] }>
   reload_commands(): Promise<{ count: number; issues: string[] }>
   timer_cancel(id: string): Promise<AppState>
+  update_check(): Promise<UpdateState>
+  update_install(): Promise<UpdateState> // программа закроется, установщик запустит новую версию
+  update_open_page(): Promise<void>
   restart(): Promise<void>
 }

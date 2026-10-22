@@ -284,3 +284,19 @@ export function Keys({ value }: { value: string }) {
     </span>
   )
 }
+
+/** Полоска хода: загрузка моделей, скачивание обновления. value — проценты (0–100). */
+export function ProgressBar({ label, value, className }: { label: string; value: number; className?: string }) {
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+      className={cx('h-1.5 w-full overflow-hidden rounded-full bg-surface-3', className)}
+    >
+      <div className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out" style={{ width: `${value}%` }} />
+    </div>
+  )
+}

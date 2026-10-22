@@ -20,8 +20,9 @@ beforeEach(() => {
 afterEach(cleanup)
 
 async function renderPage() {
+  const state = await api.get_state()
   await act(async () => {
-    render(<SettingsPage />)
+    render(<SettingsPage updates={state.update} />)
   })
 }
 
@@ -55,11 +56,28 @@ describe('SettingsPage', () => {
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
     expect(call).toHaveBeenCalledWith('save_settings', { tts: { engine: 'silero' } })
-    expect(screen.getByText(/скачается около 300 МБ/)).toBeTruthy()
+    expect(screen.getByText(/скачается около 270 МБ/)).toBeTruthy()
     const voice = screen.getByRole('combobox', { name: 'Голос Silero' }) as HTMLSelectElement
     expect(voice.value).toBe('aidar')
     fireEvent.click(screen.getByRole('button', { name: 'Прослушать' }))
     expect(call).toHaveBeenCalledWith('preview_voice', expect.objectContaining({ engine: 'silero', silero_speaker: 'aidar' }))
+  })
+})
+
+describe('Обновления в настройках', () => {
+  it('показывают версию и сохраняют автоматическую проверку', async () => {
+    await renderPage()
+    expect(screen.getByText('0.6.0')).toBeTruthy()
+    expect(screen.getByText('Ещё не проверяли')).toBeTruthy()
+    const toggle = screen.getByRole('switch', { name: 'Проверять обновления' })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    await act(async () => {
+      fireEvent.click(toggle)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    expect(call).toHaveBeenCalledWith('save_settings', { general: { check_updates: false } })
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить сейчас' }))
+    expect(call).toHaveBeenCalledWith('update_check')
   })
 })
 

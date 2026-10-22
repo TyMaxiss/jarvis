@@ -80,6 +80,18 @@ class Api:
         self._controller.open_key_page(profile)
 
     @_logged
+    def update_check(self) -> dict[str, Any]:
+        return self._controller.update_check()
+
+    @_logged
+    def update_install(self) -> dict[str, Any]:
+        return self._controller.update_install()
+
+    @_logged
+    def update_open_page(self) -> None:
+        self._controller.update_open_page()
+
+    @_logged
     def voice_pause(self, paused: bool) -> dict[str, Any]:
         return self._controller.voice_pause(bool(paused))
 

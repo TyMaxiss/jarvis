@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 # Что интерфейс может менять через save_settings.
 UI_FIELDS: dict[str, frozenset[str]] = {
-    "general": frozenset({"name", "dry_run"}),
+    "general": frozenset({"name", "dry_run", "check_updates"}),
     "voice": frozenset(
         {
             "enabled",
@@ -56,7 +56,13 @@ UI_FIELDS: dict[str, frozenset[str]] = {
 }
 # Что применяется сразу; остальное — после перезапуска (голос, распознавание, голос озвучки, имя).
 LIVE_FIELDS = frozenset(
-    {("general", "dry_run"), ("llm", "enabled"), ("tts", "volume"), *(("ui", key) for key in UI_FIELDS["ui"])}
+    {
+        ("general", "dry_run"),
+        ("general", "check_updates"),
+        ("llm", "enabled"),
+        ("tts", "volume"),
+        *(("ui", key) for key in UI_FIELDS["ui"]),
+    }
 )
 
 # Ключ API — одна строка видимых символов ASCII без пробелов.
@@ -410,7 +416,7 @@ def settings_view(config: AppConfig, store: SettingsStore, choices: Choices) -> 
     except ValueError:
         piper_value = str(piper)
     return {
-        "general": {"name": general.name, "dry_run": general.dry_run},
+        "general": {"name": general.name, "dry_run": general.dry_run, "check_updates": general.check_updates},
         "voice": {
             "enabled": voice.enabled,
             "wake_word": voice.wake_word,

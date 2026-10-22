@@ -34,7 +34,7 @@ try {
   await main.getByRole('button', { name: 'Настройки' }).click()
   await main.getByRole('radio', { name: /ChatGPT/ }).click()
   await main.getByLabel('Ключ API').fill(key)
-  await main.getByRole('button', { name: 'Проверить' }).click()
+  await main.getByRole('button', { name: 'Проверить', exact: true }).click()
   await main.getByRole('status').waitFor({ timeout: 15000 })
   results.check = await main.getByRole('status').textContent()
   await main.getByRole('button', { name: 'Использовать ChatGPT' }).click()
@@ -82,13 +82,23 @@ try {
   await main.getByLabel('Действие', { exact: true }).selectOption('say')
   await main.getByLabel('text', { exact: true }).fill('Редактор работает')
   await main.getByLabel('Проверочная фраза').fill('проверка редактора')
-  await main.getByRole('button', { name: 'Проверить' }).click()
+  await main.getByRole('button', { name: 'Проверить', exact: true }).click()
   results.commandTest = await main.getByLabel('Результат проверки').textContent()
   await main.getByRole('button', { name: 'Сохранить' }).click()
   const saved = main.getByRole('navigation', { name: 'Паки команд' }).getByRole('button', { name: /проверка редактора/ })
   await saved.waitFor({ timeout: 5000 })
   results.commandId = await main.locator('h1 + div code').first().textContent()
   await main.screenshot({ path: `${shots}/e2e-commands.png` })
+
+  // Обновления: «Проверить сейчас» спрашивает Python (вместо GitHub — подделка), на главной — баннер.
+  await main.getByRole('button', { name: 'Настройки' }).click()
+  await main.getByRole('button', { name: 'Проверить сейчас' }).click()
+  await main.getByText('Доступна версия 0.7.0').waitFor({ timeout: 5000 })
+  await main.getByRole('button', { name: 'Главная' }).click()
+  const banner = main.getByRole('status', { name: 'Обновление' })
+  await banner.waitFor({ timeout: 5000 })
+  results.updateBanner = await banner.textContent()
+  await main.screenshot({ path: `${shots}/e2e-update.png` })
 } catch (error) {
   errors.push(String(error))
   for (const [index, page] of browser.contexts().flatMap((context) => context.pages()).entries()) {

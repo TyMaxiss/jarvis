@@ -12,6 +12,7 @@ import type {
   RecentItem,
   Settings,
   SettingsPatch,
+  UpdateInfo,
 } from './types'
 import { createMockCommands } from './mockCommands'
 
@@ -229,7 +230,7 @@ function later(seconds: number): string {
 function makeState(): AppState {
   return {
     name: 'Джарвис',
-    version: '0.4.0',
+    version: '0.6.0',
     voice: {
       enabled: true,
       state: 'idle',
@@ -254,13 +255,35 @@ function makeState(): AppState {
       { id: 't1', kind: 'timer', due: later(4 * 60 + 12), text: 'чай', seconds: 300 },
       { id: 'r1', kind: 'reminder', due: later(2 * 3600), text: 'позвонить маме', seconds: 0 },
     ],
+    update: {
+      supported: true,
+      version: '0.6.0',
+      release: null,
+      checked: false,
+      checking: false,
+      installing: false,
+      step: '',
+      progress: null,
+      error: '',
+    },
     ui: { theme: 'dark', accent: '#7c6cff', overlay: true, quick_chat_key: 'ctrl+alt+enter' },
   }
 }
 
+/** Новая версия, которую «находит» макет по кнопке «Проверить сейчас». */
+export const mockRelease: UpdateInfo = {
+  version: '0.7.0',
+  title: 'Джарвис 0.7.0',
+  notes: '## Что нового\n\n- Новые голоса',
+  page: 'https://github.com/TyMaxiss/jarvis/releases/tag/v0.7.0',
+  installer: 'https://github.com/TyMaxiss/jarvis/releases/download/v0.7.0/Jarvis-Setup-0.7.0.exe',
+  size: 180 << 20,
+  sha256: '0'.repeat(64),
+}
+
 function makeSettings(state: AppState): Settings {
   return {
-    general: { name: 'джарвис', dry_run: state.dry_run, autostart: false },
+    general: { name: 'джарвис', dry_run: state.dry_run, check_updates: true, autostart: false },
     voice: {
       enabled: true,
       wake_word: true,
@@ -330,6 +353,10 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
   const pushState = () => emit({ type: 'state', payload: structuredClone(state) })
+  const pushUpdate = (changes: Partial<AppState['update']>) => {
+    state.update = { ...state.update, ...changes }
+    emit({ type: 'update', payload: structuredClone(state.update) })
+  }
 
   const simulate = async (text: string) => {
     emit({ type: 'voice', payload: { state: 'processing', detail: '' } })
@@ -486,6 +513,25 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
       pushState()
       return structuredClone(state)
     },
+    async update_check() {
+      pushUpdate({ checking: true, error: '' })
+      await pause(600)
+      pushUpdate({ checking: false, checked: true, release: mockRelease })
+      return structuredClone(state.update)
+    },
+    async update_install() {
+      if (!state.update.release || state.update.installing) return structuredClone(state.update)
+      pushUpdate({ installing: true, step: 'Готовлю обновление', progress: null })
+      void (async () => {
+        for (let percent = 0; percent <= 100; percent += 10) {
+          await pause(250)
+          pushUpdate({ step: `Скачиваю обновление: ${percent}% (${(percent * 1.8).toFixed(0)} МБ из 180 МБ)`, progress: percent / 100 })
+        }
+        pushUpdate({ step: 'Ставлю обновление — Джарвис перезапустится сам', progress: null })
+      })()
+      return structuredClone(state.update)
+    },
+    async update_open_page() {},
     async restart() {},
   }
 }

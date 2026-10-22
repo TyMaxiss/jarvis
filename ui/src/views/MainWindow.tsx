@@ -1,7 +1,7 @@
 // Главное окно: своя шапка, боковое меню и разделы.
 
 import { BellRing, CircleAlert, Info, ShieldQuestion, X } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar, type Page } from '../components/Sidebar'
 import { ResizeGrip, TitleBar } from '../components/TitleBar'
 import { Button, IconButton } from '../components/ui'
@@ -19,18 +19,24 @@ export function MainWindow() {
   const [page, setPage] = useState<Page>('home')
   const [draft, setDraft] = useState<CommandForm | null>(null)
   const draftUsed = useCallback(() => setDraft(null), [])
+  const content = useRef<HTMLElement>(null)
+  // Раздел открывается с начала: прокрутка у разделов общая (иначе баннер обновления на главной
+  // оказался бы за краем после длинных настроек).
+  useEffect(() => {
+    if (content.current) content.current.scrollTop = 0
+  }, [page])
 
   return (
     <div className="flex h-full flex-col bg-bg">
       <TitleBar title={state?.name ?? 'Джарвис'} dryRun={state?.dry_run ?? false} />
       <div className="flex min-h-0 flex-1">
         <Sidebar page={page} onPage={setPage} state={state} />
-        <main className="relative min-w-0 flex-1 overflow-y-auto">
+        <main ref={content} className="relative min-w-0 flex-1 overflow-y-auto">
           <ConfirmBanner />
           {!state ? null : page === 'home' ? (
             <Home state={state} onOpenSettings={() => setPage('settings')} />
           ) : page === 'settings' ? (
-            <SettingsPage />
+            <SettingsPage updates={state.update} />
           ) : page === 'history' ? (
             <HistoryPage
               onSaveAsCommand={(item) => {

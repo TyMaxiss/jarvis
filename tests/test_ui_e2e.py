@@ -41,6 +41,7 @@ from assistant.ui.controller import UiController
 from assistant.ui.events import EventBus
 from assistant.ui.settings import SettingsStore
 from assistant.ui.windows import UI_DIST
+from assistant.updates import Release, Updater
 from tests.conftest import NO_WINDOW, ROOT
 from tests.test_llm_http import delta_chunk, sse
 from tests.ui_fakes import FakeAgent, FakeVolume
@@ -50,6 +51,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 KEY = "sk-e2e-openai-key-1234567890"
+RELEASE = Release(
+    version="0.7.0",
+    title="Джарвис 0.7.0",
+    notes="Новые голоса",
+    page="https://github.com/TyMaxiss/jarvis/releases/tag/v0.7.0",
+    installer="https://github.com/TyMaxiss/jarvis/releases/download/v0.7.0/Jarvis-Setup-0.7.0.exe",
+    size=1,
+    sha256="0" * 64,
+)
 CONTENT_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
 
 
@@ -215,6 +225,7 @@ def test_interface_with_real_python(
         make_agent=FakeAgent, speech=None, volume=FakeVolume(), bus=bus, activity=activity,
         confirmer=UiConfirmer(bus, timeout=1), log_file=tmp_path / "a.log", journal_file=tmp_path / "j.jsonl",
         force_dry_run=True,  # как с --dry-run: действия только пишутся в журнал
+        updater=Updater(tmp_path / "update.json", "0.6.0", fetch=lambda: RELEASE),  # GitHub не нужен
     )  # fmt: skip
     pipeline.on_command_step = lambda n, total, step: activity.step(n, total, step.action, step.text, step.ok)
     host = BridgeHost()
@@ -268,3 +279,7 @@ def test_interface_with_real_python(
     assert (commands / "my.yaml").read_text(encoding="utf-8").endswith(saved)
     assert any(command.id == "proverka_redaktora" for command in store.commands)
     assert KEY not in json.dumps(controller.settings())
+    # Обновления: проверка дошла до Python, ответ — до окна; из исходников — подсказка вместо «Обновить».
+    assert results["updateBanner"].startswith("Доступна новая версия 0.7.0")
+    assert "git pull и uv sync" in results["updateBanner"] and "Обновить" not in results["updateBanner"]
+    assert (tmp_path / "update.json").is_file()

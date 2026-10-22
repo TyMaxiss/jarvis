@@ -15,8 +15,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { HotkeyInput, LevelMeter, Segmented, Swatches } from '../components/controls'
 import { Button, Card, CardTitle, Field, Select, Slider, TextInput, Toggle } from '../components/ui'
 import { call } from '../lib/bridge'
-import type { SaveResult, Settings, SettingsPatch, TtsEngine } from '../lib/types'
+import type { SaveResult, Settings, SettingsPatch, TtsEngine, UpdateState } from '../lib/types'
 import { LlmSection } from './LlmSection'
+import { UpdatesCard } from './Updates'
 
 type Section = 'general' | 'voice' | 'stt' | 'tts' | 'ui'
 
@@ -64,7 +65,8 @@ function useSettings() {
   return { settings, setSettings, update, apply, restart, errors }
 }
 
-export function SettingsPage() {
+/** Настройки; updates — состояние обновлений из AppState (раздел «Обновления»). */
+export function SettingsPage({ updates }: { updates: UpdateState }) {
   const { settings, setSettings, update, apply, restart, errors } = useSettings()
   if (!settings) return null
   const { voice, stt, tts, ui, general } = settings
@@ -370,6 +372,12 @@ export function SettingsPage() {
         </Field>
       </Card>
 
+      <UpdatesCard
+        update={updates}
+        checkUpdates={general.check_updates}
+        onCheckUpdates={(check_updates) => update('general', { check_updates })}
+      />
+
       <p className="flex items-center gap-2 pb-2 text-[12px] text-faint">
         <Sparkles size={13} />
         Настройки хранятся в config.yaml, ключи API — в .env рядом с ним.
@@ -410,7 +418,7 @@ export function engineHint(engine: TtsEngine, sileroReady: boolean): string {
     case 'silero':
       return sileroReady
         ? 'Офлайн, нейросеть. Только для некоммерческого использования'
-        : 'Офлайн, нейросеть. После перезапуска скачается около 300 МБ. Только для некоммерческого использования'
+        : 'Офлайн, нейросеть. После перезапуска скачается около 270 МБ. Только для некоммерческого использования'
     case 'edge':
       return 'Голоса Microsoft через интернет. Без интернета говорит запасной голос'
     case 'sapi':

@@ -8,18 +8,21 @@ __pycache__/
 .env
 config.yaml
 timers.json
+update.json
 
 # Логи и журнал действий
 logs/
 
-# Модели и библиотеки CUDA (скачиваются при первом запуске, см. README)
+# Модели, библиотеки CUDA и PyTorch для Silero (скачиваются при первом запуске, см. README)
 models/
 /cuda/
 /cuda.download/
+/silero/
 
-# Сборка exe
+# Сборка exe и установщика
 /build/
 /dist/
+/setup/
 
 # Фронтенд: зависимости не храним, а готовую сборку ui/dist храним —
 # так для запуска ассистента Node.js не нужен

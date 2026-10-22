@@ -27,6 +27,7 @@ CONFIG_FILE = "config.yaml"
 EXAMPLE_FILE = "config.example.yaml"
 ENV_FILE = ".env"
 TIMERS_FILE = "timers.json"  # таймеры и напоминания (рядом с config.yaml)
+UPDATE_FILE = "update.json"  # когда последний раз проверялись обновления (рядом с config.yaml)
 
 
 class ConfigError(Exception):
@@ -49,6 +50,7 @@ class GeneralConfig(_Section):
     )
     dry_run: bool = Field(False, description="Только логировать действия, не выполняя их")
     debug: bool = Field(False, description="Подробный лог, в том числе топ-3 кандидата матчера")
+    check_updates: bool = Field(True, description="Раз в сутки проверять, не вышла ли новая версия")
 
 
 class MatcherConfig(_Section):

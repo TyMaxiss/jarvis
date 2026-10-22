@@ -29,6 +29,16 @@ describe('reduce', () => {
   })
 })
 
+describe('reduce: обновления', () => {
+  it('событие update заменяет состояние обновлений', async () => {
+    const state = await createMockApi(() => {}).get_state()
+    const update = { ...state.update, checking: true }
+    const next = reduce(state, { type: 'update', payload: update })!
+    expect(next.update).toBe(update)
+    expect(next.voice).toBe(state.voice)
+  })
+})
+
 describe('applyTheme', () => {
   it('ставит тему и принимает только цвет вида #rrggbb', () => {
     applyTheme({ theme: 'light', accent: '#22b8cf' })

@@ -50,6 +50,7 @@ from assistant.ui.settings import (
     settings_view,
     ui_view,
 )
+from assistant.updates import RELEASES_PAGE, Release, UpdateError, Updater, release_view
 
 if TYPE_CHECKING:
     from assistant.actions.executor import ActionExecutor
@@ -129,6 +130,7 @@ class UiController:
         hotkeys_paused: пока установлено, глобальные сочетания не срабатывают.
         alarms: таймеры и напоминания (их запускает start_alarms, когда окна готовы).
         autostart: ярлык автозапуска (переключатель в настройках); None — переключателя нет.
+        updater: обновления из релизов на GitHub; None — без них.
     """
 
     def __init__(
@@ -151,6 +153,7 @@ class UiController:
         hotkeys_paused: threading.Event | None = None,
         alarms: Alarms | None = None,
         autostart: Autostart | None = None,
+        updater: Updater | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -170,6 +173,17 @@ class UiController:
         self.hotkeys_paused = hotkeys_paused or threading.Event()
         self.alarms = alarms
         self.autostart = autostart
+        self.updater = updater
+        self._release: Release | None = None  # найденная новая версия
+        self._update: dict[str, Any] = {
+            "checked": False,  # в этом запуске GitHub уже ответил
+            "checking": False,
+            "installing": False,
+            "step": "",
+            "progress": None,
+            "error": "",
+        }
+        self._update_check = threading.Lock()  # проверка при запуске и кнопка — не вместе
         self.host: WindowHost | None = None
         self.voice: VoiceHandle | None = None
         self.voice_loading = False  # голос ещё загружается (Whisper — несколько секунд)
@@ -193,6 +207,7 @@ class UiController:
         self.on_commands: Callable[[], None] | None = None
         self.on_commands_written: Callable[[], None] | None = None  # редактор сам записал паки
         self.on_alarm: Callable[[str], None] | None = None  # уведомление в трее
+        self.on_update: Callable[[str], None] | None = None  # уведомление в трее о новой версии
         self.editor = CommandEditor(commands, executor.registry, lambda: pipeline.matcher)
         self.overlay = OverlayController(
             show=lambda: self._host_call("show", "overlay"),
@@ -243,6 +258,7 @@ class UiController:
             "recent": self.activity.recent,
             "scenarios": self.scenarios(),
             "timers": [alarm.as_dict() for alarm in self.alarms.active()] if self.alarms else [],
+            "update": self.update_view(),
             "ui": ui_view(config),
         }
 
@@ -292,6 +308,106 @@ class UiController:
                 }
             )
         return items
+
+    # --- Обновления -------------------------------------------------------------------
+
+    def update_view(self) -> dict[str, Any]:
+        """Обновления для окон (тип UpdateState в ui/src/lib/types.ts).
+
+        supported — программа обновляется сама (собранный exe); из исходников новая версия
+        только показывается, а обновляют её git pull и uv sync.
+        """
+        return {
+            "supported": self.updater is not None and self.updater.supported,
+            "version": self.updater.current if self.updater is not None else __version__,
+            "release": release_view(self._release),
+            **self._update,
+        }
+
+    def update_check(self) -> dict[str, Any]:
+        """«Проверить сейчас»: спрашивает GitHub о новой версии."""
+        if self.updater is None:
+            self._update["error"] = "Проверка обновлений недоступна"
+        else:
+            self._check_updates()
+        return self.update_view()
+
+    def check_updates_on_start(self) -> None:
+        """После запуска, не чаще раза в сутки: новая версия — уведомление в окне и в трее."""
+        updater = self.updater
+        if updater is None or not self.config.general.check_updates or not updater.due():
+            return
+        release = self._check_updates()
+        if release is None:
+            return
+        how = "Обновить можно на главной." if updater.supported else "Обновите исходники: git pull и uv sync."
+        text = f"Вышла новая версия Джарвиса — {release.version}. {how}"
+        self.bus.emit("toast", {"kind": "info", "text": text}, to=["main"])
+        if self.on_update is not None:
+            self.on_update(text)
+
+    def _check_updates(self) -> Release | None:
+        updater = self.updater
+        if updater is None or self._update["installing"] or not self._update_check.acquire(blocking=False):
+            return self._release  # уже проверяем (или ставим обновление)
+        try:
+            self._update.update(checking=True, error="")
+            self._emit_update()
+            try:
+                self._release = updater.check()
+                self._update["checked"] = True
+            except UpdateError as exc:
+                log.info("Обновления: %s", exc)
+                self._update["error"] = f"Не удалось проверить обновления: {exc}"
+            finally:
+                self._update["checking"] = False
+            self._emit_update()
+            return self._release
+        finally:
+            self._update_check.release()
+
+    def update_install(self) -> dict[str, Any]:
+        """«Обновить»: скачивает установщик и запускает его, а программа закрывается."""
+        release = self._release
+        if (
+            self.updater is None
+            or not self.updater.supported
+            or release is None
+            or self._update["installing"]
+        ):
+            return self.update_view()
+        self._update.update(installing=True, error="", step="Готовлю обновление", progress=None)
+        self._emit_update()
+        self._background(self._install_update, self.updater, release, name="update-install")
+        return self.update_view()
+
+    def _install_update(self, updater: Updater, release: Release) -> None:
+        try:
+            installer = updater.download(release, _UpdateOut(self))
+            self.update_progress("Ставлю обновление — Джарвис перезапустится сам")
+            updater.install(installer)
+        except Exception as exc:
+            log.warning("Обновление не удалось: %s", exc, exc_info=not isinstance(exc, UpdateError))
+            self._update.update(
+                installing=False, error=f"Обновление не удалось: {exc}", step="", progress=None
+            )
+            self._emit_update()
+            return
+        self.quit()  # установщик ждёт, пока программа выйдет, и запускает новую версию
+
+    def update_progress(self, text: str, fraction: float | None = None) -> None:
+        """Ход скачивания обновления: строка и доля сделанного."""
+        self._update.update(step=text, progress=fraction)
+        self._emit_update()
+
+    def update_open_page(self) -> None:
+        """«Что нового»: страница релиза в браузере."""
+        url = self._release.page if self._release is not None else RELEASES_PAGE
+        with external_launch():
+            webbrowser.open(url)
+
+    def _emit_update(self) -> None:
+        self.bus.emit("update", self.update_view(), to=["main"])
 
     # --- Голос -----------------------------------------------------------------------
 
@@ -760,7 +876,7 @@ class UiController:
                 # Процесс Silero запускается вместе с ассистентом: до перезапуска его ещё нет.
                 raise ValueError(
                     "Silero заработает после перезапуска ассистента (при первом запуске "
-                    "скачается около 300 МБ)"
+                    "скачается около 270 МБ)"
                 )
             return silero.speak(text, str(tts.get("silero_speaker") or silero.speaker), rate)
         from assistant.tts.piper_tts import PiperTTS
@@ -859,3 +975,23 @@ class UiController:
     @staticmethod
     def _background(target: Callable[..., None], *args: Any, name: str) -> None:
         threading.Thread(target=target, args=args, name=name, daemon=True).start()
+
+
+class _UpdateOut:
+    """«Вывод» скачивания обновления: строки и ход загрузки — в состояние обновления."""
+
+    def __init__(self, controller: UiController) -> None:
+        self._controller = controller
+
+    def write(self, text: str) -> int:
+        for line in text.splitlines():
+            if line.strip():
+                log.info("%s", line.strip())
+                self._controller.update_progress(line.strip())
+        return len(text)
+
+    def flush(self) -> None:
+        """Буфера нет."""
+
+    def progress(self, text: str, fraction: float | None) -> None:
+        self._controller.update_progress(text, fraction)

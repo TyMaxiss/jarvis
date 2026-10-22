@@ -33,6 +33,7 @@ from assistant.config import (
     CONFIG_FILE,
     ENV_FILE,
     TIMERS_FILE,
+    UPDATE_FILE,
     AppConfig,
     ConfigError,
     LlmConfig,
@@ -208,7 +209,7 @@ def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
 def fetch_voice(config: AppConfig, speech: SpeechQueue | None, out: Any) -> None:
     """Выбранного голоса ещё нет (первый запуск): скачивает его и переключает озвучку на него.
 
-    Piper — голос (60 МБ), Silero — PyTorch и модель (около 300 МБ). Пока они скачиваются,
+    Piper — голос (60 МБ), Silero — PyTorch и модель (около 270 МБ). Пока они скачиваются,
     ассистент говорит запасным голосом.
     """
     from assistant.models import ensure_piper, ensure_silero, piper_voice_ready
@@ -794,6 +795,7 @@ def run_ui(
     from assistant.ui.controller import UiController
     from assistant.ui.events import EventBus
     from assistant.ui.settings import SettingsStore
+    from assistant.updates import UPDATE_LOG, Updater
 
     bus = EventBus()
     activity = Activity(bus)
@@ -831,6 +833,9 @@ def run_ui(
         hotkeys_paused=hotkeys_paused,
         alarms=core.alarms,
         autostart=Autostart(config_path),
+        updater=Updater(
+            config.resolve(UPDATE_FILE), log_file=config.resolve(config.logging.dir) / UPDATE_LOG
+        ),
     )
     controller.startup_issues = [str(issue) for issue in core.loaded.issues]
     confirmer.on_change = controller.overlay.confirming

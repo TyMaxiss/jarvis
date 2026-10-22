@@ -14,14 +14,16 @@ import {
   Zap,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, CardTitle, IconButton, Keys, Slider, cx } from '../components/ui'
+import { Badge, Button, Card, CardTitle, IconButton, Keys, ProgressBar, Slider, cx } from '../components/ui'
 import { call } from '../lib/bridge'
 import { countdown, durationText, formatMs, isListening, momentText, plural, voiceLabel } from '../lib/format'
 import type { AlarmItem, AppState, RecentItem } from '../lib/types'
+import { UpdateBanner } from './Updates'
 
 export function Home({ state, onOpenSettings }: { state: AppState; onOpenSettings: () => void }) {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-7">
+      {state.update.release && <UpdateBanner update={state.update} />}
       <Hero state={state} />
       {state.timers.length > 0 && <TimersCard timers={state.timers} />}
       <div className="grid grid-cols-3 gap-5">
@@ -93,18 +95,7 @@ function LoadingNote({ step, progress }: { step: string; progress: number | null
   return (
     <div className="mt-1.5 max-w-xl text-[13px] text-muted">
       <p className="truncate">{step || 'Загружаю распознавание речи — это несколько секунд.'}</p>
-      {percent !== null && (
-        <div
-          role="progressbar"
-          aria-label="Ход загрузки"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-          className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-3"
-        >
-          <div className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
-        </div>
-      )}
+      {percent !== null && <ProgressBar label="Ход загрузки" value={percent} className="mt-2" />}
       <p className="mt-1.5 text-faint">
         {percent !== null && 'Это нужно только при первом запуске. '}Команды текстом уже работают.
       </p>

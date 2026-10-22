@@ -170,11 +170,90 @@ jobs:
             Get-Content $log -Tail 80; throw "в сборке чего-то не хватает"
           }
 
+      - name: Установщик (Inno Setup)
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path assistant\__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          $places = "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe", "$env:ProgramFiles\Inno Setup *\ISCC.exe"
+          $iscc = Get-ChildItem $places -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = Get-ChildItem $places | Select-Object -First 1
+          }
+          & $iscc.FullName /Q "/DAppVersion=$version" "/DSourceDir=$pwd\dist\Jarvis" "/DOutputDir=$pwd\setup" `
+            "/DIconFile=$pwd\build\jarvis\jarvis.ico" packaging\jarvis.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-ChildItem setup | Format-Table Name, @{ n = 'МБ'; e = { [math]::Round($_.Length / 1MB) } }
+
+      - name: Проверка установщика (установка, обновление поверх запущенной программы, удаление)
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem setup\Jarvis-Setup-*.exe | Select-Object -First 1).FullName
+          $version = $setup -replace '.*Jarvis-Setup-(.+)\.exe$', '$1'
+          $dir = "$env:RUNNER_TEMP\JarvisInstalled"
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F1C2B84-5A7E-4E2B-9C1D-3A8F0E6B7D21}_is1'
+          $menu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Джарвис.lnk"
+          $silent = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$dir`""
+
+          # Установка: тихо и без прав администратора — в «Приложения» и «Пуск» этого пользователя.
+          $p = Start-Process $setup -ArgumentList ($silent + "/LOG=`"$env:RUNNER_TEMP\setup.log`"") -Wait -PassThru
+          if ($p.ExitCode) { Get-Content "$env:RUNNER_TEMP\setup.log" -Tail 60; throw "установка: код $($p.ExitCode)" }
+          foreach ($file in 'Jarvis.exe', 'JarvisConsole.exe', '_internal', 'config.example.yaml', 'unins000.exe') {
+            if (-not (Test-Path "$dir\$file")) { throw "не установлено: $file" }
+          }
+          $entry = Get-ItemProperty -LiteralPath $key
+          "В «Приложениях»: $($entry.DisplayName) $($entry.DisplayVersion), $($entry.InstallLocation)"
+          if ($entry.DisplayVersion -ne $version) { throw "в «Приложениях» версия $($entry.DisplayVersion)" }
+          if (-not (Test-Path -LiteralPath $menu)) { throw "нет ярлыка в «Пуске»" }
+          & "$dir\JarvisConsole.exe" --self-check
+          if ($LASTEXITCODE) { Get-Content "$dir\logs\assistant.log" -Tail 80; exit $LASTEXITCODE }
+
+          # Обновление, как по кнопке «Обновить»: программа работает, установщик ждёт её выхода,
+          # заменяет _internal целиком, а пользовательские файлы не трогает, и запускает программу снова.
+          $app = Start-Process "$dir\JarvisConsole.exe" -ArgumentList '--text', '--dry-run' -PassThru -NoNewWindow
+          Start-Sleep 15
+          if ($app.HasExited) { Get-Content "$dir\logs\assistant.log" -Tail 80; throw "программа не запустилась" }
+          New-Item "$dir\_internal\stale.txt" -Value 'от прежней версии' | Out-Null
+          $update = Start-Process $setup -ArgumentList ($silent + '/RELAUNCH=yes' + "/LOG=`"$env:RUNNER_TEMP\update.log`"") -PassThru
+          $null = $update.Handle  # без этого PowerShell не узнает код выхода
+          Start-Sleep 5
+          if ($update.HasExited) { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 60; throw "установщик не дождался выхода программы" }
+          Stop-Process -Id $app.Id
+          if (-not $update.WaitForExit(180000)) { throw "обновление не закончилось за 3 минуты" }
+          if ($update.ExitCode) { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 60; throw "обновление: код $($update.ExitCode)" }
+          if (Test-Path "$dir\_internal\stale.txt") { throw "файлы прежней версии остались в _internal" }
+          foreach ($file in 'config.yaml', 'commands\my.yaml') {
+            if (-not (Test-Path "$dir\$file")) { throw "обновление стёрло $file" }
+          }
+          $relaunched = $null
+          for ($i = 0; $i -lt 30 -and -not $relaunched; $i++) {
+            Start-Sleep 1
+            $relaunched = Get-Process Jarvis -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" }
+          }
+          if (-not $relaunched) { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 60; throw "после обновления программа не запустилась" }
+          "После обновления запущен $($relaunched.Path)"
+          $relaunched | Stop-Process
+
+          # Удаление: тихое оставляет настройки; ярлык и запись в «Приложениях» уходят.
+          & "$dir\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          for ($i = 0; $i -lt 90 -and (Test-Path "$dir\Jarvis.exe"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$dir\Jarvis.exe") { throw "программа не удалилась" }
+          if (Test-Path -LiteralPath $key) { throw "запись в «Приложениях» осталась" }
+          if (Test-Path -LiteralPath $menu) { throw "ярлык в «Пуске» остался" }
+          if (-not (Test-Path "$dir\config.yaml")) { throw "тихое удаление стёрло настройки" }
+
       - uses: actions/upload-artifact@v7
         with:
           name: Jarvis-win-x64
           path: dist/
           include-hidden-files: true  # .env.example
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Jarvis-Setup
+          path: setup/
           if-no-files-found: error
           retention-days: 14
 
@@ -227,3 +306,59 @@ jobs:
         env:
           JARVIS_UI_E2E: "1"
         run: uv run pytest -v -rs ../tests/test_ui_e2e.py
+
+  release:
+    # Релиз — когда в assistant/__init__.py версия без .dev, которой ещё нет на GitHub.
+    # По нему программа узнаёт о новой версии (assistant/updates.py).
+    name: Релиз на GitHub
+    needs: [windows, exe, ui]
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write  # создать релиз
+      actions: read  # скачать сборки этого запуска
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Нужен ли релиз
+        id: version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' assistant/__init__.py)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ -z "$version" || "$version" == *dev* ]]; then
+            echo "Версия «$version» в разработке — релиза нет"
+          elif gh release view "v$version" > /dev/null 2>&1; then
+            echo "Релиз v$version уже есть"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Релиз v${{ steps.version.outputs.version }}
+        if: steps.version.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for name in Jarvis-Setup Jarvis-win-x64; do
+            gh run download "$GITHUB_RUN_ID" --name "$name" --dir "artifacts/$name"
+          done
+          mkdir release
+          setup="Jarvis-Setup-$VERSION.exe"
+          archive="Jarvis-$VERSION-win-x64.zip"
+          cp "artifacts/Jarvis-Setup/$setup" release/
+          (cd artifacts/Jarvis-win-x64 && zip -qr9 "../../release/$archive" Jarvis)
+          (cd release && sha256sum "$setup" "$archive" > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # Описание релиза — раздел этой версии из CHANGELOG.md.
+          python3 - "$VERSION" > notes.md <<'EOF'
+          import re
+          import sys
+
+          version = sys.argv[1]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          section = re.search(rf"^## {re.escape(version)}\b[^\n]*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+          print(section[1].strip() if section else f"Джарвис {version}")
+          EOF
+          gh release create "v$VERSION" release/* --target "$GITHUB_SHA" --title "Джарвис $VERSION" --notes-file notes.md

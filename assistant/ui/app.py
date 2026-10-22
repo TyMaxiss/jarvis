@@ -20,6 +20,8 @@ from assistant.ui.tray import Tray, TrayActions
 
 log = logging.getLogger(__name__)
 
+UPDATE_DELAY = 20.0  # секунд после появления окон до проверки обновлений
+
 
 class UiOut:
     """Вместо консоли для сообщений запуска голоса.
@@ -103,6 +105,7 @@ class UiApp:
         controller.on_commands = self._bind_command_keys
         controller.on_state = self._update_tray
         controller.on_alarm = self._tray_notify
+        controller.on_update = self._tray_notify
 
         self._start_tray()
         self._bind_chat_key(config.ui.quick_chat_key)
@@ -126,6 +129,10 @@ class UiApp:
         """Окна созданы (отдельный поток): подписки, таймеры, затем загрузка голоса."""
         windows.watch_session_end()
         self._controller.start_alarms()
+        # Обновления — чуть позже: сначала окна и голос, а GitHub подождёт.
+        updates = threading.Timer(UPDATE_DELAY, self._controller.check_updates_on_start)
+        updates.daemon = True
+        updates.start()
         if self._voice_starter is not None:
             # Поток-демон: при первом запуске голос может минутами скачивать модели,
             # а выход из программы и «Перезапустить» ждать этого не должны.

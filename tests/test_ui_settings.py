@@ -183,6 +183,7 @@ def test_settings_view_matches_interface(settings: SettingsStore) -> None:
     view = settings_view(config, settings, Choices(microphones=[(1, "Микрофон (Realtek)"), (3, "USB Audio")]))
     # Ключи — как в типе Settings в ui/src/lib/types.ts.
     assert set(view) == {"general", "voice", "stt", "tts", "llm", "ui", "choices"}
+    assert set(view["general"]) == {"name", "dry_run", "check_updates"}  # autostart добавляет UiController
     assert set(view["voice"]) == {
         "enabled", "wake_word", "push_to_talk", "push_to_talk_key", "push_to_talk_mode", "stop_key",
         "input_device", "wake_confidence", "followup_seconds", "min_silence_ms", "sounds",

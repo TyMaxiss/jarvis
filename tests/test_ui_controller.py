@@ -29,6 +29,7 @@ from assistant.ui.activity import Activity
 from assistant.ui.confirm import UiConfirmer
 from assistant.ui.controller import UiController
 from assistant.ui.settings import SettingsStore
+from assistant.updates import Release, UpdateError
 from tests.conftest import NO_WINDOW, ROOT, RecordingSpeaker, wait_until
 from tests.ui_fakes import FakeAgent, FakeHost, FakeVoice, FakeVolume, RecordingBus
 
@@ -114,7 +115,19 @@ def test_state_matches_interface(world: SimpleNamespace) -> None:
         "recent",
         "scenarios",
         "timers",
+        "update",
         "ui",
+    }
+    assert set(state["update"]) == {
+        "supported",
+        "version",
+        "release",
+        "checked",
+        "checking",
+        "installing",
+        "step",
+        "progress",
+        "error",
     }
     assert set(state["voice"]) == {
         "enabled",
@@ -509,3 +522,143 @@ def test_editor_reports_errors_and_runs_draft_with_slots(world: SimpleNamespace)
     assert not world.controller.command_run(draft, "")["ok"]  # слотам неоткуда взять значения
     names = [action["name"] for action in world.controller.actions()]
     assert "open_app" in names and "volume_set" in names
+
+
+# --- Обновления ---------------------------------------------------------------------------
+
+RELEASE = Release(
+    version="0.7.0",
+    title="Джарвис 0.7.0",
+    notes="Новые голоса",
+    page="https://github.com/TyMaxiss/jarvis/releases/tag/v0.7.0",
+    installer="https://github.com/TyMaxiss/jarvis/releases/download/v0.7.0/Jarvis-Setup-0.7.0.exe",
+    size=2 << 20,
+    sha256="0" * 64,
+)
+
+
+class FakeUpdater:
+    """Вместо assistant.updates.Updater: без GitHub и без запуска установщика."""
+
+    def __init__(
+        self, release: Release | None = RELEASE, *, supported: bool = True, due: bool = True
+    ) -> None:
+        self.release = release
+        self.current = "0.6.0"
+        self.supported = supported
+        self.is_due = due
+        self.error: UpdateError | None = None
+        self.download_error: Exception | None = None
+        self.checks = 0
+        self.installed: list[Path] = []
+
+    def due(self) -> bool:
+        return self.is_due
+
+    def check(self) -> Release | None:
+        self.checks += 1
+        if self.error is not None:
+            raise self.error
+        return self.release
+
+    def download(self, release: Release, out: Any, folder: Path | None = None) -> Path:
+        out.write(f"Скачиваю версию {release.version}\n")
+        out.progress("Скачиваю обновление: 50% (1 МБ из 2 МБ)", 0.5)
+        if self.download_error is not None:
+            raise self.download_error
+        return Path("Jarvis-Setup-0.7.0.exe")
+
+    def install(self, installer: Path, folder: Path | None = None) -> None:
+        self.installed.append(installer)
+
+
+def test_update_check_shows_new_version(world: SimpleNamespace) -> None:
+    controller = world.controller
+    assert controller.update_check()["error"] == "Проверка обновлений недоступна"  # без проверяльщика
+    controller.updater = FakeUpdater(supported=False)
+    view = controller.update_check()
+    assert view["checked"] and not view["checking"] and not view["error"] and not view["supported"]
+    assert view["version"] == "0.6.0"  # с какой версией сравнивали
+    assert view["release"]["version"] == "0.7.0" and view["release"]["notes"] == "Новые голоса"
+    assert [event["checking"] for event in world.bus.of("update")] == [True, False]
+    assert controller.state()["update"] == view
+    controller.updater.error = UpdateError("нет сети")
+    view = controller.update_check()
+    assert view["error"] == "Не удалось проверить обновления: нет сети"
+    assert view["release"]["version"] == "0.7.0"  # найденное раньше не забывается
+
+
+def test_updates_on_start_notify_window_and_tray(world: SimpleNamespace) -> None:
+    controller = world.controller
+    tray: list[str] = []
+    controller.on_update = tray.append
+    controller.updater = FakeUpdater()
+    controller.check_updates_on_start()
+    text = "Вышла новая версия Джарвиса — 0.7.0. Обновить можно на главной."
+    assert world.bus.of("toast") == [{"kind": "info", "text": text}] and tray == [text]
+    controller.updater = FakeUpdater(supported=False)
+    controller.check_updates_on_start()
+    assert tray[-1] == "Вышла новая версия Джарвиса — 0.7.0. Обновите исходники: git pull и uv sync."
+
+
+def test_updates_on_start_respect_settings_and_schedule(world: SimpleNamespace) -> None:
+    controller = world.controller
+    controller.updater = FakeUpdater(due=False)
+    controller.check_updates_on_start()  # проверяли меньше суток назад
+    assert controller.updater.checks == 0
+    controller.updater = FakeUpdater(release=None)
+    controller.check_updates_on_start()  # новой версии нет — молчим
+    assert controller.updater.checks == 1 and not world.bus.of("toast")
+    result = controller.save_settings({"general": {"check_updates": False}})
+    assert result["ok"] and not result["restart"] and not result["settings"]["general"]["check_updates"]
+    controller.updater = FakeUpdater()
+    controller.check_updates_on_start()
+    assert controller.updater.checks == 0
+
+
+def test_update_install_downloads_installs_and_quits(world: SimpleNamespace) -> None:
+    controller = world.controller
+    updater = controller.updater = FakeUpdater()
+    assert not controller.update_install()["installing"]  # новой версии ещё не нашли
+    controller.update_check()
+    assert controller.update_install()["installing"]
+    assert wait_until(lambda: ("quit",) in world.host.calls)
+    assert updater.installed == [Path("Jarvis-Setup-0.7.0.exe")]
+    steps = [(event["step"], event["progress"]) for event in world.bus.of("update")]
+    assert ("Скачиваю версию 0.7.0", None) in steps
+    assert ("Скачиваю обновление: 50% (1 МБ из 2 МБ)", 0.5) in steps
+    assert steps[-1] == ("Ставлю обновление — Джарвис перезапустится сам", None)
+
+
+def test_failed_update_keeps_program_running(world: SimpleNamespace) -> None:
+    controller = world.controller
+    updater = controller.updater = FakeUpdater()
+    controller.update_check()
+    updater.download_error = UpdateError("не удалось скачать обновление: нет сети")
+    controller.update_install()
+    assert wait_until(lambda: not world.bus.of("update")[-1]["installing"])
+    view = world.bus.of("update")[-1]
+    assert view["error"] == "Обновление не удалось: не удалось скачать обновление: нет сети"
+    assert not view["step"] and view["progress"] is None
+    updater.download_error = PermissionError("папка занята")  # неожиданная ошибка — тоже не зависает
+    controller.update_install()
+    assert wait_until(lambda: not world.bus.of("update")[-1]["installing"])
+    assert world.bus.of("update")[-1]["error"] == "Обновление не удалось: папка занята"
+    assert ("quit",) not in world.host.calls and updater.installed == []
+
+
+def test_source_checkout_does_not_install_updates(world: SimpleNamespace) -> None:
+    controller = world.controller
+    controller.updater = FakeUpdater(supported=False)
+    controller.update_check()
+    assert not controller.update_install()["installing"]
+
+
+def test_update_page_opens_release(world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(controller_module.webbrowser, "open", opened.append)
+    world.controller.update_open_page()
+    world.controller.updater = FakeUpdater()
+    world.controller.update_check()
+    world.controller.update_open_page()
+    assert opened == ["https://github.com/TyMaxiss/jarvis/releases", RELEASE.page]

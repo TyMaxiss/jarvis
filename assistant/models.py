@@ -40,8 +40,8 @@ VOSK_BASE_URL = "https://alphacephei.com/vosk/models/"
 PYPI_FILES = "https://files.pythonhosted.org/packages/"
 INSTALLED = "wheels.txt"  # в папке cuda и silero/lib: какие колёса туда уже разложены
 SILERO_MODEL_URL = "https://models.silero.ai/models/tts/ru/"
-# Модели Silero, которые программа умеет скачать: имя файла → sha256 ('' — без проверки).
-SILERO_MODELS = {"v5_6_ru.pt": ""}
+# Модели Silero, которые программа умеет скачать: имя файла → sha256 (печатает --download-silero).
+SILERO_MODELS = {"v5_6_ru.pt": "04cc9b1d08ce38bcaa9d02c488d80d3e6806d17f7eaa7c95982f36a3cbf50b2e"}
 _CHUNK = 1 << 20
 _TIMEOUT = 60  # секунд ожидания ответа сервера
 
