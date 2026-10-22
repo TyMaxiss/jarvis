@@ -82,6 +82,15 @@ class UiConfirmer:
         pending.cancel.set()
         return True
 
+    def cancel_all(self) -> None:
+        """Снимает все вопросы ответом «нет»: ассистента остановили (кнопка, Ctrl+Alt+Q, «стоп»)."""
+        with self._lock:
+            pending = list(self._pending.values())
+        for item in pending:
+            log.info("Подтверждение «%s» снято: ассистента остановили", item.question)
+            item.resolve(False)
+            item.cancel.set()
+
     def ask(self, question: str, use_voice: bool) -> bool:
         """Задаёт вопрос и ждёт ответа. True — только при явном «да»."""
         pending = _Pending(question)

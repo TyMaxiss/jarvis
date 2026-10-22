@@ -266,7 +266,9 @@ def test_interface_with_real_python(
     assert results["theme"] == "light"
     # Быстрый чат: команда выполнена (dry-run), шаг и итог дошли до окна и до главной.
     assert "Шаг 1" in results["chatSteps"]
-    assert controller.activity.recent[0]["phrase"] == "сделай громче"
+    assert results["chatStop"].startswith("стоп") and "Остановлено" in results["chatStop"]
+    assert [item["phrase"] for item in controller.activity.recent[:2]] == ["стоп", "сделай громче"]
+    assert controller.activity.recent[0]["reply"] == "Остановлено"
     assert results["recent"] == "сделай громче"
     # История: фраза из журнала (не из памяти окна) вместе с действием команды.
     assert results["historyDay"] == "Сегодня"

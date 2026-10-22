@@ -238,6 +238,9 @@ class ConsoleApp:
         self._write(f"  [нейросеть] шаг {step.number}: {mark} {step.describe()}")
 
     def _print_result(self, result: PipelineResult) -> None:
+        if result.stopped:
+            self._write(f"  {result.reply}")
+            return
         if result.route == "llm":
             self._print_agent_result(result)
             return

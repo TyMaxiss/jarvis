@@ -42,6 +42,15 @@ describe('overlayReduce', () => {
     expect(state.confirm).toBeNull()
   })
 
+  it('«стоп» показывает «Остановлено», и результат прерванной задачи его не меняет', () => {
+    let state = run([{ type: 'recognized', payload: { text: 'расскажи сказку' } }, { type: 'stopped', payload: {} }])
+    expect(state.mode).toBe('stopped')
+    expect(overlayLines(state)).toEqual(['Остановлено', '«расскажи сказку»'])
+    state = run([result({ ok: false, reply: 'Жили-были…' })], state)
+    expect(overlayLines(state)).toEqual(['Остановлено', '«расскажи сказку»'])
+    expect(run([{ type: 'voice', payload: { state: 'listening', detail: '' } }], state)).toEqual(initialOverlay)
+  })
+
   it('новая фраза после ответа начинается с чистого листа, а выполняющаяся задача не сбрасывается', () => {
     const done = run([{ type: 'recognized', payload: { text: 'громче' } }, result({ reply: 'Громкость 60' })])
     expect(run([{ type: 'voice', payload: { state: 'listening', detail: '' } }], done)).toEqual(initialOverlay)

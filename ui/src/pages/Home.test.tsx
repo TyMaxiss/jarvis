@@ -46,6 +46,41 @@ describe('TimersCard', () => {
   })
 })
 
+describe('Кнопка микрофона', () => {
+  async function stateWith(voiceState: AppState['voice']['state'], busy = false, enabled = true): Promise<AppState> {
+    const state = await createMockApi(() => {}).get_state()
+    return { ...state, busy, voice: { ...state.voice, state: voiceState, enabled } }
+  }
+
+  it('в покое — слушать команду', async () => {
+    render(<Home state={await stateWith('idle')} onOpenSettings={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Слушать команду' }))
+    expect(call).toHaveBeenCalledWith('voice_listen')
+  })
+
+  it.each([
+    ['слушает', 'listening', false],
+    ['распознаёт', 'recognizing', false],
+    ['выполняет голосовую команду', 'processing', false],
+    ['отвечает на команду из текста', 'idle', true],
+  ] as const)('%s — остановить', async (_, voiceState, busy) => {
+    render(<Home state={await stateWith(voiceState, busy)} onOpenSettings={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Остановить' }))
+    expect(call).toHaveBeenCalledWith('voice_stop')
+    expect(call).not.toHaveBeenCalledWith('voice_listen')
+  })
+
+  it('без голоса кнопка недоступна, но задачу из текста остановить можно', async () => {
+    const { rerender } = render(<Home state={await stateWith('off', false, false)} onOpenSettings={() => {}} />)
+    expect((screen.getByRole('button', { name: 'Слушать команду' }) as HTMLButtonElement).disabled).toBe(true)
+    rerender(<Home state={await stateWith('off', true, false)} onOpenSettings={() => {}} />)
+    const stop = screen.getByRole('button', { name: 'Остановить' }) as HTMLButtonElement
+    expect(stop.disabled).toBe(false)
+    fireEvent.click(stop)
+    expect(call).toHaveBeenCalledWith('voice_stop')
+  })
+})
+
 describe('Главная, пока голос загружается', () => {
   async function loadingState(step: string, progress: number | null): Promise<AppState> {
     const state = await createMockApi(() => {}).get_state()

@@ -28,3 +28,15 @@ def test_voice_states_are_shown() -> None:
         "  [голос] Услышал «стоп» — останавливаю",
         "  [голос] Жду обращения",
     ]
+
+
+def test_stop_phrase_result_is_shown() -> None:
+    from assistant.nlu.matcher import MatchResult
+    from assistant.pipeline import PipelineResult
+
+    out = io.StringIO()
+    unused: Any = None
+    console = ConsoleApp(SimpleNamespace(), unused, unused, unused, unused, lambda: NO_WINDOW, out=out)  # type: ignore[arg-type]
+    result = PipelineResult("стоп", "local", MatchResult("stop", "стоп"), reply="Остановлено", stopped=True)
+    console._print_result(result)
+    assert out.getvalue() == "  Остановлено\n"

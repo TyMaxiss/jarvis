@@ -2,6 +2,7 @@
 
 Фразы, которые не нашлись локально (или нашлись неоднозначно), уходят агенту
 нейросети. Если нейросеть выключена в конфиге, ответ — «Не знаю такой команды».
+Стоп-фраза («стоп», «Джарвис, отмена») не команда: она останавливает ассистента (stop).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from assistant.actions.winapi import WindowInfo
 from assistant.commands.loader import Command, render_reply, substitute
 from assistant.llm.agent import Agent, AgentResult, AgentStatus, AgentStep
 from assistant.nlu.matcher import MatchedCommand, Matcher, MatchResult
+from assistant.nlu.stop import is_stop_phrase
 from assistant.safety.confirm import Confirmer
 from assistant.tts.base import Speaker
 
@@ -27,6 +29,7 @@ log = logging.getLogger(__name__)
 
 Route = Literal["local", "llm"]
 
+STOPPED_REPLY = "Остановлено"
 # Почему задача нейросети не выполнена — для Истории.
 _AGENT_PROBLEMS = {
     AgentStatus.CANCELLED: "прервано",
@@ -62,10 +65,13 @@ class PipelineResult:
     total_ms: float = 0.0
     agent: AgentResult | None = None
     request: str = ""  # id фразы в журнале
+    stopped: bool = False  # стоп-фраза: ассистент остановлен, команды не было
 
     @property
     def ok(self) -> bool:
-        """Всё получилось: команды выполнены или нейросеть справилась."""
+        """Всё получилось: команды выполнены, нейросеть справилась или ассистент остановлен."""
+        if self.stopped:
+            return True
         if self.route == "local":
             return bool(self.outcomes) and all(outcome.run.ok for outcome in self.outcomes)
         return self.agent is not None and self.agent.ok
@@ -114,6 +120,9 @@ class Pipeline:
         self._cancel = threading.Event()
         # Голос и консоль могут прислать фразы одновременно — выполняем по одной.
         self._lock = threading.Lock()
+        # Что ещё остановить вместе с задачей (stop): речь, прослушивание, вопрос «да/нет».
+        self.on_stop: list[Callable[[], None]] = []
+        self._stops = 0  # сколько раз останавливали: фраза, ждавшая очереди, после стопа не выполняется
         self.on_agent_step: Callable[[AgentStep], None] | None = None
         # Шаг локальной команды: номер, число шагов, итог (для оверлея «шаг 2 из 5»).
         self.on_command_step: Callable[[int, int, StepResult], None] | None = None
@@ -140,9 +149,32 @@ class Pipeline:
         with self._lock:
             self._matcher.set_commands(commands)
 
+    @property
+    def busy(self) -> bool:
+        """Выполняется фраза или команда (тем временем голосовой цикл слушает только «стоп»)."""
+        return self._lock.locked()
+
     def cancel(self) -> None:
-        """Прерывает задачу нейросети (горячая клавиша или «стоп»). Можно звать из любого потока."""
+        """Прерывает задачу нейросети. Можно звать из любого потока."""
         self._cancel.set()
+
+    def stop(self) -> None:
+        """Останавливает ассистента: задачу нейросети, речь, прослушивание и вопрос «да/нет».
+
+        Так работают кнопка «Стоп» на главной, Ctrl+Alt+Q и стоп-фраза. Фразы и команды, которые
+        ждали очереди за остановленной задачей, тоже не выполняются. Можно звать из любого потока.
+        """
+        self._stops += 1
+        self.cancel()
+        for hook in list(self.on_stop):
+            try:
+                hook()
+            except Exception:
+                log.exception("Не удалось остановить: %r", hook)
+
+    def is_stop(self, text: str) -> bool:
+        """Фраза — «стоп»: одни стоп-слова, можно с именем («Джарвис, хватит»)."""
+        return is_stop_phrase(self._matcher.normalize(text))
 
     def forget(self) -> None:
         """Забывает разговор с нейросетью."""
@@ -159,10 +191,26 @@ class Pipeline:
             source: откуда пришла: local (текст), voice (голос).
             confirmer: как подтверждать рискованные действия для этой фразы.
         """
-        with self._lock:
-            result = self._handle(text, source, confirmer, new_request())
+        if self.is_stop(text):
+            # Без блокировки: стоп не ждёт задачу, которую останавливает.
+            log.info("«%s» — останавливаю ассистента", text)
+            self.stop()
+            result = self._stopped(text)
+        else:
+            stops = self._stops
+            with self._lock:
+                if self._stops != stops:  # пока фраза ждала очереди, ассистента остановили
+                    log.info("«%s» не выполняю: ассистента остановили", text)
+                    result = self._stopped(text)
+                else:
+                    result = self._handle(text, source, confirmer, new_request())
         self._journal_phrase(result, source)
         return result
+
+    def _stopped(self, text: str) -> PipelineResult:
+        """Итог фразы, вместо которой ассистента остановили."""
+        match = MatchResult("stop", self._matcher.normalize(text))
+        return PipelineResult(text, "local", match, reply=STOPPED_REPLY, request=new_request(), stopped=True)
 
     def run_command(
         self,
@@ -181,7 +229,12 @@ class Pipeline:
         phrase = phrase or (command.phrases[0] if command.phrases else command.id)
         matched = MatchedCommand(command, dict(slots or {}), 100.0, phrase, phrase)
         request = new_request()
+        stops = self._stops
         with self._lock:
+            if self._stops != stops:  # пока команда ждала очереди, ассистента остановили
+                result = self._stopped(phrase)
+                self._journal_phrase(result, source)
+                return result
             started = time.perf_counter()
             outcome = self._run_command(matched, phrase, source, confirmer, request)
             total_ms = (time.perf_counter() - started) * 1000
@@ -234,6 +287,8 @@ class Pipeline:
                     request=request,
                 )
                 reply = agent.text
+                if agent.status is AgentStatus.CANCELLED and not reply:
+                    reply = STOPPED_REPLY
             total_ms = (time.perf_counter() - started) * 1000
             return PipelineResult(
                 text,

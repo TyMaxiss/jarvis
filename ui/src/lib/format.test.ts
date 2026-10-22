@@ -17,6 +17,10 @@ describe('voiceLabel', () => {
     expect(voiceLabel({ ...state, voice: { ...state.voice, paused: true } })).toBe('Прослушивание на паузе')
     expect(voiceLabel({ ...state, voice: { ...state.voice, enabled: false, problem: 'нет микрофона' } })).toBe('Голос недоступен')
     expect(voiceLabel({ ...state, voice: { ...state.voice, enabled: false, loading: true } })).toBe('Запускаю голос…')
+    // Задача из текста или ответ ещё звучит — и с голосом, и без него.
+    expect(voiceLabel({ ...state, busy: true })).toBe('Отвечаю…')
+    expect(voiceLabel({ ...state, busy: true, voice: { ...state.voice, enabled: false } })).toBe('Отвечаю…')
+    expect(voiceLabel({ ...state, busy: true, voice: { ...state.voice, state: 'listening' } })).toBe('Слушаю…')
     expect(isListening('holding')).toBe(true)
     expect(isListening('processing')).toBe(false)
   })

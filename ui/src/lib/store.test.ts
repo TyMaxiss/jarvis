@@ -29,6 +29,16 @@ describe('reduce', () => {
   })
 })
 
+describe('reduce: занят ли ассистент', () => {
+  it('событие busy меняет только признак занятости', async () => {
+    const state = await createMockApi(() => {}).get_state()
+    const busy = reduce(state, { type: 'busy', payload: { busy: true } })!
+    expect(busy.busy).toBe(true)
+    expect(busy.voice).toBe(state.voice)
+    expect(reduce(busy, { type: 'stopped', payload: {} })).toBe(busy) // «стоп» состояние не меняет
+  })
+})
+
 describe('reduce: обновления', () => {
   it('событие update заменяет состояние обновлений', async () => {
     const state = await createMockApi(() => {}).get_state()

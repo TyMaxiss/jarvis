@@ -55,6 +55,11 @@ try {
   await chat.keyboard.press('Enter')
   await chat.getByText(/^Готово/).waitFor({ timeout: 15000 })
   results.chatSteps = await chat.locator('li').first().textContent()
+  // «Стоп» текстом — не команда (раньше — пауза музыки), а остановка ассистента.
+  await chat.getByLabel('Команда').fill('стоп')
+  await chat.keyboard.press('Enter')
+  await chat.getByText('Остановлено').first().waitFor({ timeout: 5000 })
+  results.chatStop = await chat.locator('li').last().textContent()
   await chat.screenshot({ path: `${shots}/e2e-chat.png` })
 
   // Главная получила эту команду в «Последних».

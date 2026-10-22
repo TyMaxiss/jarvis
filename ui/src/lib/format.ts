@@ -15,6 +15,8 @@ const voiceStates: Record<VoiceState, string> = {
 export function voiceLabel(state: AppState | null): string {
   if (!state) return ''
   const voice = state.voice
+  // Задача из текста или ответ ещё звучит, а голос в покое (или выключен).
+  if (state.busy && (!voice.enabled || voice.state === 'idle')) return 'Отвечаю…'
   if (!voice.enabled) {
     if (voice.loading) return 'Запускаю голос…'
     return voice.problem ? 'Голос недоступен' : voiceStates.off

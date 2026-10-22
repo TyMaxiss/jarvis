@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import threading
+import time
 from pathlib import Path
 from typing import Annotated
 
+import pytest
 from pydantic import Field
 
 from assistant.actions.executor import ActionExecutor
@@ -228,3 +232,102 @@ def pipeline_commands(tmp_path: Path) -> list[Command]:
     store = CommandStore(tmp_path, "my.yaml", reg)
     store.reload()
     return store.commands
+
+
+# --- «Стоп» ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phrase", ["стоп", "Джарвис, стоп!", "хватит", "Отмена.", "стоп, хватит"])
+def test_stop_phrase_stops_instead_of_command(tmp_path: Path, phrase: str) -> None:
+    pipeline, speaker, calls = build(tmp_path)
+    stopped: list[str] = []
+    pipeline.on_stop.append(lambda: stopped.append("речь"))
+    result = pipeline.handle_text(phrase, "text")
+    assert result.stopped and result.ok and result.reply == "Остановлено"
+    assert result.outcomes == [] and result.agent is None
+    assert stopped == ["речь"] and calls == [] and speaker.said == []
+    phrase_line = json.loads((tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert phrase_line["phrase"] == phrase and phrase_line["reply"] == "Остановлено" and phrase_line["ok"]
+
+
+def test_command_with_stop_word_is_still_a_command(tmp_path: Path) -> None:
+    pipeline, _, _ = build(tmp_path)
+    assert not pipeline.is_stop("отмени таймер") and not pipeline.is_stop("стоп музыка")
+    assert pipeline.is_stop("Джарвис, отмени")
+
+
+def test_stop_does_not_wait_for_running_task(tmp_path: Path) -> None:
+    # Задача нейросети идёт и держит конвейер; «стоп» из другого потока не ждёт её, а прерывает.
+    pipeline, _, _ = build(tmp_path)
+    started = threading.Event()
+
+    class SlowAgent(StubAgent):
+        def run(
+            self, text: str, *, confirmer: object, cancel: threading.Event, on_step: object, request: str
+        ) -> object:  # type: ignore[override]
+            from assistant.llm.agent import AgentResult, AgentStatus
+
+            started.set()
+            cancel.wait(timeout=5)
+            return AgentResult(text="", status=AgentStatus.CANCELLED if cancel.is_set() else AgentStatus.DONE)
+
+    pipeline._agent = SlowAgent()  # type: ignore[assignment]
+    results: list[object] = []
+    worker = threading.Thread(target=lambda: results.append(pipeline.handle_text("расскажи сказку")))
+    worker.start()
+    assert started.wait(2) and pipeline.busy
+    assert pipeline.handle_text("стоп").stopped
+    worker.join(2)
+    assert not worker.is_alive() and not pipeline.busy
+    task = results[0]
+    assert task.reply == "Остановлено" and not task.ok  # type: ignore[attr-defined]
+
+
+def test_stop_hook_errors_do_not_break_others(tmp_path: Path) -> None:
+    pipeline, _, _ = build(tmp_path)
+    done: list[int] = []
+
+    def broken() -> None:
+        raise RuntimeError("окно уже закрыто")
+
+    pipeline.on_stop += [broken, lambda: done.append(1)]
+    pipeline.stop()
+    assert done == [1]
+
+
+def test_stop_cancels_phrases_waiting_in_queue(tmp_path: Path) -> None:
+    # Задача из текста идёт, за ней в очереди голосовая фраза и сценарий; «стоп» отменяет все три.
+    pipeline, speaker, calls = build(tmp_path)
+    started = threading.Event()
+
+    class SlowAgent(StubAgent):
+        def run(
+            self, text: str, *, confirmer: object, cancel: threading.Event, on_step: object, request: str
+        ) -> object:  # type: ignore[override]
+            from assistant.llm.agent import AgentResult, AgentStatus
+
+            started.set()
+            cancel.wait(timeout=5)
+            return AgentResult(text="", status=AgentStatus.CANCELLED)
+
+    pipeline._agent = SlowAgent()  # type: ignore[assignment]
+    results: dict[str, object] = {}
+    command = next(c for c in pipeline_commands(tmp_path) if c.id == "time")
+    workers = [
+        threading.Thread(target=lambda: results.setdefault("task", pipeline.handle_text("расскажи сказку"))),
+        threading.Thread(
+            target=lambda: results.setdefault("queued", pipeline.handle_text("который час", "voice"))
+        ),
+        threading.Thread(target=lambda: results.setdefault("scenario", pipeline.run_command(command))),
+    ]
+    workers[0].start()
+    assert started.wait(2)
+    for worker in workers[1:]:
+        worker.start()
+    time.sleep(0.1)  # фраза и сценарий ждут очереди
+    pipeline.handle_text("стоп")
+    for worker in workers:
+        worker.join(2)
+    assert all(result.stopped for key, result in results.items() if key != "task")  # type: ignore[attr-defined]
+    assert calls == [] and speaker.said == []  # «который час» и сценарий не выполнены
+    assert pipeline.handle_text("который час").reply == "Сейчас 12:00"  # следующие фразы — как обычно

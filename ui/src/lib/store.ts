@@ -32,6 +32,8 @@ export function reduce(state: AppState | null, event: AssistantEvent): AppState 
       return { ...state, voice: { ...state.voice, step: event.payload.text, progress: event.payload.fraction } }
     case 'update':
       return { ...state, update: event.payload }
+    case 'busy':
+      return { ...state, busy: event.payload.busy }
     case 'result': {
       const recent = [event.payload, ...state.recent.filter((item) => item.id !== event.payload.id)]
       return { ...state, recent: recent.slice(0, 20) }

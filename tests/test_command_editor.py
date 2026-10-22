@@ -107,7 +107,7 @@ def test_command_for_form(editor: CommandEditor) -> None:
     assert not data["user"] and data["also_in"] == []
     assert data["command"] == form(
         id="youtube_pause",
-        phrases=["пауза", "стоп", "поставь на паузу", "продолжи", "сними с паузы"],
+        phrases=["пауза", "поставь на паузу", "продолжи", "сними с паузы"],
         when={"active_window_contains": ["YouTube"], "active_process": []},
         steps=[{"action": "hotkey", "args": {"keys": "k"}}],
     )

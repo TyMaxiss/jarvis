@@ -192,6 +192,7 @@ class UiController:
         self.voice_fraction: float | None = None  # доля сделанного; None — неизвестна
         self._voice_state = "off"
         self._paused = False
+        self._busy = False  # выполняется задача или ассистент говорит: кнопка микрофона — «Стоп»
         self._meter = False
         self._resize_seq = 0
         self._resize_lock = threading.Lock()
@@ -209,6 +210,7 @@ class UiController:
         self.on_alarm: Callable[[str], None] | None = None  # уведомление в трее
         self.on_update: Callable[[str], None] | None = None  # уведомление в трее о новой версии
         self.editor = CommandEditor(commands, executor.registry, lambda: pipeline.matcher)
+        pipeline.on_stop.append(self._stopped_by_user)
         self.overlay = OverlayController(
             show=lambda: self._host_call("show", "overlay"),
             hide=lambda: self._host_call("hide", "overlay"),
@@ -252,6 +254,7 @@ class UiController:
                 "step": self.voice_step,
                 "progress": self.voice_fraction,
             },
+            "busy": self.busy(),
             "llm": self._llm_summary(),
             "dry_run": self.executor.dry_run,
             "volume": self._volume_state(),
@@ -457,12 +460,33 @@ class UiController:
         if self.voice is not None:
             self.voice.loop.push_to_talk()
 
+    def voice_stop(self) -> None:
+        """Кнопка «Стоп» на главной: прервать задачу нейросети, речь и прослушивание (как Ctrl+Alt+Q)."""
+        log.info("Стоп кнопкой в окне")
+        self.pipeline.stop()
+
+    def busy(self) -> bool:
+        """Есть что остановить: выполняется задача (в том числе из текста) или ассистент говорит."""
+        speech = self.speech
+        return self.pipeline.busy or (speech is not None and speech.speaking)
+
+    def _stopped_by_user(self) -> None:
+        """Ассистента остановили (кнопка, Ctrl+Alt+Q, «стоп»): вопросы «да/нет» снимаются, оверлей
+        показывает «Остановлено»."""
+        self.confirmer.cancel_all()
+        self.bus.emit("stopped", {})
+
     def level_meter(self, on: bool) -> None:
         self._meter = on
 
-    def pump_levels(self, interval: float = 0.07) -> None:
-        """Шлёт уровень микрофона индикатору в настройках и волне в оверлее (в своём потоке)."""
+    def pump(self, interval: float = 0.07) -> None:
+        """В своём потоке: уровень микрофона — индикатору в настройках и волне в оверлее,
+        «занят ли ассистент» — кнопке микрофона на главной (речь заканчивается без событий)."""
         while not self._stopped.wait(interval):
+            busy = self.busy()
+            if busy != self._busy:
+                self._busy = busy
+                self.bus.emit("busy", {"busy": busy}, to=["main"])
             voice = self.voice
             if voice is None:
                 continue

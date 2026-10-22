@@ -427,13 +427,11 @@ def start_voice(
             confirmer=confirmer,
             chime=(listen_chime(), SOUND_RATE) if voice.sounds else None,
             stop_spotter=stop_spotter,
-            on_stop=pipeline.cancel,
+            on_stop=pipeline.stop,
+            busy=lambda: pipeline.busy,
         )
-
-        def stop_all() -> None:
-            """Горячая клавиша остановки: прервать задачу нейросети, речь и прослушивание."""
-            pipeline.cancel()
-            loop.stop_speech()
+        # Кнопка, Ctrl+Alt+Q и «стоп» из текста останавливают и прослушивание.
+        pipeline.on_stop.append(loop.interrupt)
 
         ways = []
         if spotter is not None:
@@ -446,7 +444,7 @@ def start_voice(
                 elif voice.push_to_talk:
                     hotkeys.add_press(voice.push_to_talk_key, loop.push_to_talk)
                     ways.append(f"нажмите {voice.push_to_talk_key}")
-                hotkeys.add_press(voice.stop_key, stop_all)
+                hotkeys.add_press(voice.stop_key, pipeline.stop)
             except HotkeyError as exc:
                 out.write(f"! {exc}\n")
         ways.append("или введите :listen")
@@ -719,6 +717,8 @@ def run_console(
     console_speaker = ConsoleSpeaker(config.general.name)
     speaker: Speaker = TeeSpeaker(console_speaker, speech) if speech else console_speaker
     core = build_core(config, speaker, ConsoleConfirmer(), masker, dry_run, debug)
+    if speech is not None:
+        core.pipeline.on_stop.append(speech.stop)
     console = ConsoleApp(
         core.pipeline, console_speaker, core.matcher, core.store, core.index, windows.active_window
     )
@@ -806,6 +806,8 @@ def run_ui(
     speaker: Speaker = TeeSpeaker(ui_speaker, speech) if speech else ui_speaker
     confirmer = UiConfirmer(bus, timeout=30)
     core = build_core(config, speaker, confirmer.for_source("text"), masker, dry_run, debug)
+    if speech is not None:
+        core.pipeline.on_stop.append(speech.stop)
     core.pipeline.on_agent_step = lambda step: activity.step(
         step.number, None, step.action, step.text, step.status in ("done", "dry_run")
     )

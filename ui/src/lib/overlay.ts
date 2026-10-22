@@ -2,7 +2,7 @@
 
 import type { AssistantEvent, Step } from './types'
 
-export type OverlayMode = 'listening' | 'recognizing' | 'working' | 'done' | 'error'
+export type OverlayMode = 'listening' | 'recognizing' | 'working' | 'done' | 'error' | 'stopped'
 
 export interface OverlayState {
   mode: OverlayMode
@@ -31,7 +31,10 @@ export function overlayReduce(state: OverlayState, event: AssistantEvent): Overl
       return { ...state, mode: 'working', step: event.payload }
     case 'reply':
       return { ...state, reply: event.payload.text }
+    case 'stopped':
+      return { ...state, mode: 'stopped', confirm: null }
     case 'result':
+      if (state.mode === 'stopped') return state // прерванная задача — не ошибка
       return {
         ...state,
         mode: event.payload.ok ? 'done' : 'error',
@@ -69,5 +72,7 @@ export function overlayLines(state: OverlayState): [string, string] {
       return state.reply ? [state.reply, heard] : [heard || 'Готово', state.step ? stepLabel(state.step) : 'Готово']
     case 'error':
       return [state.reply || 'Не получилось', heard]
+    case 'stopped':
+      return ['Остановлено', heard]
   }
 }

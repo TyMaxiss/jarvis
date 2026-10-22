@@ -57,7 +57,7 @@ _REQUEST_VERBS = frozenset(
     }
 )  # fmt: skip
 
-Status = Literal["matched", "ambiguous", "not_found", "empty"]
+Status = Literal["matched", "ambiguous", "not_found", "empty", "stop"]  # stop — стоп-фраза, не команда
 
 
 @dataclass(frozen=True)
@@ -245,6 +245,10 @@ class Matcher:
             key=len,
             reverse=True,
         )
+
+    def normalize(self, text: str) -> str:
+        """Фраза так, как её сравнивает матчер: без имени, слов-паразитов и знаков, числа цифрами."""
+        return self._normalizer.normalize(text)
 
     def with_commands(self, commands: Iterable[Command]) -> Matcher:
         """Такой же матчер, но с другим набором команд (проверка фразы в редакторе)."""

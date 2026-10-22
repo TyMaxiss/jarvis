@@ -22,6 +22,16 @@ describe('chatReduce', () => {
     expect(exchange.ms).toBe(1200)
   })
 
+  it('остановленная команда — «Остановлено», итог прерванной задачи её не меняет', () => {
+    let list = chatReduce([running], { type: 'stopped', payload: {} })
+    expect(list[0].status).toBe('stopped')
+    list = chatReduce(list, {
+      type: 'result',
+      payload: { id: 6, time: '12:00', phrase: 'открой блокнот', route: 'llm', reply: '', ok: false, ms: 900, source: 'text' },
+    })
+    expect(list[0].status).toBe('stopped')
+  })
+
   it('повтор шага с тем же номером заменяет его, а законченную команду события не меняют', () => {
     const step = { number: 1, total: null, action: 'open_app', text: 'Открываю', ok: true }
     let list = chatReduce([running], { type: 'step', payload: step })

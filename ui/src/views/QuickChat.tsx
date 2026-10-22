@@ -1,7 +1,7 @@
 // Быстрый чат: окно с полем ввода поверх всех окон (Ctrl+Alt+Enter).
 // Текст уходит в тот же конвейер, что и голос; Esc прячет окно.
 
-import { CircleAlert, CircleCheck, CornerDownLeft, Sparkles } from 'lucide-react'
+import { CircleAlert, CircleCheck, CornerDownLeft, Sparkles, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Keys, cx } from '../components/ui'
 import { call } from '../lib/bridge'
@@ -15,7 +15,7 @@ export interface Exchange {
   text: string
   steps: Step[]
   reply: string
-  status: 'running' | 'ok' | 'error'
+  status: 'running' | 'ok' | 'error' | 'stopped'
   ms: number | null
 }
 
@@ -29,6 +29,8 @@ export function chatReduce(exchanges: Exchange[], event: AssistantEvent): Exchan
       return update({ steps: [...last.steps.filter((step) => step.number !== event.payload.number), event.payload] })
     case 'reply':
       return update({ reply: event.payload.text })
+    case 'stopped':
+      return update({ status: 'stopped' }) // итог прерванной задачи придёт следом — он уже не нужен
     case 'result':
       return update({
         status: event.payload.ok ? 'ok' : 'error',
@@ -110,15 +112,27 @@ export function QuickChat({ framed = false }: { framed?: boolean }) {
             }
           }}
         />
-        <button
-          type="button"
-          aria-label="Выполнить"
-          disabled={!text.trim() || running}
-          onClick={send}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-white transition hover:brightness-110 disabled:bg-surface-3 disabled:text-faint"
-        >
-          <CornerDownLeft size={15} />
-        </button>
+        {running ? (
+          <button
+            type="button"
+            aria-label="Остановить"
+            title="Остановить"
+            onClick={() => void call('voice_stop')}
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-3 text-text transition hover:bg-surface-2"
+          >
+            <Square size={13} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label="Выполнить"
+            disabled={!text.trim()}
+            onClick={send}
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-white transition hover:brightness-110 disabled:bg-surface-3 disabled:text-faint"
+          >
+            <CornerDownLeft size={15} />
+          </button>
+        )}
       </div>
 
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -171,6 +185,8 @@ export function QuickChat({ framed = false }: { framed?: boolean }) {
   )
 }
 
+const exchangeStatus = { ok: 'Готово', error: 'Не получилось', stopped: 'Остановлено' }
+
 function ExchangeView({ exchange }: { exchange: Exchange }) {
   return (
     <li className="animate-fade-up flex flex-col gap-1.5">
@@ -189,8 +205,8 @@ function ExchangeView({ exchange }: { exchange: Exchange }) {
         </div>
       )}
       {exchange.status !== 'running' && (
-        <div className={cx('text-[11.5px]', exchange.status === 'ok' ? 'text-faint' : 'text-danger')}>
-          {exchange.status === 'ok' ? 'Готово' : 'Не получилось'}
+        <div className={cx('text-[11.5px]', exchange.status === 'error' ? 'text-danger' : 'text-faint')}>
+          {exchangeStatus[exchange.status]}
           {exchange.ms !== null && ` · ${formatMs(exchange.ms)}`}
         </div>
       )}

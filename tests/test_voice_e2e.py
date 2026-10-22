@@ -14,7 +14,8 @@
   принял за имя, с приманками и без (все скачанные голоса);
 * длительность речи по VAD и текст Whisper с временем распознавания;
 * что Vosk слышит в ответах «да/нет», с приманками и без;
-* какие фразы прерывают ассистента как «стоп» (все голоса).
+* какие фразы прерывают ассистента как «стоп» (все голоса);
+* слышен ли «стоп» поверх речи ассистента из колонок (эхо другим голосом).
 """
 
 from __future__ import annotations
@@ -532,4 +533,59 @@ def test_stop_word_interrupts(reference_piper: PiperTTS, vosk_model: object, phr
 @pytest.mark.parametrize("phrase", NOT_STOP)
 def test_ordinary_speech_does_not_interrupt(piper: PiperTTS, vosk_model: object, phrase: str) -> None:
     stopped, heard = stop_heard(say(piper, phrase), stop_spotter(vosk_model))
+    assert not stopped, describe_heard(heard)
+
+
+# --- «Стоп» поверх речи ассистента (колонки) -----------------------------------------------
+
+ECHO_REPLY = "Сейчас расскажу подробнее. Это займёт немного времени, потому что вопрос интересный."
+OVER_SPEECH = ["Джарвис, стоп.", "Стоп."]
+ECHO_GAINS = (0.3, 0.6)  # громкость голоса ассистента в микрофоне относительно пользователя
+
+
+def over_echo(echo: np.ndarray, phrase: np.ndarray, gain: float, at: float = 1.0) -> np.ndarray:
+    """Фраза пользователя поверх речи ассистента: так их слышит микрофон рядом с колонками."""
+    start = int(16_000 * at)
+    length = max(len(echo), start + len(phrase))
+    mixed = np.zeros(length, dtype=np.float32)
+    mixed[: len(echo)] += echo.astype(np.float32) * gain
+    mixed[start : start + len(phrase)] += phrase.astype(np.float32)
+    return np.clip(mixed, -32768, 32767).astype(np.int16)
+
+
+def test_calibration_stop_over_speech(reference_piper: PiperTTS, vosk_model: object) -> None:
+    """Слышен ли «стоп», когда его перекрывает голос ассистента (эхо — другие голоса Piper).
+
+    Одно «стоп» среди чужой речи не засчитывается (это может быть слово ассистента),
+    «Джарвис, стоп» — засчитывается. Печатает, что сработало и что услышал Vosk.
+    """
+    echoes = [path for path in voice_paths() if path.stem != REFERENCE_VOICE]
+    if not echoes:
+        pytest.skip("нет второго голоса Piper для эха")
+    spotter = stop_spotter(vosk_model)
+    lines, found = [], {phrase: 0 for phrase in OVER_SPEECH}
+    tries = 0
+    for path in echoes:
+        echo = say(PiperTTS(path), ECHO_REPLY)
+        for gain in ECHO_GAINS:
+            tries += 1
+            for phrase in OVER_SPEECH:
+                stopped, heard = stop_heard(over_echo(echo, say(reference_piper, phrase), gain), spotter)
+                found[phrase] += stopped
+                mark = "да" if stopped else "нет"
+                lines.append(f"{path.stem} эхо {gain}: «{phrase}» {mark}: {describe_heard(heard)}")
+            # Одна речь ассистента (без пользователя) не должна прерывать саму себя.
+            stopped, heard = stop_heard((echo.astype(np.float32) * gain).astype(np.int16), spotter)
+            if stopped:
+                lines.append(f"ЛОЖНО {path.stem} эхо {gain}: {describe_heard(heard)}")
+    log.warning(
+        "КАЛИБРОВКА стоп поверх речи: %s%s",
+        ", ".join(f"«{phrase}» {count}/{tries}" for phrase, count in found.items()),
+        "".join(f"\n    {line}" for line in lines),
+    )
+
+
+def test_assistant_speech_does_not_stop_itself(any_piper: PiperTTS, vosk_model: object) -> None:
+    # Ответ ассистента в микрофоне (колонки) — его голос, без пользователя — его не прерывает.
+    stopped, heard = stop_heard(say(any_piper, ECHO_REPLY), stop_spotter(vosk_model))
     assert not stopped, describe_heard(heard)

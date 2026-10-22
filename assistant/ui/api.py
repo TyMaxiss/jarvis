@@ -100,6 +100,10 @@ class Api:
         self._controller.voice_listen()
 
     @_logged
+    def voice_stop(self) -> None:
+        self._controller.voice_stop()
+
+    @_logged
     def send_text(self, text: str) -> None:
         self._controller.send_text(str(text))
 

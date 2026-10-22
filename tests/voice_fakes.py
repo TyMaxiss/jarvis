@@ -97,6 +97,42 @@ class FakeSpotter:
         self._seen_wake = self._seen_other = False
 
 
+class WordsSpotter:
+    """Как Vosk с грамматикой: слово для каждого значения блоков (по порядку), остальное — [unk].
+
+    chunks=True — как Vosk на длинной речи без пауз: кусок фразы отдаётся, как только
+    сменилось значение блоков, а не в конце фразы.
+    """
+
+    def __init__(self, words: dict[int, tuple[str, float]], chunks: bool = False) -> None:
+        self.words = words
+        self.chunks = chunks
+        self._values: list[int] = []
+
+    def accept(self, block: np.ndarray) -> SpotResult | None:
+        value = int(block[0])
+        if not value or (self._values and self._values[-1] == value):
+            return None
+        if self.chunks and self._values:
+            result = self._result()
+            self._values = [value]
+            return result
+        self._values.append(value)
+        return None
+
+    def finish(self) -> SpotResult:
+        result = self._result()
+        self.reset()
+        return result
+
+    def reset(self) -> None:
+        self._values = []
+
+    def _result(self) -> SpotResult:
+        words = tuple(self.words.get(value, ("[unk]", 1.0)) for value in self._values)
+        return SpotResult(" ".join(word for word, _ in words), words)
+
+
 class FakeSpeech:
     """Озвучка: «говорит» заданное число блоков после каждой фразы или сигнала."""
 

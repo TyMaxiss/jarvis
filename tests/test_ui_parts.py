@@ -185,6 +185,19 @@ def test_button_stops_voice_listening() -> None:
     assert result == [False] and wait_until(lambda: voice.cancelled)
 
 
+def test_stop_takes_back_questions() -> None:
+    # Ассистента остановили (кнопка, Ctrl+Alt+Q, «стоп»): вопрос «да/нет» снимается ответом «нет».
+    bus = RecordingBus()
+    voice = FakeVoiceConfirmer(True, delay=5)
+    confirmer = UiConfirmer(bus, voice=voice, timeout=10)
+    thread, result = ask_later(confirmer, use_voice=True)
+    assert wait_until(lambda: bus.of("confirm"))
+    confirmer.cancel_all()
+    thread.join(2)
+    assert result == [False] and wait_until(lambda: voice.cancelled)
+    confirmer.cancel_all()  # вопросов нет — ничего не происходит
+
+
 def test_button_still_works_shortly_after_voice_silence() -> None:
     bus = RecordingBus()
     confirmer = UiConfirmer(bus, voice=FakeVoiceConfirmer(None, delay=0.05), timeout=10, grace=1.0)

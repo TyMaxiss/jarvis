@@ -12,10 +12,14 @@
 Пока ассистент говорит, имя и команды не слушаются (полудуплекс). Короткий сигнал
 «слушаю» — исключение: команду часто начинают говорить, не дождавшись его конца.
 
-«Стоп» / «отмена» (STOP_PHRASES) слушаются, пока выполняется задача и пока ассистент
-говорит: они прерывают задачу нейросети и речь. Задача тогда выполняется в отдельном
-потоке, а голосовой цикл ищет стоп-слово так же, как имя: Vosk со своей грамматикой,
-решение в конце фразы.
+«Стоп» / «отмена» (STOP_PHRASES, можно с именем) останавливают ассистента в любом состоянии:
+* пока выполняется задача (голосовая — в отдельном потоке, из текста — в конвейере) и пока
+  ассистент говорит, слушаются только они: Vosk со своей грамматикой, решение в конце фразы;
+  поверх речи ассистента (колонки) засчитывается и «Джарвис, стоп» посреди фразы;
+* в ожидании команды и продолжения стоп-фразу распознаёт Whisper, и она не уходит в конвейер;
+* «Джарвис, стоп» в покое Vosk слышит сразу, без Whisper.
+Кнопка на главной и Ctrl+Alt+Q останавливают через interrupt() — и фразу, которая ещё
+распознаётся.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from assistant.audio.vad import SegmentEvent, SpeechSegmenter
 from assistant.audio.wakeword import SpotResult
 from assistant.nlu.names import skeleton
 from assistant.nlu.normalize import Normalizer, basic_clean
+from assistant.nlu.stop import STOP_PHRASES, is_stop_phrase
 from assistant.safety.confirm import Confirmer
 from assistant.stt.whisper_stt import Transcript
 
@@ -45,8 +50,6 @@ log = logging.getLogger(__name__)
 _ECHO_GUARD_MS = 300
 # Сколько после начала сигнала «слушаю» ещё может длиться его воспроизведение (задержка вывода).
 _CHIME_MARGIN_MS = 500
-# Фразы, которыми голосом прерывают задачу и речь ассистента.
-STOP_PHRASES = ("стоп", "отмена", "отмени", "хватит", "прекрати")
 # Слова-приманки, похожие на «стоп» по звучанию: их нет в грамматике стоп-слов. Калибровка
 # на 4 голосах Piper: без них «стоп» слышен в 30 случаях из 40 вместо 28, ложных
 # срабатываний на 148 обычных фразах и ответах ассистента — ноль, как и с ними.
@@ -152,6 +155,8 @@ class VoiceLoop:
             приманок STOP_SOUNDALIKES; None — голосом не прерывается ничего, фраза
             выполняется в потоке цикла.
         on_stop: что ещё сделать по «стоп», кроме остановки речи (прервать задачу).
+        busy: конвейер выполняет задачу не из голоса (текст, горячая клавиша команды) —
+            тогда цикл в покое слушает только «стоп».
     """
 
     def __init__(
@@ -171,6 +176,7 @@ class VoiceLoop:
         chime: tuple[np.ndarray, int] | None = None,
         stop_spotter: Spotter | None = None,
         on_stop: Callable[[], None] | None = None,
+        busy: Callable[[], bool] | None = None,
     ) -> None:
         self._source = source
         self._vad = vad
@@ -191,8 +197,11 @@ class VoiceLoop:
         self._chime = chime
         self._stop_spotter = stop_spotter
         self._on_stop = on_stop
+        self._busy = busy
         self._stop_words = frozenset(" ".join((*STOP_PHRASES, self._wake_phrase)).split())
+        self._named_stops = [f"{self._wake_phrase} {phrase}" for phrase in STOP_PHRASES]
         self._events: queue.Queue[str] = queue.Queue()
+        self._stop_requested = threading.Event()  # кнопка или Ctrl+Alt+Q, пока фраза распознаётся
         self._stopped = threading.Event()
         self._paused = False
         self._thread: threading.Thread | None = None
@@ -202,7 +211,7 @@ class VoiceLoop:
         self._listen_window_ms = 0
         self._mute_until_ms = 0
         self._chime_until_ms = 0
-        self._was_speaking = False
+        self._stop_only = False  # ассистент говорит или занят: слушаем только «стоп»
         self._hold_buffer: list[np.ndarray] = []
 
     # --- Управление (вызывается из потоков горячих клавиш) ---------------------------
@@ -220,8 +229,9 @@ class VoiceLoop:
         """Клавиши push-to-talk отпущены."""
         self._events.put("hold_end")
 
-    def stop_speech(self) -> None:
-        """Прервать речь ассистента и прослушивание."""
+    def interrupt(self) -> None:
+        """Остановить речь, прослушивание и фразу, которая ещё распознаётся (кнопка, Ctrl+Alt+Q)."""
+        self._stop_requested.set()
         self._speech.stop()
         self._events.put("stop")
 
@@ -251,8 +261,18 @@ class VoiceLoop:
         """Основной цикл. stop_when_exhausted — для тестов: выйти, когда звук кончился."""
         self._enter_idle()
         empty_reads = 0
+        borrowed = False
         while not self._stopped.is_set():
             self.handle_events()
+            if self._mic_borrowed():
+                # Команда из текста или по горячей клавише спрашивает «да/нет» голосом:
+                # микрофон слушает подтверждение, а цикл ждёт.
+                borrowed = True
+                self._stopped.wait(0.05)
+                continue
+            if borrowed:
+                borrowed = False
+                self._reset_audio_state()
             block = self._source.read(timeout=0.1)
             if block is None:
                 empty_reads += 1
@@ -271,18 +291,18 @@ class VoiceLoop:
     def feed(self, block: np.ndarray) -> None:
         """Обрабатывает один блок звука (32 мс)."""
         self._clock_ms += BLOCK_MS
-        speaking = self._speech.speaking
-        if speaking and self._clock_ms > self._chime_until_ms:
-            if not self._was_speaking:
-                self._was_speaking = True
-                self._reset_audio_state()  # в речи ассистента ищем только «стоп»
-            if self._stop_block(block):
+        speaking = self._speech.speaking and self._clock_ms > self._chime_until_ms
+        if speaking or (self.state is VoiceState.IDLE and self._busy is not None and self._busy()):
+            if not self._stop_only:
+                self._stop_only = True
+                self._reset_audio_state()  # в речи ассистента и во время задачи ищем только «стоп»
+            if self._stop_block(block, over_speech=speaking):
                 self._enter_idle()
             return
-        if self._was_speaking:
-            # Ассистент договорил: отбрасываем эхо и начинаем фразу с чистого листа.
-            # Окно ожидания отсчитывается от конца речи, а не от начала ответа.
-            self._was_speaking = False
+        if self._stop_only:
+            # Ассистент договорил (или задача кончилась): отбрасываем эхо и начинаем фразу
+            # с чистого листа. Окно ожидания отсчитывается от конца речи, а не от начала ответа.
+            self._stop_only = False
             self._mute_until_ms = self._clock_ms + _ECHO_GUARD_MS
             self._reset_audio_state()
             if self.state is VoiceState.LISTENING:
@@ -326,6 +346,10 @@ class VoiceLoop:
         log.debug("Vosk: %s", heard.describe())
         if event is SegmentEvent.END and heard.find([self._wake_phrase], self._settings.wake_confidence):
             log.info("Услышано имя ассистента: %s", heard.describe())
+            if self.is_stop(heard):  # «Джарвис, стоп»: «стоп» есть в грамматике имени, Whisper не нужен
+                self._stop_heard(heard.text)
+                self._enter_idle()
+                return
             self._on_wake(heard)
 
     def _spot(self, spotter: Spotter, block: np.ndarray, event: SegmentEvent) -> SpotResult | None:
@@ -350,40 +374,56 @@ class VoiceLoop:
         if result is not None:
             self._heard = self._heard + result
 
-    def _stop_block(self, block: np.ndarray) -> bool:
+    def _stop_block(self, block: np.ndarray, over_speech: bool = False) -> bool:
         """Ищет «стоп» / «отмена» во время задачи или речи ассистента. True — услышано.
 
-        Сначала прерывается задача, потом речь: так прерванная задача не успеет
-        поставить в очередь новую фразу.
+        over_speech — ассистент говорит: его голос из колонок попадает в микрофон, и фраза
+        пользователя тонет в нём. Тогда «Джарвис, стоп» засчитывается и посреди фразы — уже
+        по куску, который Vosk распознал до паузы.
         """
         if self._stop_spotter is None:
             return False
         event = self._segmenter.feed(block, self._vad(block))
         heard = self._spot(self._stop_spotter, block, event)
         if heard is None:
-            return False
-        log.debug("Vosk (стоп): %s", heard.describe())
-        if not self.is_stop(heard):
-            return False
-        log.info("Услышано «%s» — останавливаю", heard.text)
+            if not (over_speech and self._heard.words and self._named_stop(self._heard)):
+                return False
+            heard = self._heard
+        else:
+            log.debug("Vosk (стоп): %s", heard.describe())
+            if not self.is_stop(heard, over_speech):
+                return False
+        self._stop_heard(heard.text)
+        return True
+
+    def _stop_heard(self, text: str) -> None:
+        """Услышан «стоп». Сначала прерывается задача, потом речь: так прерванная задача
+        не успеет поставить в очередь новую фразу."""
+        log.info("Услышано «%s» — останавливаю", text)
         if self._on_stop is not None:
             self._on_stop()
         self._speech.stop()
-        self._report("stopped", heard.text)
-        return True
+        self._report("stopped", text)
 
-    def is_stop(self, heard: SpotResult) -> bool:
+    def is_stop(self, heard: SpotResult, over_speech: bool = False) -> bool:
         """Во фразе только стоп-слова (и, может быть, имя), а стоп-слово распознано уверенно.
 
         Поэтому «стоп» посреди разговора или ответа ассистента ничего не прерывает.
         Короткое «стоп» детектор речи иногда считает шумом — такая фраза тоже проверяется.
+        over_speech — ассистент говорит: «Джарвис, стоп» засчитывается и среди других слов.
         """
         words = {word for word, _ in heard.words}
-        return (
-            bool(words)
+        if (
+            words
             and words <= self._stop_words
             and heard.find(STOP_PHRASES, self._settings.stop_confidence) is not None
-        )
+        ):
+            return True
+        return over_speech and self._named_stop(heard)
+
+    def _named_stop(self, heard: SpotResult) -> bool:
+        """Имя и сразу стоп-слово, оба уверенно: «Джарвис, стоп» среди речи ассистента."""
+        return heard.find(self._named_stops, self._settings.stop_confidence) is not None
 
     def _on_wake(self, heard: SpotResult) -> None:
         """Имя распознано в только что закончившейся фразе.
@@ -463,6 +503,10 @@ class VoiceLoop:
                 return
             if event in ("pause", "resume"):
                 self._pause(event == "pause")
+            elif event == "stop":
+                self._stop_requested.clear()
+                if self.state is not VoiceState.PROCESSING:
+                    self._enter_idle()
             elif self._paused:
                 continue  # на паузе горячие клавиши не активируют прослушивание
             elif event == "ptt" and self.state in (VoiceState.IDLE, VoiceState.LISTENING):
@@ -476,8 +520,6 @@ class VoiceLoop:
             elif event == "hold_end" and self.state is VoiceState.HOLDING:
                 audio = np.concatenate(self._hold_buffer) if self._hold_buffer else np.zeros(0, np.int16)
                 self._process(audio, "hold")
-            elif event == "stop" and self.state is not VoiceState.PROCESSING:
-                self._enter_idle()
 
     def _pause(self, paused: bool) -> None:
         if paused == self._paused:
@@ -513,6 +555,12 @@ class VoiceLoop:
             pause_ms + transcript.duration_ms, pause_ms, transcript.duration_ms, len(audio) / 16_000,
             transcript.text,
         )  # fmt: skip
+        if self._stop_requested.is_set():
+            # Пока фраза распознавалась, нажали «Стоп» или Ctrl+Alt+Q — её не выполняем.
+            self._stop_requested.clear()
+            log.info("Остановлено во время распознавания — «%s» не выполняю", transcript.text)
+            self._enter_idle()
+            return
         if not transcript.text:
             self._enter_idle()
             return
@@ -521,9 +569,15 @@ class VoiceLoop:
             log.info("Имени нет в распознанном «%s» — игнорирую", transcript.text)
             self._enter_idle()
             return
-        if not self._normalizer.normalize(transcript.text):
+        normalized = self._normalizer.normalize(transcript.text)
+        if not normalized:
             # Во фразе было только имя — ждём саму команду.
             self._listen(chime=True)
+            return
+        if is_stop_phrase(normalized):
+            # «Стоп» вместо команды: остановить ассистента, а не искать команду.
+            self._stop_heard(transcript.text)
+            self._enter_idle()
             return
         self._report("recognized", transcript.text)
         started = time.perf_counter()
@@ -579,7 +633,8 @@ class VoiceLoop:
                 worker.join(timeout=0.05)
             elif (block := self._source.read(timeout=0.1)) is not None:
                 self._clock_ms += BLOCK_MS
-                stopped = self._stop_block(block)
+                # Нейросеть говорит ответ по предложениям, пока задача ещё идёт.
+                stopped = self._stop_block(block, over_speech=self._speech.speaking)
             else:
                 worker.join(timeout=0.01)
         return stopped

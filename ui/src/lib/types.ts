@@ -220,6 +220,7 @@ export interface AppState {
     step: string // что делается, пока голос загружается: «Скачиваю модель Vosk: 40% (18 МБ из 45 МБ)»
     progress: number | null // доля сделанного (0–1); null — неизвестна
   }
+  busy: boolean // выполняется задача (в том числе из текста) или ассистент говорит: кнопка микрофона — «Стоп»
   llm: LlmSummary
   dry_run: boolean
   volume: { percent: number | null; muted: boolean | null }
@@ -362,6 +363,8 @@ export type AssistantEvent =
   | { type: 'toast'; payload: { kind: 'info' | 'error' | 'alarm'; text: string } } // alarm висит, пока не закроют
   | { type: 'chat_shown'; payload: Record<string, never> }
   | { type: 'update'; payload: UpdateState }
+  | { type: 'busy'; payload: { busy: boolean } }
+  | { type: 'stopped'; payload: Record<string, never> } // остановили: кнопка, Ctrl+Alt+Q или «стоп»
 
 export type WindowName = 'main' | 'overlay' | 'chat'
 
@@ -377,6 +380,7 @@ export interface AssistantApi {
   open_key_page(profile: string): Promise<void>
   voice_pause(paused: boolean): Promise<AppState>
   voice_listen(): Promise<void>
+  voice_stop(): Promise<void> // остановить задачу, речь и прослушивание (как Ctrl+Alt+Q)
   send_text(text: string): Promise<void>
   confirm_answer(id: string, yes: boolean): Promise<void>
   set_volume(percent: number): Promise<AppState>

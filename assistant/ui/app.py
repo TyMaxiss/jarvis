@@ -113,7 +113,7 @@ class UiApp:
         self._watcher = CommandWatcher(controller.commands.directory, controller.reload_commands)
         controller.on_commands_written = self._watcher.acknowledge
         self._watcher.start()
-        threading.Thread(target=controller.pump_levels, name="mic-level", daemon=True).start()
+        threading.Thread(target=controller.pump, name="ui-pump", daemon=True).start()
         try:
             webview.start(
                 self._started,

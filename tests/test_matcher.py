@@ -29,7 +29,7 @@ def ids(result) -> list[str]:
         ("сверни все окна", "minimize_all"),
         ("покажи рабочий стол", "minimize_all"),
         ("Пауза", "media_play_pause"),
-        ("стоп", "media_stop"),
+        ("останови музыку", "media_stop"),
         ("следующий трек", "media_next"),
         ("выключи звук", "mute"),
         ("включи звук", "unmute"),
@@ -136,7 +136,7 @@ def test_raw_text_is_not_used_when_it_has_extra_words(matcher: Matcher) -> None:
 class TestWhenPriority:
     def test_youtube_pause_when_youtube_is_active(self, matcher: Matcher) -> None:
         assert ids(matcher.match("пауза", YOUTUBE_WINDOW)) == ["youtube_pause"]
-        assert ids(matcher.match("стоп", YOUTUBE_WINDOW)) == ["youtube_pause"]
+        assert ids(matcher.match("поставь на паузу", YOUTUBE_WINDOW)) == ["youtube_pause"]
         assert ids(matcher.match("полный экран", YOUTUBE_WINDOW)) == ["youtube_fullscreen"]
 
     def test_when_command_does_not_hijack_fuzzy_phrases(self, matcher: Matcher) -> None:
@@ -147,7 +147,7 @@ class TestWhenPriority:
 
     def test_generic_command_in_other_windows(self, matcher: Matcher) -> None:
         assert ids(matcher.match("пауза", NOTEPAD_WINDOW)) == ["media_play_pause"]
-        assert ids(matcher.match("стоп", NOTEPAD_WINDOW)) == ["media_stop"]
+        assert ids(matcher.match("поставь на паузу", NOTEPAD_WINDOW)) == ["media_play_pause"]
 
     def test_process_condition(self, normalizer: Normalizer) -> None:
         commands = [

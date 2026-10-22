@@ -244,6 +244,7 @@ function makeState(): AppState {
       progress: null,
     },
     llm: { enabled: true, profile: 'deepseek', title: 'DeepSeek', model: 'deepseek-flash', ready: true, problem: '' },
+    busy: false,
     dry_run: false,
     volume: { percent: 55, muted: false },
     recent,
@@ -460,7 +461,15 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
       return structuredClone(state)
     },
     async voice_listen() {
+      state.voice.state = 'listening'
       emit({ type: 'voice', payload: { state: 'listening', detail: '' } })
+    },
+    async voice_stop() {
+      state.voice.state = 'idle'
+      state.busy = false
+      emit({ type: 'stopped', payload: {} })
+      emit({ type: 'busy', payload: { busy: false } })
+      emit({ type: 'voice', payload: { state: 'idle', detail: '' } })
     },
     async send_text(text: string) {
       void simulate(text)

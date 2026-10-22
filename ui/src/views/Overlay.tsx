@@ -1,7 +1,7 @@
 // Оверлей — маленькое окно-«пилюля» внизу экрана. Окно показывает и прячет Python;
 // здесь только отрисовка событий: «Слушаю…» с волной, распознанный текст, шаги, ответ, «Да / Нет».
 
-import { CircleAlert, CircleCheck } from 'lucide-react'
+import { CircleAlert, CircleCheck, CircleStop } from 'lucide-react'
 import { useReducer, useState } from 'react'
 import { cx } from '../components/ui'
 import { call } from '../lib/bridge'
@@ -54,6 +54,7 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
 
 function StatusIcon({ state, level }: { state: OverlayState; level: number }) {
   if (state.mode === 'done' && !state.confirm) return <CircleCheck size={22} className="shrink-0 text-ok" />
+  if (state.mode === 'stopped') return <CircleStop size={22} className="shrink-0 text-muted" />
   if (state.mode === 'error' && !state.confirm) return <CircleAlert size={22} className="shrink-0 text-danger" />
   if (state.mode === 'listening') return <Wave level={level} />
   return (

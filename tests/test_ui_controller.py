@@ -109,6 +109,7 @@ def test_state_matches_interface(world: SimpleNamespace) -> None:
         "name",
         "version",
         "voice",
+        "busy",
         "llm",
         "dry_run",
         "volume",
@@ -425,7 +426,7 @@ def test_level_meter_goes_to_settings_and_overlay(world: SimpleNamespace) -> Non
     controller = world.controller
     controller.attach_voice(FakeVoice())
     controller.level_meter(True)
-    thread = threading.Thread(target=controller.pump_levels, args=(0.01,), daemon=True)
+    thread = threading.Thread(target=controller.pump, args=(0.01,), daemon=True)
     thread.start()
     assert wait_until(lambda: any(kind == "level" for kind, _, _ in world.bus.events))
     controller.stop()
@@ -662,3 +663,60 @@ def test_update_page_opens_release(world: SimpleNamespace, monkeypatch: pytest.M
     world.controller.update_check()
     world.controller.update_open_page()
     assert opened == ["https://github.com/TyMaxiss/jarvis/releases", RELEASE.page]
+
+
+# --- Кнопка «Стоп» -----------------------------------------------------------------------
+
+
+def test_stop_button_stops_task_speech_and_questions(world: SimpleNamespace) -> None:
+    controller = world.controller
+    hooks: list[str] = []
+    world.pipeline.on_stop.append(lambda: hooks.append("речь"))
+    answers: list[bool] = []
+    asking = threading.Thread(
+        target=lambda: answers.append(controller.confirmer.ask("Удалить файл?", use_voice=False))
+    )
+    asking.start()
+    assert wait_until(lambda: world.bus.of("confirm"))
+    controller.voice_stop()
+    asking.join(2)
+    assert answers == [False] and hooks == ["речь"]
+    assert world.bus.of("stopped") == [{}]
+    assert world.pipeline._cancel.is_set()
+
+
+def test_typed_stop_is_a_stop_not_a_command(world: SimpleNamespace) -> None:
+    world.controller.send_text("Джарвис, стоп")
+    assert wait_until(lambda: world.bus.of("result"))
+    result = world.bus.of("result")[0]
+    assert result["phrase"] == "Джарвис, стоп" and result["reply"] == "Остановлено" and result["ok"]
+    assert world.bus.of("stopped") == [{}]
+
+
+class Talking:
+    """Озвучка: говорит, пока speaking."""
+
+    def __init__(self) -> None:
+        self.speaking = False
+
+
+def test_busy_reaches_main_window(world: SimpleNamespace) -> None:
+    # Кнопка микрофона становится «Стоп», пока идёт задача или ассистент говорит.
+    controller = world.controller
+    controller.speech = Talking()
+    assert controller.state()["busy"] is False
+    thread = threading.Thread(target=controller.pump, args=(0.01,), daemon=True)
+    thread.start()
+    try:
+        with world.pipeline._lock:  # задача из текста ещё выполняется
+            assert wait_until(lambda: world.bus.of("busy") == [{"busy": True}])
+            assert controller.state()["busy"] is True
+        assert wait_until(lambda: world.bus.of("busy")[-1] == {"busy": False})
+        controller.speech.speaking = True  # задача кончилась, а ответ ещё звучит
+        assert wait_until(lambda: world.bus.of("busy")[-1] == {"busy": True})
+        controller.speech.speaking = False
+        assert wait_until(lambda: world.bus.of("busy")[-1] == {"busy": False})
+    finally:
+        controller.stop()
+        thread.join(1)
+    assert all(to == ("main",) for kind, _, to in world.bus.events if kind == "busy")

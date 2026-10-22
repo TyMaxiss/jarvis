@@ -7,6 +7,7 @@ import {
   Pause,
   Play,
   Sparkles,
+  Square,
   Timer,
   Volume2,
   VolumeX,
@@ -39,14 +40,19 @@ export function Home({ state, onOpenSettings }: { state: AppState; onOpenSetting
 function Hero({ state }: { state: AppState }) {
   const voice = state.voice
   const listening = isListening(voice.state)
-  const busy = voice.loading || voice.state === 'recognizing' || voice.state === 'processing'
+  const working = voice.state === 'recognizing' || voice.state === 'processing'
+  const busy = voice.loading || working
+  // Пока ассистент слушает, выполняет задачу или говорит, кнопка его останавливает (как Ctrl+Alt+Q).
+  const stoppable = listening || working || state.busy
+  const label = stoppable ? 'Остановить' : 'Слушать команду'
   return (
     <Card className="flex items-center gap-7 p-7">
       <button
         type="button"
-        aria-label="Слушать команду"
-        disabled={!voice.enabled || voice.paused}
-        onClick={() => void call('voice_listen')}
+        aria-label={label}
+        title={label}
+        disabled={!stoppable && (!voice.enabled || voice.paused)}
+        onClick={() => void call(stoppable ? 'voice_stop' : 'voice_listen')}
         className={cx(
           'relative flex h-[88px] w-[88px] shrink-0 items-center justify-center rounded-full transition duration-200 ease-out',
           listening ? 'bg-accent text-white shadow-[0_0_40px_-6px_var(--accent)]' : 'bg-surface-2 text-text hover:bg-surface-3',
@@ -55,7 +61,13 @@ function Hero({ state }: { state: AppState }) {
       >
         {listening && <span className="animate-pulse-ring absolute inset-0 rounded-full border-2 border-accent" />}
         {busy && <span className="animate-spin-slow absolute inset-1 rounded-full border-2 border-transparent border-t-accent" />}
-        {voice.enabled && !voice.paused ? <Mic size={30} /> : <MicOff size={30} />}
+        {stoppable ? (
+          <Square size={24} fill="currentColor" />
+        ) : voice.enabled && !voice.paused ? (
+          <Mic size={30} />
+        ) : (
+          <MicOff size={30} />
+        )}
       </button>
       <div className="min-w-0 flex-1">
         <h1 className="font-display text-[22px] font-semibold tracking-tight">{voiceLabel(state)}</h1>
@@ -64,7 +76,7 @@ function Hero({ state }: { state: AppState }) {
             {voice.wake_word && `Скажите «${state.name}, …»`}
             {voice.wake_word && voice.push_to_talk_key && ' или нажмите '}
             {!voice.wake_word && voice.push_to_talk_key && 'Нажмите '}
-            {voice.push_to_talk_key && <Keys value={voice.push_to_talk_key} />}. Остановить —{' '}
+            {voice.push_to_talk_key && <Keys value={voice.push_to_talk_key} />}. Остановить — этой же кнопкой,{' '}
             <Keys value={voice.stop_key} /> или «стоп».
           </p>
         ) : voice.loading ? (

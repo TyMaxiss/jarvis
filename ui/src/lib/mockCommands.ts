@@ -52,7 +52,7 @@ export function createMockCommands(run: (phrase: string) => void): CommandsApi {
         slots: { percent: 'int' },
         reply: 'Громкость {percent}',
       }),
-      command('youtube_pause', ['пауза', 'стоп'], [{ action: 'hotkey', args: { keys: 'k' } }], {
+      command('youtube_pause', ['пауза', 'поставь на паузу'], [{ action: 'hotkey', args: { keys: 'k' } }], {
         when: { active_window_contains: ['YouTube'], active_process: [] },
       }),
     ],
