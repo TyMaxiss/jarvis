@@ -1,7 +1,9 @@
 // Оверлей «Сфера»: шар из синих слоёв дышит с голосом, под ним — карточка: что происходит, какие
 // слова слышно, что услышано и чем кончилось. Окно обрезано по кругу шара и карточке (windows.py,
-// ORB_SHAPE) и выезжает снизу, как плашка; внутренние слои при этом «распускаются» по событию
-// overlay. С «Эффектами прозрачности» Windows (glass) внешнее кольцо и карточка полупрозрачные.
+// ORB_SHAPE) и появляется на своём месте, раскрываясь из центра шара; внутренние слои при этом
+// «распускаются» по событию overlay. С «Эффектами прозрачности» Windows (glass) внешнее кольцо и
+// карточка полупрозрачные, а растёт из центра сама страница (.orb-pop); без них сферу кругом из
+// центра открывает окно.
 
 import { Check, CircleAlert, LoaderCircle, Mic, MicOff, ShieldQuestionMark, Square, X } from 'lucide-react'
 import { useEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
@@ -44,65 +46,67 @@ export function Orb({ state, level, present, glass = false, framed = false }: Pr
       // Клик прячет сферу (и итог команды, который она держит), если она не ждёт «Да / Нет».
       onClick={state.confirm ? undefined : () => void call('overlay_dismiss')}
     >
-      <div className="orb" aria-hidden="true">
-        <span className="orb-disc" />
-        <div className="orb-bloom">
-          <div className="orb-breath">
-            {LAYERS.map((layer, index) => (
-              <span
-                key={index}
-                className="orb-layer"
-                style={
-                  {
-                    '--size': `${layer.size * 100}%`,
-                    '--color': layer.color,
-                    '--gain': layer.gain,
-                    '--x': `${layer.x}px`,
-                    '--y': `${layer.y}px`,
-                    animationDuration: `${layer.period}s`,
-                    animationDelay: `${-index * 3.7}s`, // слои не в одной фазе с первого кадра
-                    animationDirection: layer.reverse ? 'reverse' : 'normal',
-                  } as CSSProperties
-                }
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="orb-card">
-        <div className="flex items-center gap-3">
-          <Badge mode={card.badge} />
-          <div className="min-w-0 flex-1 truncate text-[14px] text-muted">{card.status}</div>
-          <Dots state={voice ? 'voice' : card.badge === 'working' ? 'working' : 'still'} />
-        </div>
-        {state.confirm ? (
-          <div className="mt-auto flex items-end gap-3">
-            <div aria-live="polite" className="line-clamp-2 min-w-0 flex-1 text-[15px] leading-5 font-semibold text-text">
-              {card.text}
-            </div>
-            <div className="flex shrink-0 gap-1.5">
-              <button
-                type="button"
-                onClick={() => void call('confirm_answer', state.confirm!.id, true)}
-                className="h-8 rounded-lg bg-[#4486ff] px-3.5 text-[13px] font-medium text-white transition hover:brightness-110"
-              >
-                Да
-              </button>
-              <button
-                type="button"
-                onClick={() => void call('confirm_answer', state.confirm!.id, false)}
-                className="h-8 rounded-lg bg-surface-3 px-3.5 text-[13px] font-medium transition hover:bg-surface-2"
-              >
-                Нет
-              </button>
+      <div className="orb-pop">
+        <div className="orb" aria-hidden="true">
+          <span className="orb-disc" />
+          <div className="orb-bloom">
+            <div className="orb-breath">
+              {LAYERS.map((layer, index) => (
+                <span
+                  key={index}
+                  className="orb-layer"
+                  style={
+                    {
+                      '--size': `${layer.size * 100}%`,
+                      '--color': layer.color,
+                      '--gain': layer.gain,
+                      '--x': `${layer.x}px`,
+                      '--y': `${layer.y}px`,
+                      animationDuration: `${layer.period}s`,
+                      animationDelay: `${-index * 3.7}s`, // слои не в одной фазе с первого кадра
+                      animationDirection: layer.reverse ? 'reverse' : 'normal',
+                    } as CSSProperties
+                  }
+                />
+              ))}
             </div>
           </div>
-        ) : (
-          <>
-            <Phrase card={card} />
-            {card.line && <OutcomeLine outcome={card.line} />}
-          </>
-        )}
+        </div>
+        <div className="orb-card">
+          <div className="flex items-center gap-3">
+            <Badge mode={card.badge} />
+            <div className="min-w-0 flex-1 truncate text-[14px] text-muted">{card.status}</div>
+            <Dots state={voice ? 'voice' : card.badge === 'working' ? 'working' : 'still'} />
+          </div>
+          {state.confirm ? (
+            <div className="mt-auto flex items-end gap-3">
+              <div aria-live="polite" className="line-clamp-2 min-w-0 flex-1 text-[15px] leading-5 font-semibold text-text">
+                {card.text}
+              </div>
+              <div className="flex shrink-0 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void call('confirm_answer', state.confirm!.id, true)}
+                  className="h-8 rounded-lg bg-[#4486ff] px-3.5 text-[13px] font-medium text-white transition hover:brightness-110"
+                >
+                  Да
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void call('confirm_answer', state.confirm!.id, false)}
+                  className="h-8 rounded-lg bg-surface-3 px-3.5 text-[13px] font-medium transition hover:bg-surface-2"
+                >
+                  Нет
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Phrase card={card} />
+              {card.line && <OutcomeLine outcome={card.line} />}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

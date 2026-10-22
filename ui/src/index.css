@@ -166,6 +166,38 @@ body.overlay-window {
   outline: 1px dashed rgb(255 255 255 / 0.18);
 }
 
+/* Шар и карточка. С «Эффектами прозрачности» окно сферы появляется сразу на месте (slide.py,
+   неподвижный путь), а сфера растёт из центра шара и проявляется, уходя — наоборот; длительности —
+   как SHOW_TIME и HIDE_TIME в slide.py. Без прозрачности сферу кругом из центра открывает окно
+   (windows.py), а страница неподвижна: уменьшенная, она легла бы на чёрный фон окна. */
+.orb-pop {
+  position: absolute;
+  inset: 0;
+  transform-origin: 220px 206px;
+}
+
+.orb-glass .orb-pop {
+  animation: orb-pop-out 170ms cubic-bezier(0.32, 0, 0.67, 0) both;
+}
+
+.orb-glass.orb-present .orb-pop {
+  animation: orb-pop-in 220ms cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+
+@keyframes orb-pop-in {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+
+@keyframes orb-pop-out {
+  to {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+
 /* Шар 378×378, центр в (220, 206). */
 .orb {
   position: absolute;

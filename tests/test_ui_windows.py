@@ -80,6 +80,25 @@ def follow(hwnd: int, seconds: float) -> list[tuple[int, int]]:
     return path
 
 
+def reveal(hwnd: int, seconds: float) -> list[int]:
+    """Как раскрывается видимое окно: ширина его формы (региона) в каждом новом кадре."""
+    from assistant.actions import winapi
+
+    user32 = ctypes.WinDLL("user32")
+    user32.GetWindowRgnBox.restype = ctypes.c_int
+    user32.GetWindowRgnBox.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+    widths: list[int] = []
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        box = wintypes.RECT()
+        if winapi.api().IsWindowVisible(hwnd) and user32.GetWindowRgnBox(hwnd, ctypes.byref(box)):
+            width = box.right - box.left
+            if not widths or widths[-1] != width:
+                widths.append(width)
+        time.sleep(0.002)
+    return widths
+
+
 WS_POPUP, SWP_SHOWWINDOW, PM_REMOVE = 0x80000000, 0x40, 0x1
 WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80, 0x08000000
 MAGENTA = (255, 0, 255)
@@ -389,8 +408,8 @@ def test_windows_load_interface_and_talk_to_python(
                 personalize.set("EnableTransparency", 0)
                 time.sleep(0.6)  # уход доигран
                 controller.overlay.voice_state("listening")
-                wait(lambda: bool(winapi.api().IsWindowVisible(overlay)), 5)
-                time.sleep(1.2)  # выехала, слои распустились
+                results["opaque_reveal"] = reveal(overlay, 0.8)  # окно раскрывается кругом из центра
+                time.sleep(0.6)  # слои распустились
                 results["opaque_pixels"] = orb_pixels(win32.window_rect(overlay), scale, "overlay-orb-opaque")
                 controller.overlay.hide_now()
                 wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
@@ -473,9 +492,8 @@ def test_windows_load_interface_and_talk_to_python(
     assert near(after["disc"], GLASS_DISC), f"после смены настроек Windows кольцо не прозрачное: {after}"
     assert results["orb_hidden"] and results["orb_focus_kept"]
     assert tuple(results["orb_rect"][2:]) == results["orb_size"], results["orb_rect"]
-    rise = results["orb_rise"]
-    assert len(set(rise)) >= 3 and rise == sorted(rise, reverse=True), rise
-    assert rise[-1] == results["orb_rect"][1], rise
+    # Сфера не выезжает, а сразу на своём месте (растёт из центра сама страница), по форме шара.
+    assert set(results["orb_rise"]) == {results["orb_rect"][1]}, results["orb_path"]
     assert results["orb_path"][-1][1] == 3, f"на месте у окна сферы нет формы: {results['orb_path']}"
     assert all(near(pixels[point], MAGENTA) for point in ("corner", "beside", "ring")), (
         f"вокруг шара есть фон: {pixels}"
@@ -486,9 +504,11 @@ def test_windows_load_interface_and_talk_to_python(
     assert near(pixels["badge"], (68, 134, 255), 30), f"карточка не на месте (нет кружка микрофона): {pixels}"
     assert near(pixels["card"], GLASS_CARD), f"карточка не полупрозрачная: {pixels}"
     # Без «Эффектов прозрачности» — как в 0.7.3: окно по форме, но кольцо и карточка непрозрачные.
-    opaque = results["opaque_pixels"]
+    opaque, widths = results["opaque_pixels"], results["opaque_reveal"]
     with capsys.disabled():
-        print(f"Без «Эффектов прозрачности»: {opaque}")
+        print(f"Без «Эффектов прозрачности»: {opaque}; ширина формы при появлении: {widths}")
+    # Непрозрачную сферу окно раскрывает кругом из центра шара: форма растёт до полной.
+    assert len(widths) >= 3 and widths == sorted(widths) and widths[-1] >= 370 * results["scale"], widths
     assert all(near(opaque[point], MAGENTA) for point in ("corner", "beside", "ring")), opaque
     assert near(opaque["disc"], (30, 47, 81)), f"нет непрозрачного тёмно-синего диска: {opaque}"
     assert near(opaque["card"], (22, 24, 28), 8), f"нет непрозрачной тёмной карточки: {opaque}"

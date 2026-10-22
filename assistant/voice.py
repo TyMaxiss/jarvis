@@ -285,7 +285,7 @@ class VoiceLoop:
                 continue
             if borrowed:
                 borrowed = False
-                self._reset_audio_state()
+                self._interrupt_phrase()
             block = self._source.read(timeout=0.1)
             if block is None:
                 empty_reads += 1
@@ -308,7 +308,7 @@ class VoiceLoop:
         if speaking or (self.state is VoiceState.IDLE and self._busy is not None and self._busy()):
             if not self._stop_only:
                 self._stop_only = True
-                self._reset_audio_state()  # в речи ассистента и во время задачи ищем только «стоп»
+                self._interrupt_phrase()  # в речи ассистента и во время задачи ищем только «стоп»
             if self._stop_block(block, over_speech=speaking):
                 self._enter_idle()
             return
@@ -516,6 +516,16 @@ class VoiceLoop:
                 spotter.reset()
         # Фраза оборвалась (ассистент заговорил, микрофон занят подтверждением): слова — с экрана.
         self._forget_dictation()
+
+    def _interrupt_phrase(self) -> None:
+        """Звук оборвался посреди фразы (ассистент заговорил, микрофон занят подтверждением): фраза
+        ждётся заново. Иначе цикл остался бы в CAPTURING без её конца и без срока ожидания — а с ним
+        и оверлей «Слушаю…» на экране.
+        """
+        self._reset_audio_state()
+        if self.state is VoiceState.CAPTURING:
+            self._deadline_ms = self._clock_ms + self._listen_window_ms
+            self._set_state(VoiceState.LISTENING)
 
     def _dictate(self, block: np.ndarray) -> None:
         """Слова текущей фразы по ходу речи — в оверлей (partial), когда они изменились."""

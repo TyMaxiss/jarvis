@@ -111,6 +111,7 @@ class _Win32:
         self.SetWindowRgn = fn(user32, "SetWindowRgn", ctypes.c_int, hwnd, rgn, boolean)
         self.CreateRectRgn = fn(gdi32, "CreateRectRgn", rgn, *[ctypes.c_int] * 4)
         self.CreateRoundRectRgn = fn(gdi32, "CreateRoundRectRgn", rgn, *[ctypes.c_int] * 6)
+        self.CreateEllipticRgn = fn(gdi32, "CreateEllipticRgn", rgn, *[ctypes.c_int] * 4)
         self.CombineRgn = fn(gdi32, "CombineRgn", ctypes.c_int, rgn, rgn, rgn, ctypes.c_int)
         self.DeleteObject = fn(gdi32, "DeleteObject", boolean, wintypes.HGDIOBJ)
         self.SystemParametersInfoW = fn(
@@ -211,11 +212,17 @@ def clip_window(hwnd: int, width: int, height: int | None, radius: int = 0) -> N
         log.warning("Windows не приняла регион окна: ошибка %d", ctypes.get_last_error())
 
 
-def shape_window(hwnd: int, shapes: Sequence[Sequence[int]], height: int | None = None) -> None:
+def shape_window(
+    hwnd: int,
+    shapes: Sequence[Sequence[int]],
+    height: int | None = None,
+    circle: tuple[int, int, int] | None = None,
+) -> None:
     """Окно — только фигуры shapes, а ниже height физических пикселей от верха — ничего.
 
     Фигура — скруглённый прямоугольник: left, top, right, bottom (включительно) и радиус
-    скругления; радиус в полстороны — круг. None — по высоте не обрезать. Вне фигур окна нет:
+    скругления; радиус в полстороны — круг. None — по высоте не обрезать. circle (x, y, радиус) —
+    видна только часть фигур в этом круге (сфера раскрывается из центра). Вне фигур окна нет:
     там виден рабочий стол и проходят клики.
     """
     api = _api()
@@ -230,6 +237,11 @@ def shape_window(hwnd: int, shapes: Sequence[Sequence[int]], height: int | None 
         above = api.CreateRectRgn(0, 0, 0x7FFF, height)
         api.CombineRgn(region, region, above, RGN_AND)
         api.DeleteObject(above)
+    if circle is not None:
+        x, y, r = circle
+        inside = api.CreateEllipticRgn(x - r, y - r, x + r + 1, y + r + 1)
+        api.CombineRgn(region, region, inside, RGN_AND)
+        api.DeleteObject(inside)
     if not api.SetWindowRgn(hwnd, region, True):
         api.DeleteObject(region)  # принятым регионом владеет система, непринятый удаляем сами
         log.warning("Windows не приняла форму окна: ошибка %d", ctypes.get_last_error())

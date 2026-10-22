@@ -1,9 +1,9 @@
 """Окна pywebview: главное, оверлей без фокуса и быстрый чат.
 
-Оверлей показывается через WinAPI (без активации) и выезжает снизу (slide.py); окно сферы
-обрезано по форме шара и карточки, а с «Эффектами прозрачности» Windows ещё и смешивается
-с рабочим столом по альфа-каналу (полупрозрачные внешнее кольцо и карточка). Остальные окна —
-средствами pywebview.
+Оверлей показывается через WinAPI (без активации): плашка выезжает снизу, сфера раскрывается
+на своём месте из центра (slide.py). Окно сферы обрезано по форме шара и карточки, а с «Эффектами
+прозрачности» Windows ещё и смешивается с рабочим столом по альфа-каналу (полупрозрачные внешнее
+кольцо и карточка). Остальные окна — средствами pywebview.
 Окна без рамки: перетаскивание — за элементы с классом pywebview-drag-region, размер —
 уголком в интерфейсе, «развернуть» — на рабочую область монитора.
 """
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -34,6 +35,16 @@ OVERLAY_RADIUS = 8  # скругление углов окна в Windows 11, л
 # заливка формы. Скруглённые прямоугольники: left, top, right, bottom (включительно), радиус
 # скругления (радиус в полстороны — круг). Вне формы окна нет: ни фона, ни кликов.
 ORB_SHAPE = ((31, 17, 408, 394, 189), (41, 266, 398, 391, 18))
+ORB_CENTER = ((31 + 409) / 2, (17 + 395) / 2)  # центр шара: из него сфера раскрывается
+# Круг такого радиуса вокруг центра шара открывает всю форму окна: дальше всего — углы карточки.
+ORB_REACH = math.ceil(
+    max(
+        math.hypot(x - ORB_CENTER[0], y - ORB_CENTER[1])
+        for left, top, right, bottom, _ in ORB_SHAPE[1:]
+        for x in (left, right + 1)
+        for y in (top, bottom + 1)
+    )
+)
 # Фон окна до загрузки страницы — как у интерфейса, чтобы не мигало белым.
 BACKGROUNDS = {"dark": ("#0F1013", "#15161A"), "light": ("#F6F6F8", "#FFFFFF")}
 
@@ -91,7 +102,8 @@ class Windows:
         self._overlay_style = overlay_style if overlay_style in OVERLAY_SIZES else "classic"
         self._overlay_look = "classic"  # каким окно оверлея сделано сейчас: непрозрачным, скруглённым
         self._overlay_shape: tuple[tuple[int, ...], ...] | None = None  # форма окна сферы, пиксели
-        self._overlay_region: int | None = None  # сколько пикселей окна над краем видно сейчас
+        self._overlay_circle = (0, 0, 0)  # центр шара и радиус, открывающий всю форму, пиксели
+        self._overlay_region: tuple[Any, ...] | None = None  # как окно обрезано сейчас
         self._appear_style = self._overlay_style  # оформление, с которым оверлей показан сейчас
         self._glass_wanted = False  # оверлей показан полупрозрачным (так сказано и странице)
         self._overlay_glass = False  # окно оверлея сейчас смешивается с рабочим столом
@@ -258,8 +270,8 @@ class Windows:
         return style == "orb" and self._glass_works and self._win32.transparency_enabled()
 
     def _overlay_appear(self) -> Track:
-        """Ставит оверлей внизу по центру монитора с курсором — за краем, невидимым — и показывает
-        без фокуса. Окно сферы — только форма шара и карточки (ORB_SHAPE)."""
+        """Ставит оверлей внизу по центру монитора с курсором — плашку за краем, сферу на место, обе
+        невидимыми — и показывает без фокуса. Окно сферы — только форма шара и карточки (ORB_SHAPE)."""
         hwnd, style = self._handle("overlay"), self._appear_style
         # Без подложки Windows (Mica) — на случай, если pywebview поставил её снова — и без фокуса:
         # пользователь продолжает печатать в своём окне.
@@ -273,12 +285,20 @@ class Windows:
         x, top = self._win32.bottom_center((width, height), area, round(OVERLAY_MARGIN * scale))
         if self._win32.window_size(hwnd) != (width, height):
             self._win32.set_bounds(hwnd, x, top, width, height)
-        radius = round(OVERLAY_RADIUS * scale) if self._win32.rounds_corners() else 0
-        self._overlay_shape = scaled_shape(ORB_SHAPE, scale) if style == "orb" else None
-        track = Track(x, top, area[3], width, height, radius)
-        self._overlay_region = -1  # окно могло остаться обрезанным иначе — ставим заново
-        self._clip_overlay(hwnd, track, 0)
-        self._win32.show_without_focus(hwnd, x, track.edge)
+        if style == "orb":
+            # Сфера не едет, а раскрывается на месте из центра шара: путь неподвижный.
+            track = Track(x, top, top, width, height)
+            self._overlay_shape = scaled_shape(ORB_SHAPE, scale)
+            center_x, center_y = ORB_CENTER
+            reach = math.ceil(ORB_REACH * scale)
+            self._overlay_circle = (round(center_x * scale), round(center_y * scale), reach)
+        else:
+            radius = round(OVERLAY_RADIUS * scale) if self._win32.rounds_corners() else 0
+            track = Track(x, top, area[3], width, height, radius)
+            self._overlay_shape = None
+        self._overlay_region = None  # окно могло остаться обрезанным иначе — ставим заново
+        self._clip_overlay(hwnd, track, 0.0)
+        self._win32.show_without_focus(hwnd, x, track.y(0))
         return track
 
     def _apply_overlay_look(self, hwnd: int, style: str) -> None:
@@ -306,21 +326,32 @@ class Windows:
             self._glass_works = False
             log.warning("Windows не приняла прозрачность окна сферы — дальше она будет непрозрачной")
 
-    def _overlay_place(self, track: Track, y: int) -> None:
-        """Кадр анимации: оверлей сдвинут, а то, что ниже края рабочей области, обрезано."""
+    def _overlay_place(self, track: Track, shown: float) -> None:
+        """Кадр анимации: плашка сдвинута, а то, что ниже края рабочей области, обрезано; сфера
+        раскрыта на долю shown."""
         hwnd = self._handle("overlay")
-        self._win32.move_window(hwnd, track.x, y)
-        self._clip_overlay(hwnd, track, track.visible(y))
+        if not track.still:
+            self._win32.move_window(hwnd, track.x, track.y(shown))
+        self._clip_overlay(hwnd, track, shown)
 
-    def _clip_overlay(self, hwnd: int, track: Track, visible: int | None) -> None:
-        """Видны только visible пикселей оверлея сверху (None — всё), а у сферы — только её форма."""
-        if visible == self._overlay_region:  # обрезано так же: регион не трогаем
+    def _clip_overlay(self, hwnd: int, track: Track, shown: float) -> None:
+        """Обрезает окно под долю появления shown: у плашки видна полоса над краем рабочей области,
+        у сферы — её форма в круге из центра шара.
+
+        Полупрозрачную сферу раскрывает сама страница (растёт из центра и проявляется), окну — вся
+        форма сразу. Непрозрачную — круг: уменьшенная страница легла бы на чёрный фон окна.
+        """
+        if self._overlay_shape is None:
+            visible = track.visible(track.y(shown))
+            if ("panel", visible) != self._overlay_region:  # обрезано так же — регион не трогаем
+                self._win32.clip_window(hwnd, track.width, visible, track.radius)
+                self._overlay_region = ("panel", visible)
             return
-        if self._overlay_shape is not None:
-            self._win32.shape_window(hwnd, self._overlay_shape, visible)
-        else:
-            self._win32.clip_window(hwnd, track.width, visible, track.radius)
-        self._overlay_region = visible
+        x, y, reach = self._overlay_circle
+        circle = None if self._overlay_glass or shown >= 1 else (x, y, round(reach * shown))
+        if ("orb", circle) != self._overlay_region:
+            self._win32.shape_window(hwnd, self._overlay_shape, None, circle)
+            self._overlay_region = ("orb", circle)
 
     def visible(self, name: str) -> bool:
         return self._visible[name]

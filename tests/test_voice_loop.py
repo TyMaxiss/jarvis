@@ -182,6 +182,27 @@ def test_live_words_are_cleared_when_assistant_starts_speaking() -> None:
     assert partials[:2] == ["сделай", "сделай громче"] and partials[-1] == ""
 
 
+def test_phrase_cut_by_assistant_speech_does_not_leave_loop_capturing() -> None:
+    # Посреди фразы заговорил ассистент (напоминание, сигнал на медленном устройстве), а после — тишина:
+    # цикл снова ждёт фразу и по сроку уходит в покой, а не «слушает» бесконечно (оверлей висел бы).
+    settings = VoiceSettings(followup_seconds=2, listen_timeout=2)
+    audio = np.concatenate([silence(300), speech(WAKE, 500), silence(1000), speech(5002, 800), silence(4000)])
+    h = Harness(audio, settings=settings)
+    read = h.source.read
+
+    def read_and_speak(timeout: float) -> np.ndarray | None:
+        block = read(timeout)
+        if h.source.reads == 68:  # фраза ещё говорится
+            h.speech.remaining = 40
+        return block
+
+    h.source.read = read_and_speak  # type: ignore[method-assign]
+    h.run()
+    states = [state for state, _ in h.status.events if state in ("listening", "capturing", "idle")]
+    assert states[-1] == "idle", states
+    assert h.loop.state is VoiceState.IDLE and not h.handled
+
+
 def test_command_said_during_chime_is_not_cut() -> None:
     # Пауза после имени чуть дольше min_silence_ms (500 мс в Harness): имя — отдельная фраза,
     # звучит сигнал, а команду начинают сразу, не дожидаясь его конца.

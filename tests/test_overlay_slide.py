@@ -39,6 +39,7 @@ class Screen:
         self.calls: list[Any] = []  # "appear", y (кадр), "vanish"
         self.at_frame: dict[int, Callable[[], None]] = {}  # что сделать на кадре с номером
         self.fail: set[str] = set()  # какие вызовы окна упадут (по одному разу)
+        self.fractions: list[float] = []  # доля пути в каждом кадре
 
     def _call(self, name: str) -> None:
         if name in self.fail:
@@ -50,10 +51,11 @@ class Screen:
         self.calls.append("appear")
         return self.track
 
-    def place(self, track: Track, y: int) -> None:
+    def place(self, track: Track, shown: float) -> None:
         assert track is self.track
         self._call("place")
-        self.calls.append(y)
+        self.calls.append(track.y(shown))
+        self.fractions.append(shown)
 
     def vanish(self) -> None:
         self._call("vanish")
@@ -365,41 +367,59 @@ def test_overlay_slides_in_and_out(desktop: list[tuple[Any, ...]]) -> None:
     host.quit()
 
 
-def test_orb_window_is_shaped_like_orb_and_card_and_slides_in(desktop: list[tuple[Any, ...]]) -> None:
+def test_glass_orb_appears_in_place_and_the_page_grows_it(desktop: list[tuple[Any, ...]]) -> None:
     from assistant.ui.windows import ORB_SHAPE, scaled_shape
 
     shape = scaled_shape(ORB_SHAPE, 1.5)
     host, overlay = make_windows(animate=True, overlay_style="orb")
     host.show("overlay")
-    assert wait_for(lambda: ("move", 42, 630, 374) in desktop)
-    # Сфера 440×420 при 150 % — 660×630; окно — только круг шара и карточка, выезжает снизу.
-    assert desktop[:7] == [
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
+    time.sleep(SHOW_TIME + 0.1)
+    # Сфера 440×420 при 150 % — 660×630: окно сразу на месте и целиком по форме шара и карточки,
+    # а растёт из центра и проявляется сама страница — окно полупрозрачное.
+    assert desktop == [
         ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("corners", 42, False),  # прямые углы без рамки: окно и так по форме шара
         ("glass", 42, True),  # смешивается с рабочим столом: кольцо и карточка полупрозрачные
         ("bounds", 42, 630, 374, 660, 630),
-        ("shape", 42, shape, 0),  # до показа: не видно ничего
-        ("show", 42, 630, 1040),
+        ("shape", 42, shape, None, None),
+        ("show", 42, 630, 374),
     ]
-    heights = [call[3] for call in desktop if call[0] == "shape"]
-    assert heights[-1] is None and heights.count(None) == 1, "на месте — форма целиком, один раз"
-    visible = [height for height in heights if height is not None]
-    assert all(a < b for a, b in pairwise(visible)) and visible[-1] < 630
-    assert all(call[2] == shape for call in desktop if call[0] == "shape")
-    assert not [call for call in desktop if call[0] == "clip"], "у сферы нет прямоугольной обрезки"
+    host.hide("overlay")
+    assert wait_for(lambda: overlay.hidden == 1)
+    assert not [call for call in desktop if call[0] in ("move", "clip")], "сфера не ездит"
+    host.quit()
+
+
+def test_opaque_orb_opens_from_its_centre_and_closes_back(desktop: list[tuple[Any, ...]]) -> None:
+    from assistant.ui.windows import ORB_SHAPE, scaled_shape
+
+    Look.transparency = False  # без «Эффектов прозрачности» уменьшенная страница легла бы на чёрный
+    shape = scaled_shape(ORB_SHAPE, 1.5)
+    host, overlay = make_windows(animate=True, overlay_style="orb")
+    host.show("overlay")
+    assert wait_for(lambda: ("shape", 42, shape, None, None) in desktop)
+    # Круг из центра шара (330, 309 при 150 %) растёт, пока не откроет всю форму окна.
+    circles = [call[4] for call in desktop if call[0] == "shape"]
+    assert circles[0] == (330, 309, 0), "до показа не видно ничего"
+    radii = [circle[2] for circle in circles[:-1]]
+    assert len(radii) >= 5 and all(a < b for a, b in pairwise(radii)) and radii[-1] <= 389
+    assert circles[-1] is None and all(circle[:2] == (330, 309) for circle in circles[:-1])
+    assert ("show", 42, 630, 374) in desktop
+    assert not [call for call in desktop if call[0] in ("move", "clip", "glass")]
     desktop.clear()
     host.hide("overlay")
     assert wait_for(lambda: overlay.hidden == 1)
-    heights = [call[3] for call in desktop if call[0] == "shape"]
-    assert heights[-1] == 0 and all(a > b for a, b in pairwise(heights)), "уезжая, видна всё меньшая часть"
+    radii = [call[4][2] for call in desktop if call[0] == "shape"]
+    assert radii[-1] == 0 and all(a > b for a, b in pairwise(radii)), "уходя, круг сжимается к центру"
     host.quit()
 
 
 def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) -> None:
     host, overlay = make_windows(animate=False, overlay_style="orb")
     host.show("overlay")
-    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
     host.hide("overlay")
     assert wait_for(lambda: overlay.hidden == 1)
     desktop.clear()
@@ -426,7 +446,7 @@ def test_orb_is_opaque_without_transparency_effects(desktop: list[tuple[Any, ...
     Look.transparency = False  # «Эффекты прозрачности» выключены в Windows
     host.show("overlay")
     assert not host.overlay_glass(), "страница рисует сферу непрозрачной"
-    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
     assert not [call for call in desktop if call[0] == "glass"], "окно остаётся непрозрачным"
     host.quit()
 
@@ -435,14 +455,14 @@ def test_orb_is_opaque_if_windows_refuses_transparency(desktop: list[tuple[Any, 
     Look.accepts = False
     host, overlay = make_windows(animate=False, overlay_style="orb")
     host.show("overlay")
-    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
     assert ("glass", 42, True) in desktop
     host.hide("overlay")
     assert wait_for(lambda: overlay.hidden == 1)
     desktop.clear()
     host.show("overlay")  # больше не пробует: и окно, и страница — непрозрачные
     assert not host.overlay_glass()
-    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
     assert not [call for call in desktop if call[0] == "glass"]
     host.quit()
 
@@ -455,7 +475,7 @@ def test_overlay_shown_with_old_transparency_is_hidden_on_settings_change(
     host.on_overlay_stale = lambda: stale.append(True)
     host.show("overlay")
     assert host.overlay_glass()
-    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
+    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
     desktop.clear()
     host._settings_changed()  # что-то другое в настройках Windows — оверлей на месте
     assert stale == [] and desktop == [("no_backdrop", 42)]  # Mica снимается при каждой смене настроек
