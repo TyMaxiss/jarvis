@@ -978,3 +978,15 @@ def test_block_level() -> None:
     voice = (np.sin(np.linspace(0, 100, 512)) * 3000).astype(np.int16)  # обычная речь
     assert 0.3 < block_level(voice) < 0.7
     assert block_level(np.full(512, 32767, np.int16)) == 1.0
+
+
+def test_whisper_is_unloaded_on_close() -> None:
+    unloaded: list[bool] = []
+    stt = WhisperSTT(SttConfig(device="cpu"), Path("."))
+    stt._model = type(
+        "Model", (), {"model": type("CT2", (), {"unload_model": lambda self: unloaded.append(True)})()}
+    )()
+    stt.close()
+    assert unloaded == [True] and stt._model is None
+    stt.close()  # уже выгружена — ничего
+    assert unloaded == [True]

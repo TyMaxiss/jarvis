@@ -51,8 +51,9 @@ function reduceCommand(state: OverlayState, event: AssistantEvent): OverlayState
         // выполняется, не сбрасываем.
         return state.mode === 'working' ? state : { ...initialOverlay, last: state.last }
       }
-      // Новая фраза распознаётся: прошлой команде пора уступить место.
-      if (voice === 'recognizing') return { ...initialOverlay, mode: 'recognizing', words: state.words }
+      // Фраза распознаётся. Прошлая команда помнится: если это был шум и Whisper ничего не услышит,
+      // она снова будет видна, а не «Ничего не услышал»; новую фразу она уступит по recognized.
+      if (voice === 'recognizing') return { ...initialOverlay, mode: 'recognizing', words: state.words, last: state.last }
       if (voice === 'idle' || voice === 'paused' || voice === 'off') {
         // Не дождался фразы (или Whisper ничего не услышал): снова видна прошлая команда.
         return state.mode === 'listening' || state.mode === 'recognizing' ? { ...state, mode: 'idle', words: '' } : state

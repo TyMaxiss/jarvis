@@ -66,6 +66,7 @@ from assistant.tts.base import SilentSpeech, Speaker, SpeechQueue, TeeSpeaker, T
 if TYPE_CHECKING:
     from assistant.audio.capture import MicrophoneCapture
     from assistant.hotkeys import HotkeyManager
+    from assistant.stt.whisper_stt import WhisperSTT
     from assistant.voice import StatusSink, VoiceLoop
 
 log = logging.getLogger("assistant")
@@ -155,17 +156,21 @@ class VoiceRuntime:
         hotkeys: HotkeyManager,
         confirmer: VoiceConfirmer | None = None,
         wake_word: bool = False,
+        stt: WhisperSTT | None = None,
     ) -> None:
         self.capture = capture
         self.loop = loop
         self.hotkeys = hotkeys
         self.confirmer = confirmer
         self.wake_word = wake_word  # активация по имени работает
+        self.stt = stt
 
     def close(self) -> None:
         self.loop.close()
         self.hotkeys.close()
         self.capture.stop()
+        if self.stt is not None and not self.loop.alive:  # пока цикл распознаёт, модель не трогаем
+            self.stt.close()
 
 
 def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
@@ -469,7 +474,7 @@ def start_voice(
         raise
     stop_ways = f"{voice.stop_key} или «стоп»" if stop_spotter is not None else voice.stop_key
     out.write(f"Голос включён: {', '.join(ways)}. Прервать ответ или задачу — {stop_ways}.\n")
-    return VoiceRuntime(capture, loop, hotkeys, confirmer, wake_word=spotter is not None)
+    return VoiceRuntime(capture, loop, hotkeys, confirmer, wake_word=spotter is not None, stt=stt)
 
 
 # --- Запуск ---------------------------------------------------------------------------

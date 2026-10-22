@@ -531,6 +531,16 @@ class WhisperSTT:
         problem = open_problem(path)
         raise RuntimeError(f"{error}; model.bin {problem}" if problem else str(error)) from error
 
+    def close(self) -> None:
+        """Выгружает модель (память видеокарты освобождается сразу, а не при завершении процесса —
+        «Перезапустить» запускает новую копию раньше)."""
+        model, self._model = self._model, None
+        try:
+            if model is not None:
+                model.model.unload_model()
+        except Exception:
+            log.debug("Whisper не выгрузился", exc_info=True)
+
     def failure(self, error: BaseException) -> str:
         """Почему Whisper не загрузился — для окна: последняя ошибка и всё, что не вышло до неё
         (видеокарта, другие модели на процессоре)."""

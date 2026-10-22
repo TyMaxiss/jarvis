@@ -270,13 +270,24 @@ class VoiceLoop:
         if self._thread is not None:
             self._thread.join(timeout=5)
 
+    @property
+    def alive(self) -> bool:
+        """Поток цикла ещё работает (например, не дождались конца распознавания)."""
+        return self._thread is not None and self._thread.is_alive()
+
     def run(self, stop_when_exhausted: bool = False) -> None:
         """Основной цикл. stop_when_exhausted — для тестов: выйти, когда звук кончился."""
         self._enter_idle()
         empty_reads = 0
         borrowed = False
         while not self._stopped.is_set():
-            self.handle_events()
+            try:
+                self.handle_events()
+            except Exception:
+                # Как и в feed: ошибка распознавания или задачи по горячей клавише (удержание) не
+                # должна останавливать голос — иначе он молчит, а оверлей висит на «Распознаю…».
+                log.exception("Ошибка в голосовом цикле")
+                self._enter_idle()
             if self._mic_borrowed():
                 # Команда из текста или по горячей клавише спрашивает «да/нет» голосом:
                 # микрофон слушает подтверждение, а цикл ждёт.

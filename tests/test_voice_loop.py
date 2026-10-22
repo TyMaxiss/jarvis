@@ -203,6 +203,32 @@ def test_phrase_cut_by_assistant_speech_does_not_leave_loop_capturing() -> None:
     assert h.loop.state is VoiceState.IDLE and not h.handled
 
 
+def test_error_in_hold_mode_does_not_stop_voice() -> None:
+    # Удержание клавиш: фраза распознаётся в handle_events. Ошибка там (CUDA, задача) не должна убивать
+    # поток голоса — иначе он молчит, а оверлей висит на «Распознаю…».
+    settings = VoiceSettings(push_to_talk_mode="hold")
+    h = Harness(np.concatenate([silence(300), speech(5002, 600), silence(1500)]), settings=settings)
+
+    def broken(audio: np.ndarray) -> object:
+        raise RuntimeError("CUDA failed with error out of memory")
+
+    h.stt.transcribe = broken  # type: ignore[method-assign]
+    read = h.source.read
+
+    def read_and_hold(timeout: float) -> np.ndarray | None:
+        if h.source.reads == 2:
+            h.loop.hold_start()
+        elif h.source.reads == 40:
+            h.loop.hold_end()
+        return read(timeout)
+
+    h.source.read = read_and_hold  # type: ignore[method-assign]
+    h.run()  # без защиты исключение вылетело бы из run()
+    states = [state for state, _ in h.status.events]
+    assert "holding" in states and "recognizing" in states and states[-1] == "idle", states
+    assert h.loop.state is VoiceState.IDLE
+
+
 def test_command_said_during_chime_is_not_cut() -> None:
     # Пауза после имени чуть дольше min_silence_ms (500 мс в Harness): имя — отдельная фраза,
     # звучит сигнал, а команду начинают сразу, не дожидаясь его конца.

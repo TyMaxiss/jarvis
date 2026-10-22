@@ -88,10 +88,13 @@ describe('overlayReduce', () => {
     expect(overlayLines(state)).toEqual(['Громкость 60', '«громче»'])
     state = run([voice('listening'), voice('capturing'), partial('открой')], state) // снова «Джарвис»
     expect(overlayLines(state)).toEqual(['Открой', 'Слушаю…'])
-    state = run([voice('recognizing')], state) // новая фраза — прошлая команда уступает место
-    expect(state.last).toBeNull()
-    state = run([voice('idle')], state) // а Whisper ничего не услышал
-    expect(overlayLines(state)).toEqual(['Ничего не услышал', ''])
+    state = run([voice('recognizing')], state)
+    expect(overlayLines(state)).toEqual(['Открой', 'Распознаю…'])
+    state = run([voice('idle')], state) // Whisper ничего не услышал (шум) — снова видна прошлая команда
+    expect(overlayLines(state)).toEqual(['Громкость 60', '«громче»'])
+    state = run([voice('listening'), voice('recognizing'), { type: 'recognized', payload: { text: 'открой ютуб' } }], state)
+    expect(state.last).toBeNull() // новая команда — прошлая уступила место
+    expect(overlayLines(run([voice('listening'), voice('idle')]))).toEqual(['Ничего не услышал', ''])
 
     const working = run([{ type: 'recognized', payload: { text: 'громче' } }])
     expect(run([voice('capturing')], working)).toBe(working)
