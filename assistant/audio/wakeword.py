@@ -182,12 +182,15 @@ class Dictation:
     def __init__(self, model: Any) -> None:
         import vosk
 
-        self._recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+        self._new = lambda: vosk.KaldiRecognizer(model, SAMPLE_RATE)
+        self._recognizer = self._new()
+        self._fed = False  # распознаватель уже слышал звук
         self._done: list[str] = []  # куски фразы, которые Vosk уже закончил (после пауз)
         self._text = ""
 
     def accept(self, block: np.ndarray) -> str | None:
         """Подаёт блок звука. Возвращает услышанное с начала фразы, если оно изменилось."""
+        self._fed = True
         if self._recognizer.AcceptWaveform(block.astype(np.int16).tobytes()):
             if piece := _normalize(json.loads(self._recognizer.Result()).get("text", "")):
                 self._done.append(piece)
@@ -201,8 +204,11 @@ class Dictation:
         return text
 
     def reset(self) -> None:
-        """Новая фраза."""
-        self._recognizer.Reset()
+        """Новая фраза — со свежим распознавателем: Reset() у Vosk оставляет в конвейере признаков
+        хвост прошлой фразы, и он всплыл бы первым «словом» новой."""
+        if self._fed:
+            self._recognizer = self._new()
+            self._fed = False
         self._done, self._text = [], ""
 
 

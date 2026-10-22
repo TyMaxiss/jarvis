@@ -430,22 +430,40 @@ def test_phrase_without_name_is_ignored(
     assert run_loop(audio, vosk_model, stt) == ([], 0)  # ни команды, ни сигнала «слушаю»
 
 
-@pytest.mark.parametrize("phrase", ["Сделай громче", "Который час"])
-def test_dictation_shows_words_while_speaking(any_piper: PiperTTS, vosk_model: object, phrase: str) -> None:
-    # Оверлей показывает слова по ходу речи: первые — ещё до конца фразы, последние — вся фраза.
-    audio = say(any_piper, phrase)
-    dictation = Dictation(vosk_model)
+def dictate(dictation: Dictation, audio: np.ndarray) -> list[tuple[int, str]]:
+    """Слова по ходу речи, как их получит оверлей: (с какого отсчёта звука, текст)."""
     shown: list[tuple[int, str]] = []
     for start in range(0, len(audio) - 511, 512):
         text = dictation.accept(audio[start : start + 512])
         if text is not None:
             shown.append((start, text))
+    return shown
+
+
+@pytest.mark.parametrize(
+    "phrase", ["Сделай громче", "Который час", "Открой браузер и найди погоду на завтра"]
+)
+def test_dictation_shows_words_while_speaking(any_piper: PiperTTS, vosk_model: object, phrase: str) -> None:
+    # Оверлей показывает слова по ходу речи, в конце — вся фраза. У длинной фразы первые слова видны
+    # задолго до её конца (короткую Vosk успевает показать только под конец — это нормально).
+    audio = say(any_piper, phrase)
+    dictation = Dictation(vosk_model)
+    shown = dictate(dictation, audio)
     assert shown, "слов по ходу речи нет"
-    first, last = shown[0], shown[-1][1]
-    assert first[0] < len(audio) * 0.8, f"первые слова — только в конце фразы: {shown}"
-    assert phrase.lower().split()[-1][:5] in last, f"в конце нет последнего слова: {shown}"
+    assert phrase.lower().split()[-1][:5] in shown[-1][1], f"в конце нет последнего слова: {shown}"
+    if len(phrase.split()) > 3:
+        assert shown[0][0] < len(audio) * 0.6, f"первые слова — только в конце фразы: {shown}"
+        assert len({text for _, text in shown}) >= 3, f"слова не появлялись по ходу речи: {shown}"
+
+
+def test_dictation_starts_next_phrase_clean(any_piper: PiperTTS, vosk_model: object) -> None:
+    # Новая фраза — с чистого листа: хвост прошлой (Reset() у Vosk его не убирает) не всплывает словом.
+    dictation = Dictation(vosk_model)
+    dictate(dictation, say(any_piper, "Сделай громче"))
     dictation.reset()
-    assert dictation.accept(gap(0.1)[:512]) in (None, "")
+    assert dictation.accept(gap(0.1)[:512]) is None
+    shown = dictate(dictation, say(any_piper, "Который час"))
+    assert shown and shown[-1][1].startswith("котор"), f"перед новой фразой — хвост прошлой: {shown}"
 
 
 @pytest.mark.parametrize(

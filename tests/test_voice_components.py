@@ -343,6 +343,46 @@ def test_stop_spotter_has_no_soundalike_decoys(monkeypatch: pytest.MonkeyPatch) 
     assert spotter.decoys == ["час", "погода"]
 
 
+def test_dictation_reports_words_and_starts_each_phrase_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    import vosk
+
+    from assistant.audio.wakeword import Dictation
+
+    created: list[FakeDictationRecognizer] = []
+
+    class FakeDictationRecognizer:
+        """Vosk без грамматики: «слышит» слова по сценарию; True — кусок фразы закончен (пауза)."""
+
+        script = iter([("сделай", False), ("сделай гром", False), ("сделай громче", True), ("", False)])
+
+        def __init__(self, model: object, rate: int) -> None:
+            created.append(self)
+            self.text = ""
+
+        def AcceptWaveform(self, data: bytes) -> bool:
+            self.text, done = next(self.script, ("", False))
+            return done
+
+        def Result(self) -> str:
+            return json.dumps({"text": self.text})
+
+        def PartialResult(self) -> str:
+            return json.dumps({"partial": self.text})
+
+    monkeypatch.setattr(vosk, "KaldiRecognizer", FakeDictationRecognizer)
+    block = np.zeros(512, np.int16)
+    dictation = Dictation(object())
+    dictation.reset()  # ещё ничего не слышал — распознаватель тот же
+    assert len(created) == 1
+    assert [dictation.accept(block) for _ in range(4)] == ["сделай", "сделай гром", "сделай громче", None]
+    FakeDictationRecognizer.script = iter([("который", False)])
+    assert dictation.accept(block) == "сделай громче который"  # законченный кусок остаётся в начале
+    dictation.reset()
+    assert len(created) == 2  # Reset() у Vosk оставил бы хвост прошлой фразы — новый распознаватель
+    FakeDictationRecognizer.script = iter([("который", False)])
+    assert dictation.accept(block) == "который"
+
+
 def test_spot_result_find() -> None:
     result = SpotResult("джарвис [unk]", (("джарвис", 0.9), ("[unk]", 1.0)))
     assert result.find(["джарвис"], 0.8) == "джарвис"
