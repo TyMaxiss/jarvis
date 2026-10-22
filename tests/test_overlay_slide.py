@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from itertools import pairwise
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -182,20 +184,6 @@ def test_without_animation_window_jumps() -> None:
     assert screen.calls == ["appear", TRACK.top, "vanish"] and screen.frames == 0
 
 
-def test_still_window_appears_at_once_and_waits_before_hiding() -> None:
-    still = Track(x=630, top=374, edge=374, width=660, height=630)
-    screen = Screen(still)
-    slide = screen.slide()
-    slide.show()
-    assert wait_for(lambda: screen.calls == ["appear"])
-    time.sleep(0.05)
-    assert screen.frames == 0, "появление рисует страница — окно ждать нечего"
-    slide.hide()
-    assert wait_for(lambda: gone(screen))
-    assert screen.calls == ["appear", "vanish"]
-    assert abs(screen.frames * FRAME - HIDE_TIME) < FRAME, "уход ждёт полное время, пока его доигрывают"
-
-
 def test_requests_that_change_nothing_do_nothing() -> None:
     screen = Screen()
     slide = screen.slide()
@@ -285,6 +273,7 @@ def desktop(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
     monkeypatch.setattr(win32, "show_without_focus", record("show"))
     monkeypatch.setattr(win32, "move_window", record("move"))
     monkeypatch.setattr(win32, "clip_window", record("clip"))
+    monkeypatch.setattr(win32, "shape_window", record("shape"))
     monkeypatch.setattr(win32, "work_area", lambda: (0, 0, 1920, 1040))
     monkeypatch.setattr(win32, "dpi_scale", lambda hwnd: 1.5)
     monkeypatch.setattr(win32, "window_size", lambda hwnd: size[0])
@@ -348,30 +337,40 @@ def test_overlay_slides_in_and_out(desktop: list[tuple[Any, ...]]) -> None:
     host.quit()
 
 
-def test_orb_stands_in_place_in_transparent_window_and_waits_for_page(desktop: list[tuple[Any, ...]]) -> None:
+def test_orb_window_is_shaped_like_orb_and_card_and_slides_in(desktop: list[tuple[Any, ...]]) -> None:
+    from assistant.ui.windows import ORB_SHAPE
+
+    shape = tuple(tuple(round(side * 1.5) for side in part) for part in ORB_SHAPE)
     host, overlay = make_windows(animate=True, overlay_style="orb")
     host.show("overlay")
-    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
-    # Сфера 440×420 при 150 % — 660×630; окно сразу на месте: без обрезки и без сдвигов.
-    assert desktop == [
+    assert wait_for(lambda: ("move", 42, 630, 374) in desktop)
+    # Сфера 440×420 при 150 % — 660×630; окно — только круг шара и карточка, выезжает снизу.
+    assert desktop[:6] == [
         ("make_overlay", 42),
         ("transparent", 42, True),
-        ("corners", 42, False),  # прямые углы без рамки: у прозрачного окна их не видно
+        ("corners", 42, False),  # прямые углы без рамки: окно и так по форме шара
         ("bounds", 42, 630, 374, 660, 630),
-        ("show", 42, 630, 374),
+        ("shape", 42, shape, 0),  # до показа: не видно ничего
+        ("show", 42, 630, 1040),
     ]
-    started = time.monotonic()
+    heights = [call[3] for call in desktop if call[0] == "shape"]
+    assert heights[-1] is None and heights.count(None) == 1, "на месте — форма целиком, один раз"
+    visible = [height for height in heights if height is not None]
+    assert all(a < b for a, b in pairwise(visible)) and visible[-1] < 630
+    assert all(call[2] == shape for call in desktop if call[0] == "shape")
+    assert not [call for call in desktop if call[0] == "clip"], "у сферы нет прямоугольной обрезки"
+    desktop.clear()
     host.hide("overlay")
     assert wait_for(lambda: overlay.hidden == 1)
-    assert time.monotonic() - started >= HIDE_TIME - 0.01, "окно ждёт, пока страница доиграет уход"
-    assert [call[0] for call in desktop[5:]] == []
+    heights = [call[3] for call in desktop if call[0] == "shape"]
+    assert heights[-1] == 0 and all(a > b for a, b in pairwise(heights)), "уезжая, видна всё меньшая часть"
     host.quit()
 
 
 def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) -> None:
     host, overlay = make_windows(animate=False, overlay_style="orb")
     host.show("overlay")
-    assert wait_for(lambda: any(call[0] == "show" for call in desktop))
+    assert wait_for(lambda: any(call[0] == "move" for call in desktop))
     host.hide("overlay")
     assert wait_for(lambda: overlay.hidden == 1)
     desktop.clear()
@@ -390,3 +389,23 @@ def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) 
         ("clip", 42, 720, None, 12),
     ]
     host.quit()
+
+
+def test_orb_window_shape_matches_page_layout() -> None:
+    """Форма окна сферы совпадает с раскладкой страницы (ui/src/index.css): шар и карточка в ней."""
+    from assistant.ui.windows import ORB_SHAPE, OVERLAY_SIZES
+
+    css = (Path(__file__).resolve().parents[1] / "ui" / "src" / "index.css").read_text(encoding="utf-8")
+
+    def rule(selector: str) -> dict[str, int]:
+        body = re.search(re.escape(selector) + r" \{([^}]*)\}", css)
+        assert body, selector
+        return {key: int(value) for key, value in re.findall(r"([a-z-]+): (-?\d+)px;", body.group(1))}
+
+    stage, orb, card = rule(".orb-stage"), rule(".orb"), rule(".orb-card")
+    assert (stage["width"], stage["height"]) == OVERLAY_SIZES["orb"]
+    assert orb["width"] == orb["height"] and orb["left"] * 2 + orb["width"] == stage["width"]
+    assert card["left"] * 2 + card["width"] == stage["width"], "карточка по центру окна"
+    disc = (orb["left"] - 2, orb["top"] - 2, orb["left"] + orb["width"] + 1, orb["top"] + orb["height"] + 1)
+    box = (card["left"] - 1, card["top"] - 1, card["left"] + card["width"], card["top"] + card["height"])
+    assert ((*disc, orb["width"] // 2 + 2), (*box, card["border-radius"] + 1)) == ORB_SHAPE

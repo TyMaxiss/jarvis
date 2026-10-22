@@ -28,7 +28,8 @@ describe('Orb', () => {
     const stage = container.firstElementChild!
     expect(stage.classList.contains('orb-present')).toBe(true)
     expect(stage.getAttribute('data-mode')).toBe('listening')
-    expect(container.querySelectorAll('.orb-layer')).toHaveLength(5)
+    expect(container.querySelectorAll('.orb-disc')).toHaveLength(1) // внешний слой — неподвижный диск по форме окна
+    expect(container.querySelectorAll('.orb-layer')).toHaveLength(4)
     expect(container.querySelector('.orb-dots')!.getAttribute('data-state')).toBe('voice')
   })
 

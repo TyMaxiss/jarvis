@@ -12,7 +12,7 @@ import logging
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from ctypes import wintypes
 from typing import Any
 
@@ -34,7 +34,7 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 SW_SHOWNOACTIVATE = 4
 MONITOR_DEFAULTTONEAREST = 2
-RGN_AND = 1
+RGN_AND, RGN_OR = 1, 2
 SPI_GETCLIENTAREAANIMATION = 0x1042
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND, DWMWCP_ROUND = 1, 2
@@ -204,6 +204,29 @@ def clip_window(hwnd: int, width: int, height: int | None, radius: int = 0) -> N
         api.DeleteObject(rounded)
     if not api.SetWindowRgn(hwnd, clip, True):
         api.DeleteObject(clip)  # принятым регионом владеет система, непринятый удаляем сами
+
+
+def shape_window(hwnd: int, shapes: Sequence[Sequence[int]], height: int | None = None) -> None:
+    """Окно — только фигуры shapes, а ниже height физических пикселей от верха — ничего.
+
+    Фигура — скруглённый прямоугольник: left, top, right, bottom (включительно) и радиус
+    скругления; радиус в полстороны — круг. None — по высоте не обрезать. Вне фигур окна нет:
+    там виден рабочий стол и проходят клики.
+    """
+    api = _api()
+    if api is None or not hwnd:
+        return
+    region = api.CreateRectRgn(0, 0, 0, 0)
+    for left, top, right, bottom, radius in shapes:
+        part = api.CreateRoundRectRgn(left, top, right + 1, bottom + 1, 2 * radius, 2 * radius)
+        api.CombineRgn(region, region, part, RGN_OR)
+        api.DeleteObject(part)
+    if height is not None:
+        above = api.CreateRectRgn(0, 0, 0x7FFF, height)
+        api.CombineRgn(region, region, above, RGN_AND)
+        api.DeleteObject(above)
+    if not api.SetWindowRgn(hwnd, region, True):
+        api.DeleteObject(region)  # принятым регионом владеет система, непринятый удаляем сами
 
 
 def wait_frame() -> None:

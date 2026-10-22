@@ -1,6 +1,6 @@
-// Оверлей «Сфера»: шар из полупрозрачных синих слоёв дышит с голосом, под ним — карточка:
-// что происходит, что услышано и чем кончилось. Окно прозрачное, появление и уход рисует страница
-// по событию overlay; окно Python прячет, когда уход доигран.
+// Оверлей «Сфера»: шар из синих слоёв дышит с голосом, под ним — карточка: что происходит, что
+// услышано и чем кончилось. Окно обрезано по кругу шара и карточке (windows.py, ORB_SHAPE) и
+// выезжает снизу, как плашка; внутренние слои при этом «распускаются» по событию overlay.
 
 import { Check, CircleAlert, LoaderCircle, Mic, ShieldQuestionMark, Square, X } from 'lucide-react'
 import { useEffect, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
@@ -8,10 +8,10 @@ import { cx } from '../components/ui'
 import { call } from '../lib/bridge'
 import { orbCard, type Outcome, type OverlayState } from '../lib/overlay'
 
-// Слои шара снаружи внутрь: размер (доля шара), непрозрачность синего, насколько слой растёт с голосом,
-// период перетекания (с) и сдвиг от центра (пиксели) — слои не концентричны, как на эскизе.
+// Внешний слой — неподвижный диск по форме окна. Внутренние слои снаружи внутрь: размер (доля шара),
+// непрозрачность синего поверх диска, насколько слой растёт с голосом, период перетекания (с) и сдвиг
+// от центра (пиксели) — слои не концентричны, как на эскизе.
 const LAYERS = [
-  { size: 1, alpha: 0.26, gain: 0.03, period: 23, x: 0, y: 0 },
   { size: 0.82, alpha: 0.42, gain: 0.09, period: 19, x: -5, y: 3, reverse: true },
   { size: 0.64, alpha: 0.64, gain: 0.14, period: 16, x: 6, y: 1 },
   { size: 0.46, alpha: 0.8, gain: 0.21, period: 13, x: 9, y: -3, reverse: true },
@@ -40,25 +40,28 @@ export function Orb({ state, level, present, framed = false }: Props) {
       data-mode={mode}
     >
       <div className="orb" aria-hidden="true">
-        <div className="orb-breath">
-          {LAYERS.map((layer, index) => (
-            <span
-              key={index}
-              className="orb-layer"
-              style={
-                {
-                  '--size': `${layer.size * 100}%`,
-                  '--alpha': layer.alpha,
-                  '--gain': layer.gain,
-                  '--x': `${layer.x}px`,
-                  '--y': `${layer.y}px`,
-                  animationDuration: `${layer.period}s`,
-                  animationDelay: `${-index * 3.7}s`, // слои не в одной фазе с первого кадра
-                  animationDirection: layer.reverse ? 'reverse' : 'normal',
-                } as CSSProperties
-              }
-            />
-          ))}
+        <span className="orb-disc" />
+        <div className="orb-bloom">
+          <div className="orb-breath">
+            {LAYERS.map((layer, index) => (
+              <span
+                key={index}
+                className="orb-layer"
+                style={
+                  {
+                    '--size': `${layer.size * 100}%`,
+                    '--alpha': layer.alpha,
+                    '--gain': layer.gain,
+                    '--x': `${layer.x}px`,
+                    '--y': `${layer.y}px`,
+                    animationDuration: `${layer.period}s`,
+                    animationDelay: `${-index * 3.7}s`, // слои не в одной фазе с первого кадра
+                    animationDirection: layer.reverse ? 'reverse' : 'normal',
+                  } as CSSProperties
+                }
+              />
+            ))}
+          </div>
         </div>
       </div>
       <div className="orb-card">

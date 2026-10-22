@@ -78,34 +78,67 @@ def follow(hwnd: int, seconds: float) -> list[tuple[int, int]]:
     return path
 
 
-SS_WHITERECT, WS_POPUP, SWP_SHOWWINDOW, PM_REMOVE = 0x6, 0x80000000, 0x40, 0x1
+WS_POPUP, SWP_SHOWWINDOW, PM_REMOVE = 0x80000000, 0x40, 0x1
 WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80, 0x08000000
+MAGENTA = (255, 0, 255)
 
 
 class Backdrop:
-    """Белое окно (стандартный STATIC) в своём потоке: сквозь прозрачные места сферы виден он."""
+    """Пурпурное окно в своём потоке: где у сферы нет окна (или окно прозрачно), виден этот цвет.
+
+    Такого цвета нет ни в оформлении, ни в подложках Windows — его не спутать с фоном окна.
+    """
 
     def __init__(self, x: int, y: int, width: int, height: int) -> None:
         self._stop = threading.Event()
         ready = threading.Event()
         threading.Thread(target=self._run, args=(x, y, width, height, ready), daemon=True).start()
-        assert ready.wait(5), "белое окно не создалось"
+        assert ready.wait(5), "пурпурное окно не создалось"
 
     def _run(self, x: int, y: int, width: int, height: int, ready: threading.Event) -> None:
         from assistant.ui import win32
 
+        procedure_type = ctypes.WINFUNCTYPE(  # type: ignore[attr-defined]
+            ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+        )
+
+        class WNDCLASSEXW(ctypes.Structure):
+            _fields_ = (
+                ("cbSize", wintypes.UINT), ("style", wintypes.UINT), ("lpfnWndProc", procedure_type),
+                ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int), ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HICON), ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
+                ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR),
+                ("hIconSm", wintypes.HICON),
+            )  # fmt: skip
+
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        gdi32, kernel32 = ctypes.WinDLL("gdi32"), ctypes.WinDLL("kernel32")
+        user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        user32.DefWindowProcW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        user32.RegisterClassExW.argtypes = (ctypes.POINTER(WNDCLASSEXW),)
         user32.CreateWindowExW.restype = wintypes.HWND
         user32.CreateWindowExW.argtypes = (
             wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int, ctypes.c_int,
             ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
         )  # fmt: skip
+        gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        # Окно рисует стандартная процедура: фон — кистью класса, Python-обработчик не нужен.
+        procedure = procedure_type(ctypes.cast(user32.DefWindowProcW, ctypes.c_void_p).value)
+        instance = kernel32.GetModuleHandleW(None)
+        red, green, blue = MAGENTA
+        brush = gdi32.CreateSolidBrush(red | green << 8 | blue << 16)
+        name = "JarvisTestBackdrop"
+        window_class = WNDCLASSEXW(
+            ctypes.sizeof(WNDCLASSEXW), 0, procedure, 0, 0, instance, None, None, brush, None, name, None
+        )
+        user32.RegisterClassExW(ctypes.byref(window_class))
         hwnd = user32.CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "", WS_POPUP | SS_WHITERECT, x, y, width, height,
-            None, None, None, None,
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, name, "", WS_POPUP, x, y, width, height,
+            None, None, instance, None,
         )  # fmt: skip
         api = win32._api()
-        assert api is not None
+        assert api is not None and hwnd, f"CreateWindowExW: ошибка {ctypes.get_last_error()}"
         # Поверх обычных окон (но под оверлеем, он поверх всех) и без активации.
         api.SetWindowPos(hwnd, 0, x, y, width, height, win32.SWP_NOACTIVATE | SWP_SHOWWINDOW)
         ready.set()
@@ -135,12 +168,29 @@ def orb_pixels(rect: tuple[int, int, int, int], scale: float) -> dict[str, tuple
     def at(left: int, top: int) -> tuple[int, ...]:
         return tuple(shot.getpixel((round(left * scale), round(top * scale))))[:3]
 
-    # Логические координаты в окне 440×420: углы и край — мимо шара, середина шара, карточка.
-    return {"corner": at(6, 6), "side": at(4, 206), "orb": at(220, 150), "card": at(220, 360)}
+    # Логические координаты в окне 440×420 (ui/src/index.css): шар 378 в (31, 17), карточка
+    # 358×126 в (41, 266), кружок микрофона — центр в (70, 293), радиус 13.
+    return {
+        "corner": at(6, 6),  # мимо формы окна
+        "beside": at(14, 206),  # слева от круга
+        "ring": at(30, 206),  # в форме окна, но мимо шара: прозрачность Windows (только для сведения)
+        "disc": at(40, 206),  # внешний диск шара
+        "orb": at(220, 150),  # середина шара
+        "badge": at(61, 293),  # кружок микрофона слева от значка
+        "card": at(60, 372),  # карточка ниже круга шара
+    }
+
+
+def near(color: tuple[int, ...], expected: tuple[int, int, int], tolerance: int = 14) -> bool:
+    return all(abs(a - b) <= tolerance for a, b in zip(color, expected, strict=True))
 
 
 def test_windows_load_interface_and_talk_to_python(
-    tmp_path: Path, registry: ActionRegistry, store: CommandStore, matcher: Matcher
+    tmp_path: Path,
+    registry: ActionRegistry,
+    store: CommandStore,
+    matcher: Matcher,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import webview
 
@@ -209,7 +259,7 @@ def test_windows_load_interface_and_talk_to_python(
             results["overlay_fall"] = follow(overlay, 0.6)
             results["overlay_hidden"] = wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
 
-            # Сфера: окно 440×420 прозрачное — сквозь него видно белое окно под ним, кроме шара и карточки.
+            # Сфера: окно 440×420 — только круг шара и карточка; под ним пурпурное окно.
             controller.save_settings({"ui": {"overlay_style": "orb"}})
             scale = win32.dpi_scale(overlay)
             size = (int(440 * scale), int(420 * scale))
@@ -218,8 +268,8 @@ def test_windows_load_interface_and_talk_to_python(
             try:
                 before = winapi.api().GetForegroundWindow()
                 controller.overlay.voice_state("listening")
-                results["orb_visible"] = wait(lambda: bool(winapi.api().IsWindowVisible(overlay)), 5)
-                time.sleep(1.5)  # страница проигрывает появление
+                results["orb_rise"] = [y for y, _ in follow(overlay, 0.8)]
+                time.sleep(0.8)  # внутренние слои распускаются
                 results["orb_rect"] = win32.window_rect(overlay)
                 results["orb_focus_kept"] = winapi.api().GetForegroundWindow() == before
                 results["orb_pixels"] = orb_pixels(results["orb_rect"], scale)
@@ -287,15 +337,24 @@ def test_windows_load_interface_and_talk_to_python(
     assert len(set(fall)) >= 3 and fall == sorted(fall), results["overlay_fall"]
     assert place <= fall[0] and fall[-1] <= edge, results["overlay_fall"]
     assert any(kind for _, kind in results["overlay_fall"]), "уходя, оверлей не обрезался"
-    # Сфера: на месте, своего размера, без фокуса; прозрачная вокруг шара, синий шар, тёмная карточка.
-    assert results["orb_visible"] and results["orb_hidden"] and results["orb_focus_kept"]
-    assert tuple(results["orb_rect"][2:]) == results["orb_size"], results["orb_rect"]
+    # Сфера: выехала снизу на место своего размера, без фокуса; вне формы окна — пурпурное окно под
+    # ним, в форме — диск, синий шар, кружок микрофона и тёмная карточка там, где им положено быть.
     pixels = results["orb_pixels"]
-    print(f"Цвета сферы: {pixels}")
-    assert min(pixels["corner"]) >= 225 and min(pixels["side"]) >= 225, f"окно сферы не прозрачно: {pixels}"
+    with capsys.disabled():
+        print(f"\nЦвета сферы: {pixels}; путь: {results['orb_rise']}")
+    assert results["orb_hidden"] and results["orb_focus_kept"]
+    assert tuple(results["orb_rect"][2:]) == results["orb_size"], results["orb_rect"]
+    rise = results["orb_rise"]
+    assert len(set(rise)) >= 3 and rise == sorted(rise, reverse=True), rise
+    assert rise[-1] == results["orb_rect"][1], rise
+    assert near(pixels["corner"], MAGENTA) and near(pixels["beside"], MAGENTA), (
+        f"вокруг шара есть фон: {pixels}"
+    )
+    assert near(pixels["disc"], (30, 47, 81)), f"нет тёмно-синего диска шара: {pixels}"
     red, _, blue = pixels["orb"]
     assert blue >= 200 and blue - red >= 80, f"нет синего шара: {pixels}"
-    assert max(pixels["card"]) <= 140, f"нет тёмной карточки: {pixels}"
+    assert near(pixels["badge"], (68, 134, 255), 30), f"карточка не на месте (нет кружка микрофона): {pixels}"
+    assert max(pixels["card"]) <= 70, f"нет тёмной карточки: {pixels}"
     assert results["chat_visible"] and results["chat_hidden"]
     assert results["chat_command"] == "сделай громче"
     width, height = results["resized"]
