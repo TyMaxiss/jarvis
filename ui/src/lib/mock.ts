@@ -241,6 +241,7 @@ function makeState(): AppState {
       stop_key: 'ctrl+alt+q',
       loading: false,
       problem: '',
+      failed: false,
       step: '',
       progress: null,
     },

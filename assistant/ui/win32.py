@@ -40,6 +40,7 @@ DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND, DWMWCP_ROUND = 1, 2
 DWMWA_BORDER_COLOR = 34
 DWMWA_COLOR_NONE, DWMWA_COLOR_DEFAULT = 0xFFFFFFFE, 0xFFFFFFFF
+DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE = 38, 1
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x8, 0x4000
@@ -312,6 +313,21 @@ def round_corners(hwnd: int, rounded: bool = True) -> None:
     )
     border = wintypes.DWORD(DWMWA_COLOR_DEFAULT if rounded else DWMWA_COLOR_NONE)
     api.DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ctypes.byref(border), ctypes.sizeof(border))
+
+
+def remove_backdrop(hwnd: int) -> bool:
+    """Без системной подложки окна (Mica): возвращает, приняла ли Windows (до Windows 11 22H2 — нет).
+
+    pywebview в тёмной теме Windows ставит Mica всем своим окнам. У окна, которое не активно
+    (оверлей не забирает фокус), Mica — сплошная заливка во весь прямоугольник окна, и форму окна
+    (SetWindowRgn) она не учитывает.
+    """
+    api = _api()
+    if api is None or not hwnd:
+        return False
+    backdrop = ctypes.c_int(DWMSBT_NONE)
+    size = ctypes.sizeof(backdrop)
+    return api.DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(backdrop), size) == 0
 
 
 def bring_to_front(hwnd: int) -> bool:

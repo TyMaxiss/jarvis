@@ -6,6 +6,7 @@ import {
   MicOff,
   Pause,
   Play,
+  RotateCcw,
   Sparkles,
   Square,
   Timer,
@@ -83,11 +84,17 @@ function Hero({ state }: { state: AppState }) {
           <LoadingNote step={voice.step} progress={voice.progress} />
         ) : (
           <p className="mt-1.5 flex items-center gap-2 text-[13px] text-warn">
-            <CircleAlert size={15} />
+            <CircleAlert size={15} className="shrink-0" />
             {voice.problem || 'Голос выключен в настройках'}
           </p>
         )}
       </div>
+      {voice.failed && (
+        // Голос не запустился: перезапуск часто помогает — одной кнопкой, без выхода из трея.
+        <Button variant="subtle" icon={<RotateCcw size={15} />} onClick={() => void call('restart')}>
+          Перезапустить
+        </Button>
+      )}
       {voice.enabled && (
         <Button
           variant="subtle"

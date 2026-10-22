@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import shutil
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterator
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any
@@ -154,7 +156,9 @@ class Backdrop:
         self._stop.set()
 
 
-def orb_pixels(rect: tuple[int, int, int, int], scale: float) -> dict[str, tuple[int, ...]]:
+def orb_pixels(
+    rect: tuple[int, int, int, int], scale: float, name: str = "overlay-orb"
+) -> dict[str, tuple[int, ...]]:
     """Снимок окна сферы с экрана (в артефакт CI, если задан JARVIS_SCREENSHOTS) и цвета в его точках."""
     from PIL import ImageGrab
 
@@ -163,7 +167,7 @@ def orb_pixels(rect: tuple[int, int, int, int], scale: float) -> dict[str, tuple
     folder = os.environ.get("JARVIS_SCREENSHOTS")
     if folder:
         Path(folder).mkdir(parents=True, exist_ok=True)
-        shot.save(Path(folder) / "overlay-orb.png")
+        shot.save(Path(folder) / f"{name}.png")
 
     def at(left: int, top: int) -> tuple[int, ...]:
         return tuple(shot.getpixel((round(left * scale), round(top * scale))))[:3]
@@ -185,12 +189,76 @@ def near(color: tuple[int, ...], expected: tuple[int, int, int], tolerance: int 
     return all(abs(a - b) <= tolerance for a, b in zip(color, expected, strict=True))
 
 
+DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE, DWMSBT_MAINWINDOW = 38, 1, 2  # подложка окна: нет, Mica
+HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x001A, 0x0002
+
+
+def backdrop_type(hwnd: int) -> int | None:
+    """Какая у окна подложка Windows (DWMWA_SYSTEMBACKDROP_TYPE); None — Windows не сказала."""
+    value = ctypes.c_int()
+    result = ctypes.WinDLL("dwmapi").DwmGetWindowAttribute(
+        wintypes.HWND(hwnd), DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(value), ctypes.sizeof(value)
+    )
+    return value.value if result == 0 else None
+
+
+def set_backdrop_type(hwnd: int, kind: int) -> None:
+    value = ctypes.c_int(kind)
+    ctypes.WinDLL("dwmapi").DwmSetWindowAttribute(
+        wintypes.HWND(hwnd), DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(value), ctypes.sizeof(value)
+    )
+
+
+def broadcast_settings_change() -> None:
+    """Как при смене настроек Windows: WM_SETTINGCHANGE всем окнам (SystemEvents.UserPreferenceChanged)."""
+    user32 = ctypes.WinDLL("user32")
+    user32.SendMessageTimeoutW.argtypes = (
+        wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPCWSTR, wintypes.UINT, wintypes.UINT,
+        ctypes.POINTER(ctypes.c_size_t),
+    )  # fmt: skip
+    answer = ctypes.c_size_t()
+    user32.SendMessageTimeoutW(
+        HWND_BROADCAST, WM_SETTINGCHANGE, 0, "ImmersiveColorSet", SMTO_ABORTIFHUNG, 3000, ctypes.byref(answer)
+    )
+
+
+@pytest.fixture
+def dark_app_mode() -> Iterator[Callable[[], None]]:
+    """Тёмная тема приложений Windows, как у пользователя: pywebview тогда ставит окнам подложку Mica.
+
+    Отдаёт функцию, которая возвращает прежнюю тему (её зовёт и сторож теста перед аварийным выходом).
+    """
+    import winreg
+
+    path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+        try:
+            before: int | None = winreg.QueryValueEx(key, "AppsUseLightTheme")[0]
+        except FileNotFoundError:
+            before = None
+        winreg.SetValueEx(key, "AppsUseLightTheme", 0, winreg.REG_DWORD, 0)
+
+    def restore() -> None:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+            if before is None:
+                with contextlib.suppress(FileNotFoundError):
+                    winreg.DeleteValue(key, "AppsUseLightTheme")
+            else:
+                winreg.SetValueEx(key, "AppsUseLightTheme", 0, winreg.REG_DWORD, before)
+
+    try:
+        yield restore
+    finally:
+        restore()
+
+
 def test_windows_load_interface_and_talk_to_python(
     tmp_path: Path,
     registry: ActionRegistry,
     store: CommandStore,
     matcher: Matcher,
     capsys: pytest.CaptureFixture[str],
+    dark_app_mode: Callable[[], None],
 ) -> None:
     import webview
 
@@ -264,7 +332,7 @@ def test_windows_load_interface_and_talk_to_python(
             scale = win32.dpi_scale(overlay)
             size = (int(440 * scale), int(420 * scale))
             ox, oy = win32.bottom_center(size, win32.work_area(), round(24 * scale))
-            backdrop = Backdrop(ox - 20, oy - 20, size[0] + 40, size[1] + 40)
+            under = Backdrop(ox - 20, oy - 20, size[0] + 40, size[1] + 40)
             try:
                 before = winapi.api().GetForegroundWindow()
                 controller.overlay.voice_state("listening")
@@ -274,10 +342,24 @@ def test_windows_load_interface_and_talk_to_python(
                 results["orb_rect"] = win32.window_rect(overlay)
                 results["orb_focus_kept"] = winapi.api().GetForegroundWindow() == before
                 results["orb_pixels"] = orb_pixels(results["orb_rect"], scale)
+                main_hwnd = windows._handle("main")
+                results["backdrops"] = (backdrop_type(overlay), backdrop_type(main_hwnd))
+                # Для сведения — так было у пользователя: подложка Mica, которую ставит pywebview.
+                set_backdrop_type(overlay, DWMSBT_MAINWINDOW)
+                time.sleep(0.4)
+                results["mica_pixels"] = orb_pixels(results["orb_rect"], scale, "overlay-orb-mica")
+                # Настройки Windows изменились: pywebview снова ставит Mica всем окнам (главное — снова
+                # с Mica), а оверлей сразу после этого её снимает.
+                set_backdrop_type(main_hwnd, DWMSBT_NONE)
+                broadcast_settings_change()
+                wait(lambda: backdrop_type(main_hwnd) == DWMSBT_MAINWINDOW, 5)
+                time.sleep(0.4)
+                results["backdrops_after_change"] = (backdrop_type(overlay), backdrop_type(main_hwnd))
+                results["orb_pixels_after"] = orb_pixels(results["orb_rect"], scale, "overlay-orb-after")
                 controller.overlay.hide_now()
                 results["orb_hidden"] = wait(lambda: not winapi.api().IsWindowVisible(overlay), 5)
             finally:
-                backdrop.close()
+                under.close()
             results["orb_size"] = size
 
             # Быстрый чат: окно показывается, команда из него проходит через js_api в конвейер.
@@ -312,6 +394,7 @@ def test_windows_load_interface_and_talk_to_python(
         # Если окна так и не закрылись (WebView2 не запустился), тест не должен висеть до конца CI.
         if not finished.wait(180):
             print(f"Окна не закрылись за 180 с; результаты: {results}", flush=True)
+            dark_app_mode()  # os._exit не даст фикстуре вернуть тему
             os._exit(3)
 
     threading.Thread(target=watchdog, daemon=True).start()
@@ -345,6 +428,13 @@ def test_windows_load_interface_and_talk_to_python(
     pixels = results["orb_pixels"]
     with capsys.disabled():
         print(f"\nЦвета сферы: {pixels}; путь: {results['orb_rise']}")
+        print(f"Подложки (оверлей, главное): {results['backdrops']}, после смены настроек Windows: "
+              f"{results['backdrops_after_change']}; с Mica у оверлея: {results['mica_pixels']}")  # fmt: skip
+    # Тёмная тема: pywebview поставил главному окну Mica, у оверлея её нет — и после смены настроек.
+    expected = (DWMSBT_NONE, DWMSBT_MAINWINDOW)
+    assert results["backdrops"] == expected and results["backdrops_after_change"] == expected, results
+    after = results["orb_pixels_after"]
+    assert all(near(after[point], MAGENTA) for point in ("corner", "beside", "ring")), after
     assert results["orb_hidden"] and results["orb_focus_kept"]
     assert tuple(results["orb_rect"][2:]) == results["orb_size"], results["orb_rect"]
     rise = results["orb_rise"]

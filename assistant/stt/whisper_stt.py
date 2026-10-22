@@ -23,8 +23,8 @@ from typing import Any
 import numpy as np
 
 from assistant.config import SttConfig
-from assistant.frozen import cuda_dir
-from assistant.progress import Progress, watch_folder
+from assistant.frozen import cuda_dir, keep_dll_search
+from assistant.progress import Progress, megabytes, watch_folder
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +43,17 @@ _MAX_PROMPT_CHARS = 600
 # для проверки: свой маленький загрузчик с этим именем лежит в самом пакете ctranslate2 и
 # загружается при его импорте; cudnn_ops64_9.dll есть только в настоящем cuDNN 9.
 CUDA_LIBRARIES = ("cublas64_12.dll", "cudnn_ops64_9.dll")
+# DLL, которые CTranslate2 и cuBLAS подгружают по имени (через PATH) уже во время работы на
+# видеокарте: заранее загруженные по полному пути, они находятся и без PATH.
+PRELOADED_CUDA = ("cublasLt64_*.dll", "cublas64_*.dll", "nvrtc64_*.dll", "nvrtc-builtins64_*.dll")
+_LOAD_WITH_ALTERED_SEARCH_PATH = 0x8  # зависимости DLL — из её же папки
 # Какие файлы модели скачивает faster_whisper.utils.download_model (allow_patterns).
 WHISPER_FILES = ("config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.*")
 # Тишина по краям фразы: без неё Whisper иногда «съедает» первый звук («Делай» вместо «Сделай»).
 _PAD_SECONDS = 0.3
+# Файл модели есть, но не открылся (его держит другая программа, например антивирус): через
+# столько секунд — ещё одна попытка.
+OPEN_RETRY_PAUSE = 3.0
 
 
 def is_hallucination(text: str) -> bool:
@@ -105,13 +112,14 @@ def register_cuda_dlls() -> None:
     """
     if sys.platform != "win32":
         return
-    known = {os.path.normcase(part) for part in os.environ.get("PATH", "").split(os.pathsep)}
-    for bin_dir in cuda_dirs():
-        if os.path.normcase(str(bin_dir)) in known:
-            continue
-        os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
-        os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
-        log.debug("DLL CUDA: %s", bin_dir)
+    with keep_dll_search():  # иначе external_launch, вернув свой PATH, сотрёт добавленную папку
+        known = {os.path.normcase(part) for part in os.environ.get("PATH", "").split(os.pathsep)}
+        for bin_dir in cuda_dirs():
+            if os.path.normcase(str(bin_dir)) in known:
+                continue
+            os.add_dll_directory(str(bin_dir))  # type: ignore[attr-defined]
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            log.debug("DLL CUDA: %s", bin_dir)
 
 
 def missing_cuda_library() -> str:
@@ -124,11 +132,22 @@ def missing_cuda_library() -> str:
         return ""
     import ctypes
 
-    for name in CUDA_LIBRARIES:
-        try:
-            ctypes.WinDLL(name, winmode=0)
-        except OSError:
-            return name
+    with keep_dll_search():
+        # Загруженные здесь DLL остаются в процессе: дальше видеокарте не нужен PATH, который
+        # external_launch на миг меняет, — ни при создании модели, ни при распознавании.
+        for folder in cuda_dirs():
+            for pattern in PRELOADED_CUDA:
+                for path in sorted(folder.glob(pattern)):
+                    try:
+                        ctypes.WinDLL(str(path), winmode=_LOAD_WITH_ALTERED_SEARCH_PATH)
+                    except OSError as exc:
+                        log.info("DLL CUDA %s не загружается: %s", path, exc)
+        for name in CUDA_LIBRARIES:
+            try:
+                ctypes.WinDLL(name, winmode=0)
+            except OSError as exc:
+                log.info("DLL CUDA %s не загружается: %s", name, exc)
+                return name
     return ""
 
 
@@ -146,11 +165,33 @@ def default_cpu_threads() -> int:
 def cuda_available() -> bool:
     """Есть ли видеокарта, которую видит CTranslate2."""
     try:
-        import ctranslate2
+        with keep_dll_search():
+            import ctranslate2
 
-        return ctranslate2.get_cuda_device_count() > 0
+            return ctranslate2.get_cuda_device_count() > 0
     except Exception:
+        log.warning("CTranslate2 не смог проверить видеокарту", exc_info=True)
         return False
+
+
+def nvidia_driver_status() -> str:
+    """Что говорит о видеокарте сам драйвер NVIDIA ('' — драйвера нет): для лога, когда CTranslate2
+    видеокарту не видит."""
+    if sys.platform != "win32":
+        return ""
+    import ctypes
+
+    try:
+        driver = ctypes.WinDLL("nvcuda.dll")
+    except OSError:
+        return ""
+    count, version = ctypes.c_int(), ctypes.c_int()
+    if error := driver.cuInit(0):
+        return f"драйвер NVIDIA не запустил CUDA (cuInit: ошибка {error})"
+    driver.cuDeviceGetCount(ctypes.byref(count))
+    driver.cuDriverGetVersion(ctypes.byref(version))
+    cuda = f"{version.value // 1000}.{version.value % 1000 // 10}"
+    return f"драйвер NVIDIA видит видеокарт: {count.value}, CUDA {cuda}"
 
 
 def resolve_settings(config: SttConfig, has_cuda: bool) -> tuple[str, str, str]:
@@ -221,9 +262,41 @@ def cached_model(model: str, download_dir: Path) -> str | None:
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     try:
-        return str(download_model(model, cache_dir=str(download_dir), local_files_only=True))
+        path = str(download_model(model, cache_dir=str(download_dir), local_files_only=True))
     except LocalEntryNotFoundError:
         return None
+    # Скачанное snapshot_download сверяет со списком файлов, только если тот сохранился: без него
+    # папка оборванной загрузки (без model.bin) сошла бы за готовую. Файлы не удаляются: недостающее
+    # докачает fetch_model.
+    if not os.path.isfile(os.path.join(path, "model.bin")):
+        log.warning("В модели Whisper %s на диске нет model.bin (%s) — её надо докачать", model, path)
+        return None
+    return path
+
+
+def model_files(folder: str) -> str:
+    """Что лежит в папке модели (для лога): файлы, размеры, ссылки и открывается ли model.bin."""
+    parts = []
+    for path in sorted(Path(folder).iterdir()):
+        try:
+            size = megabytes(path.stat().st_size)
+        except OSError as exc:
+            size = f"не прочитать ({exc})"
+        link = f" → {os.readlink(path)}" if path.is_symlink() else ""
+        parts.append(f"{path.name}: {size}{link}")
+    return f"{'; '.join(parts)}; model.bin {open_problem(folder) or 'открывается'}"
+
+
+def open_problem(folder: str) -> str:
+    """Почему model.bin не открывается на чтение ('' — открывается)."""
+    try:
+        with open(os.path.join(folder, "model.bin"), "rb") as file:
+            file.read(1)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 32:  # ERROR_SHARING_VIOLATION
+            return f"занят другой программой — часто это антивирус ({exc})"
+        return f"не открывается ({exc})"
+    return ""
 
 
 def fetch_model(model: str, download_dir: Path, out: Any) -> str:
@@ -236,9 +309,13 @@ def fetch_model(model: str, download_dir: Path, out: Any) -> str:
 
     try:
         with whisper_download_progress(model, download_dir, out):
-            return str(download_model(model, cache_dir=str(download_dir)))
+            path = str(download_model(model, cache_dir=str(download_dir)))
     except Exception as exc:
         raise ModelDownloadError(f"не удалось скачать модель Whisper {model} ({exc})") from exc
+    # Без связи с Hugging Face snapshot_download не падает, а отдаёт то, что есть на диске.
+    if not os.path.isfile(os.path.join(path, "model.bin")):
+        raise ModelDownloadError(f"не удалось скачать модель Whisper {model} (model.bin не скачался)")
+    return path
 
 
 def fetch_cuda_libraries(fetch: Callable[[], None]) -> str:
@@ -303,42 +380,79 @@ class WhisperSTT:
         self.model_name = ""
         self.device = ""
         self.cuda_problem = ""  # почему не на видеокарте, хотя она есть ('' — всё в порядке)
+        self.gpu_error = ""  # то же коротко — для сообщения, если не загрузился и процессор
 
     def load(self) -> None:
-        """Загружает модель: видеокарта, а если она не запускается — процессор (cuda_problem — почему)."""
+        """Загружает модель: видеокарта, а если она не запускается — процессор (cuda_problem — почему).
+
+        На процессоре — сначала своя модель, а если она не загрузится, то уже скачанная модель
+        для видеокарты: голос заработает без перезапуска.
+        """
         register_cuda_dlls()
         model, device, compute = resolve_settings(self._config, cuda_available())
-        self.cuda_problem = ""
-        if device == "cuda":
+        self.cuda_problem = self.gpu_error = ""
+        gpu_model = resolve_settings(self._config.model_copy(update={"device": "cuda"}), True)[0]
+        if device == "cpu":
+            chosen = self._config.device == "cpu"
+            if not chosen and (driver := nvidia_driver_status()):
+                log.warning("CTranslate2 не видит видеокарту (%s) — распознаю на процессоре", driver)
+            self._load_on_cpu(model, gpu_model, compute, prefer_on_disk=not chosen)
+            return
+        self.gpu_error = self._gpu_problem(model, compute)
+        if not self.gpu_error:
+            return
+        cpu_model = resolve_settings(self._config.model_copy(update={"device": "cpu"}), False)[0]
+        self._load_on_cpu(cpu_model, model, "int8", prefer_on_disk=True)
+
+    def _gpu_problem(self, model: str, compute: str) -> str:
+        """Загружает Whisper на видеокарту: '' — получилось, иначе — почему нет (cuda_problem — для людей)."""
+        missing = missing_cuda_library()
+        fetch_error: str | None = None
+        if missing and self._fetch_cuda is not None:
+            fetch_error = fetch_cuda_libraries(self._fetch_cuda)
             missing = missing_cuda_library()
-            fetch_error: str | None = None
-            if missing and self._fetch_cuda is not None:
-                fetch_error = fetch_cuda_libraries(self._fetch_cuda)
-                missing = missing_cuda_library()
-            if missing:
-                # Модель для видеокарты даже не загружаем: без DLL она не заработает.
-                self.cuda_problem = cuda_message(missing, fetch_error)
+        if missing:
+            # Модель для видеокарты даже не загружаем: без DLL она не заработает.
+            self.cuda_problem = cuda_message(missing, fetch_error)
+            log.warning("%s", self.cuda_problem)
+            return f"не загружается {missing}"
+        try:
+            self._load(model, "cuda", compute)
+            self._warm_up()  # часть ошибок CUDA видна только при распознавании
+        except Exception as exc:
+            self._model = None
+            log.warning("Whisper на видеокарте не запустился", exc_info=True)
+            reason = str(exc) or type(exc).__name__  # пустая причина значила бы «получилось»
+            self.cuda_problem = (
+                f"Whisper на видеокарте не запустился ({reason}) — распознаю на процессоре. "
+                "При следующем запуске снова попробую видеокарту."
+            )
+            return reason
+        return ""
+
+    def _load_on_cpu(self, model: str, spare: str, compute: str, *, prefer_on_disk: bool) -> None:
+        """Whisper на процессоре: model, а если она не загрузится — spare, если та уже скачана.
+
+        prefer_on_disk: процессор выбран не пользователем — если model ещё не скачана, а spare
+        на диске есть, сначала spare: ради процессора не стоит качать ещё полгигабайта.
+        """
+        candidates = [model]
+        if spare != model and cached_model(spare, self._download_dir):
+            if prefer_on_disk and not cached_model(model, self._download_dir):
+                candidates.insert(0, spare)
             else:
-                try:
-                    self._load(model, device, compute)
-                    self._warm_up()  # часть ошибок CUDA видна только при распознавании
-                    return
-                except Exception as exc:
-                    self._model = None
-                    log.warning("Whisper на видеокарте не запустился", exc_info=True)
-                    self.cuda_problem = (
-                        f"Whisper на видеокарте не запустился ({exc}) — распознаю на процессоре. "
-                        "При следующем запуске снова попробую видеокарту."
-                    )
-            log.info("%s", self.cuda_problem)
-            cpu_config = self._config.model_copy(update={"device": "cpu"})
-            cpu_model, device, _ = resolve_settings(cpu_config, has_cuda=False)
-            # Своей модели для процессора ещё нет, а модель для видеокарты скачана — распознаём
-            # ею: из-за того, что видеокарта не запустилась, не стоит качать ещё полгигабайта.
-            if cached_model(model, self._download_dir) and not cached_model(cpu_model, self._download_dir):
-                cpu_model = model
-            model, compute = cpu_model, "int8"
-        self._load(model, device, compute)
+                candidates.append(spare)
+        for index, name in enumerate(candidates):
+            try:
+                self._load(name, "cpu", compute)
+                return
+            except Exception as exc:
+                if index == len(candidates) - 1:
+                    raise
+                log.warning(
+                    "Whisper %s на процессоре не загрузился (%s) — пробую %s",
+                    name, exc, candidates[index + 1], exc_info=True,
+                )  # fmt: skip
 
     def _load(self, model: str, device: str, compute: str) -> None:
         from faster_whisper import WhisperModel
@@ -354,7 +468,23 @@ class WhisperSTT:
         options: dict[str, Any] = {"device": device, "compute_type": compute}
         if device == "cpu":
             options["cpu_threads"] = self._config.cpu_threads or default_cpu_threads()
-        self._model = WhisperModel(path, **options)
+        try:
+            self._model = WhisperModel(path, **options)
+        except RuntimeError as exc:
+            if "Unable to open file" not in str(exc):
+                raise
+            # Файл модели есть, но не открылся — обычно его в этот миг держит другая программа
+            # (антивирус проверяет): ещё одна попытка чуть позже, а в лог — что лежит в папке.
+            log.warning(
+                "Whisper %s: %s — пробую ещё раз через %.0f с. Папка модели: %s",
+                model, exc, OPEN_RETRY_PAUSE, model_files(path),
+            )  # fmt: skip
+            time.sleep(OPEN_RETRY_PAUSE)
+            try:
+                self._model = WhisperModel(path, **options)
+            except RuntimeError as again:
+                problem = open_problem(path)
+                raise RuntimeError(f"{again}; model.bin {problem}" if problem else str(again)) from again
         self.model_name, self.device = model, device
         log.info(
             "Whisper %s (%s, %s) загружен за %.1f с", model, device, compute, time.perf_counter() - started

@@ -639,6 +639,158 @@ def test_gpu_failure_falls_back_to_model_on_disk(
     assert "out of memory" in stt.cuda_problem and "снова попробую видеокарту" in stt.cuda_problem
 
 
+def test_snapshot_without_model_bin_is_not_a_model(tmp_path: Path) -> None:
+    # Так выглядит оборванная загрузка, если список файлов модели не сохранился: остальное есть.
+    snapshot = fake_cache(tmp_path)
+    (snapshot / "model.bin").unlink()
+    assert cached_model("small", tmp_path) is None
+
+
+def test_model_file_that_did_not_open_is_tried_again(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Файл модели на диске, но в первый раз не открылся (его держал антивирус): вторая попытка.
+    snapshot = fake_cache(tmp_path)
+    tries: list[Path] = []
+
+    def create(path: str, *, device: str, **options: object) -> object:
+        tries.append(Path(path))
+        if len(tries) == 1:
+            raise RuntimeError(f"Unable to open file 'model.bin' in model '{path}'")
+        return object()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", create)
+    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSE", 0)
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(device="cpu"), tmp_path)
+    stt.load()
+    assert tries == [snapshot, snapshot] and stt.model_name == "small"
+
+
+def test_model_file_that_never_opens_names_the_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_cache(tmp_path)
+    fake_whisper_model(monkeypatch, fail_on="cpu", error="Unable to open file 'model.bin'")
+    monkeypatch.setattr("assistant.stt.whisper_stt.OPEN_RETRY_PAUSE", 0)
+    monkeypatch.setattr("assistant.stt.whisper_stt.open_problem", lambda folder: "занят другой программой")
+    no_downloads(monkeypatch)
+    with pytest.raises(RuntimeError, match="'model.bin'; model.bin занят другой программой"):
+        WhisperSTT(SttConfig(device="cpu"), tmp_path).load()
+
+
+def test_model_files_are_described_for_the_log(tmp_path: Path) -> None:
+    from assistant.stt.whisper_stt import model_files
+
+    snapshot = fake_cache(tmp_path)
+    (snapshot / "model.bin").write_bytes(bytes(3 << 20))
+    text = model_files(str(snapshot))
+    assert "model.bin: 3 МБ" in text and "config.json: 0 МБ" in text
+    assert text.endswith("model.bin открывается")
+
+
+def test_cpu_falls_back_to_other_model_on_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # small на диске, но не загружается — голос всё равно работает: на скачанной large-v3-turbo.
+    small, turbo = fake_cache(tmp_path, "small"), fake_cache(tmp_path, "large-v3-turbo")
+    loaded: list[Path] = []
+
+    def create(path: str, *, device: str, **options: object) -> object:
+        loaded.append(Path(path))
+        if Path(path) == small:
+            raise RuntimeError("Unsupported model binary version")
+        return object()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", create)
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(device="cpu"), tmp_path)
+    stt.load()
+    assert loaded == [small, turbo] and (stt.model_name, stt.device) == ("large-v3-turbo", "cpu")
+
+
+def test_auto_cpu_uses_model_on_disk_instead_of_downloading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Видеокарта на этот раз не видна (cuda_available — False), скачана только large-v3-turbo:
+    # на процессоре — она, а не скачивание small.
+    turbo = fake_cache(tmp_path, "large-v3-turbo")
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: False)
+    loaded = fake_whisper_model(monkeypatch)
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    stt.load()
+    assert loaded == [(turbo, "cpu")] and stt.model_name == "large-v3-turbo"
+
+
+def test_chosen_cpu_downloads_its_own_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # «Процессор» выбран в настройках: своя модель (small) скачивается, а не берётся большая.
+    fake_cache(tmp_path, "large-v3-turbo")
+    loaded = fake_whisper_model(monkeypatch)
+    fetched: list[str] = []
+
+    def fetch(model: str, folder: Path, out: object) -> str:
+        fetched.append(model)
+        return str(fake_cache(folder, model))
+
+    monkeypatch.setattr("assistant.stt.whisper_stt.fetch_model", fetch)
+    stt = WhisperSTT(SttConfig(device="cpu"), tmp_path)
+    stt.load()
+    assert fetched == ["small"] and stt.model_name == "small" and len(loaded) == 1
+
+
+def test_gpu_reason_is_kept_for_the_message(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake_cache(tmp_path, "large-v3-turbo")
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "")
+    fake_whisper_model(monkeypatch, fail_on="cuda", error="CUDA failed with error unknown error")
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    stt.load()
+    assert stt.gpu_error == "CUDA failed with error unknown error" and stt.device == "cpu"
+
+
+def test_gpu_error_without_message_still_falls_back(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Ошибка без текста (MemoryError()) не должна сойти за успешный запуск на видеокарте.
+    fake_cache(tmp_path, "large-v3-turbo")
+    monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
+    monkeypatch.setattr("assistant.stt.whisper_stt.missing_cuda_library", lambda: "")
+    fake_whisper_model(monkeypatch)
+
+    def warm_up(self: WhisperSTT) -> None:
+        if self.device == "cuda":
+            raise MemoryError()
+
+    monkeypatch.setattr(WhisperSTT, "_warm_up", warm_up)
+    no_downloads(monkeypatch)
+    stt = WhisperSTT(SttConfig(), tmp_path)
+    stt.load()
+    assert stt.device == "cpu" and stt.gpu_error == "MemoryError" and stt._model is not None
+
+
+def test_offline_download_without_model_bin_is_a_download_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Без связи с Hugging Face snapshot_download отдаёт папку с диска как есть — без model.bin.
+    from assistant.stt.whisper_stt import fetch_model
+
+    snapshot = fake_cache(tmp_path)
+    (snapshot / "model.bin").unlink()
+    monkeypatch.setattr("faster_whisper.utils.download_model", lambda model, cache_dir: str(snapshot))
+    with pytest.raises(ModelDownloadError, match=r"model.bin не скачался"):
+        fetch_model("small", tmp_path, None)
+
+
+def test_gpu_work_waits_for_program_launches() -> None:
+    # Пока голос загружает CUDA, external_launch (он на миг меняет PATH всего процесса) ждёт.
+    from assistant import frozen
+
+    taken: list[bool] = []
+    with frozen.keep_dll_search():
+        thread = threading.Thread(target=lambda: taken.append(frozen._LAUNCH_LOCK.acquire(timeout=0.1)))
+        thread.start()
+        thread.join()
+        with frozen.keep_dll_search():  # из того же потока — можно
+            pass
+    assert taken == [False]
+
+
 def test_cpu_choice_skips_gpu_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("assistant.stt.whisper_stt.cuda_available", lambda: True)
     monkeypatch.setattr(
@@ -668,6 +820,25 @@ def test_missing_cuda_library_searches_like_ctranslate2(monkeypatch: pytest.Monk
     assert whisper_stt.missing_cuda_library() == "cudnn_ops64_9.dll"
     # winmode=0 — обычный поиск LoadLibrary с PATH, как в CTranslate2.
     assert searched == [("cublas64_12.dll", 0), ("cudnn_ops64_9.dll", 0)]
+
+
+def test_cuda_dlls_are_preloaded_by_full_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # cuBLAS и NVRTC загружены по полному пути: потом их находят по имени, и PATH (его на миг меняет
+    # external_launch, пока запускается программа) видеокарте уже не нужен.
+    import ctypes
+
+    from assistant.stt import whisper_stt
+
+    for name in ("cublas64_12.dll", "cublasLt64_12.dll", "nvrtc64_120_0.dll", "cudnn_ops64_9.dll", "x.txt"):
+        (tmp_path / name).write_bytes(b"")
+    loaded: list[tuple[str, int]] = []
+    monkeypatch.setattr(whisper_stt.sys, "platform", "win32")
+    monkeypatch.setattr(whisper_stt, "cuda_dirs", lambda: [tmp_path])
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, winmode: loaded.append((name, winmode)), raising=False)
+    assert whisper_stt.missing_cuda_library() == ""
+    full = [(Path(name).name, mode) for name, mode in loaded if Path(name).is_absolute()]
+    assert full == [("cublasLt64_12.dll", 8), ("cublas64_12.dll", 8), ("nvrtc64_120_0.dll", 8)]
+    assert loaded[-2:] == [("cublas64_12.dll", 0), ("cudnn_ops64_9.dll", 0)]
 
 
 def test_cuda_libraries_match_cuda_extra() -> None:

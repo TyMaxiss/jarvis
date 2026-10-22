@@ -90,6 +90,7 @@ class Windows:
         self._overlay_look = "classic"  # каким окно оверлея сделано сейчас: непрозрачным, скруглённым
         self._overlay_shape: tuple[tuple[int, ...], ...] | None = None  # форма окна сферы, пиксели
         self._overlay_region: int | None = None  # сколько пикселей окна над краем видно сейчас
+        self._backdrop_guard: Callable[[Any, Any], None] | None = None  # обработчик настроек Windows
         self._visible = {"main": not start_hidden, "overlay": False, "chat": False}
         background, surface = BACKGROUNDS.get(theme, BACKGROUNDS["dark"])
         overlay_size = OVERLAY_SIZES[self._overlay_style]
@@ -131,10 +132,32 @@ class Windows:
                 return
             self._win32.round_corners(self._handles[name])
             if name == "overlay":
+                # До make_overlay: подложку Windows применяет при смене рамки окна (SWP_FRAMECHANGED).
+                self._win32.remove_backdrop(self._handles[name])
+                self._keep_overlay_without_backdrop()
                 self._win32.make_overlay(self._handles[name])
                 self._clear_background(window)
 
         return handler
+
+    def _keep_overlay_without_backdrop(self) -> None:
+        """pywebview ставит окнам Mica в тёмной теме Windows — при создании окна и снова при каждом
+        изменении настроек Windows (SystemEvents.UserPreferenceChanged). У оверлея она — серый
+        прямоугольник во всё окно, поэтому после pywebview подложка снова снимается.
+
+        Подписка — в потоке окон после pywebview (before_show — после создания формы): .NET вызывает
+        обработчики по порядку подписки, так что этот срабатывает следом за его.
+        """
+        try:
+            from Microsoft.Win32 import SystemEvents  # type: ignore[import-not-found]
+
+            def on_change(sender: Any, args: Any) -> None:
+                self._win32.remove_backdrop(self._handles.get("overlay", 0))
+
+            SystemEvents.UserPreferenceChanged += on_change
+            self._backdrop_guard = on_change  # обработчик живёт, пока живут окна
+        except Exception:
+            log.debug("Не удалось подписаться на изменение настроек Windows", exc_info=True)
 
     @staticmethod
     def _clear_background(window: Any) -> None:
@@ -205,7 +228,9 @@ class Windows:
         """Ставит оверлей внизу по центру монитора с курсором — за краем, невидимым — и показывает
         без фокуса. Окно сферы — только форма шара и карточки (ORB_SHAPE)."""
         hwnd, style = self._handle("overlay"), self._overlay_style
-        # Без фокуса: пользователь продолжает печатать в своём окне.
+        # Без подложки Windows (Mica) — на случай, если pywebview поставил её снова — и без фокуса:
+        # пользователь продолжает печатать в своём окне.
+        self._win32.remove_backdrop(hwnd)
         self._win32.make_overlay(hwnd)
         self._apply_overlay_look(hwnd, style)
         area = self._win32.work_area()
@@ -225,10 +250,9 @@ class Windows:
     def _apply_overlay_look(self, hwnd: int, style: str) -> None:
         """Окно оверлея под оформление: сфере — без рамки и скругления Windows, плашке — скруглённое.
 
-        Окно сферы не делается прозрачным (DwmEnableBlurBehindWindow): с выключенными «Эффектами
-        прозрачности» Windows рисует под таким окном сплошную подложку во весь его прямоугольник,
-        и форма окна её не обрезала (серый квадрат вокруг шара в 0.7.0–0.7.1). Форма — только
-        регион (ORB_SHAPE): им же плашка выезжает из-за панели задач.
+        Окно сферы непрозрачное, его форма — только регион (ORB_SHAPE): им же плашка выезжает
+        из-за панели задач. Серый прямоугольник вокруг шара в 0.7.0–0.7.2 был подложкой Mica,
+        которую pywebview ставит окнам в тёмной теме Windows (её снимает remove_backdrop).
         """
         if style == self._overlay_look:
             return

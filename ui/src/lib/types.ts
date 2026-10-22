@@ -217,6 +217,7 @@ export interface AppState {
     stop_key: string
     loading: boolean // голос ещё загружается
     problem: string
+    failed: boolean // голос пробовали запустить, но не вышло: на главной — «Перезапустить»
     step: string // что делается, пока голос загружается: «Скачиваю модель Vosk: 40% (18 МБ из 45 МБ)»
     progress: number | null // доля сделанного (0–1); null — неизвестна
   }

@@ -139,6 +139,7 @@ def test_state_matches_interface(world: SimpleNamespace) -> None:
         "stop_key",
         "loading",
         "problem",
+        "failed",
         "step",
         "progress",
     }
@@ -418,6 +419,17 @@ def test_voice_controls(world: SimpleNamespace) -> None:
     assert len(world.bus.of("state")) == pushes + 1 and world.bus.of("voice")[-1]["state"] == "paused"
     controller.toggle_pause()
     assert not voice.loop.paused
+
+
+def test_failed_voice_offers_restart(world: SimpleNamespace) -> None:
+    controller = world.controller
+    controller.voice_loading = True
+    assert not controller.state()["voice"]["failed"]
+    controller.voice_failed("Голос недоступен: не удалось загрузить Whisper (Unable to open file)")
+    voice = world.bus.of("state")[-1]["voice"]
+    assert voice["failed"] and not voice["loading"] and "Unable to open file" in voice["problem"]
+    controller.attach_voice(FakeVoice())
+    assert not world.bus.of("state")[-1]["voice"]["failed"]
 
 
 def test_voice_progress_while_loading(world: SimpleNamespace) -> None:

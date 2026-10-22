@@ -190,6 +190,7 @@ class UiController:
         self.voice: VoiceHandle | None = None
         self.voice_loading = False  # голос ещё загружается (Whisper — несколько секунд)
         self.voice_problem = ""
+        self.voice_broken = False  # голос пробовали запустить, но не вышло (окна предложат перезапуск)
         self.voice_step = ""  # что делается, пока голос загружается: «Скачиваю модель Vosk: 40% …»
         self.voice_fraction: float | None = None  # доля сделанного; None — неизвестна
         self._voice_state = "off"
@@ -253,6 +254,7 @@ class UiController:
                 "stop_key": config.voice.stop_key,
                 "loading": self.voice_loading,
                 "problem": self.voice_problem,
+                "failed": self.voice_broken,
                 "step": self.voice_step,
                 "progress": self.voice_fraction,
             },
@@ -426,6 +428,7 @@ class UiController:
         self.voice = voice
         self.voice_loading = False
         self.voice_problem = ""
+        self.voice_broken = False
         self.voice_step, self.voice_fraction = "", None
         self._voice_state = "idle"
         self.confirmer.voice = voice.confirmer
@@ -435,6 +438,7 @@ class UiController:
         """Голос запустить не удалось: окна покажут почему."""
         self.voice_loading = False
         self.voice_problem = problem
+        self.voice_broken = True
         self.voice_step, self.voice_fraction = "", None
         self.push_state()
 

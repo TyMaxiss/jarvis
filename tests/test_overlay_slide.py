@@ -267,6 +267,7 @@ def desktop(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
         size[0] = (width, height)
 
     monkeypatch.setattr(win32, "make_overlay", record("make_overlay"))
+    monkeypatch.setattr(win32, "remove_backdrop", record("no_backdrop"))
     monkeypatch.setattr(win32, "round_corners", record("corners"))
     monkeypatch.setattr(win32, "set_bounds", set_bounds)
     monkeypatch.setattr(win32, "show_without_focus", record("show"))
@@ -297,12 +298,23 @@ def make_windows(animate: bool, overlay_style: str = "classic") -> tuple[Any, Fa
     return host, windows["overlay"]
 
 
+def test_overlay_window_gets_no_backdrop_before_its_frame_changes(desktop: list[tuple[Any, ...]]) -> None:
+    # pywebview ставит Mica в тёмной теме Windows уже при создании окна; у оверлея её снимаем до
+    # make_overlay — Windows применяет подложку при смене рамки окна.
+    host, overlay = make_windows(animate=False)
+    for handler in overlay.events.before_show:
+        handler(overlay)
+    assert desktop == [("corners", 42), ("no_backdrop", 42), ("make_overlay", 42)]
+    host.quit()
+
+
 def test_overlay_appears_behind_taskbar_edge_and_takes_its_place(desktop: list[tuple[Any, ...]]) -> None:
     host, overlay = make_windows(animate=False)
     host.show("overlay")
     assert wait_for(lambda: ("move", 42, 600, 908) in desktop)
     # Отступ 24 и радиус 8 — логические пиксели, при 150 % это 36 и 12.
     assert desktop == [
+        ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("clip", 42, 720, 0, 12),  # до показа: не видно ничего
         ("show", 42, 600, 1040),  # верх окна на краю рабочей области
@@ -344,7 +356,8 @@ def test_orb_window_is_shaped_like_orb_and_card_and_slides_in(desktop: list[tupl
     host.show("overlay")
     assert wait_for(lambda: ("move", 42, 630, 374) in desktop)
     # Сфера 440×420 при 150 % — 660×630; окно — только круг шара и карточка, выезжает снизу.
-    assert desktop[:5] == [
+    assert desktop[:6] == [
+        ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("corners", 42, False),  # прямые углы без рамки: окно и так по форме шара
         ("bounds", 42, 630, 374, 660, 630),
@@ -377,6 +390,7 @@ def test_classic_after_orb_gets_its_window_back(desktop: list[tuple[Any, ...]]) 
     host.show("overlay")
     assert wait_for(lambda: ("move", 42, 600, 908) in desktop)
     assert desktop == [
+        ("no_backdrop", 42),  # подложку Mica pywebview мог поставить снова
         ("make_overlay", 42),
         ("corners", 42, True),
         ("bounds", 42, 600, 908, 720, 96),

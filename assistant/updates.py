@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from assistant import __version__
-from assistant.frozen import FROZEN, RESET_ENV, app_dir, external_launch
+from assistant.frozen import FROZEN, RESET_ENV, UPDATED_ENV, app_dir, external_launch
 from assistant.models import download_file, file_sha256
 from assistant.progress import Progress
 
@@ -251,7 +251,7 @@ class Updater:
                 # Новую версию запустит установщик со своим окружением: она должна быть
                 # самостоятельным экземпляром, а не дочерним процессом этого exe (RESET_ENV),
                 # и получить PATH без папок, которые добавил себе этот процесс (external_launch).
-                env = {**os.environ, RESET_ENV: "1"}
+                env = {**os.environ, RESET_ENV: "1", UPDATED_ENV: "1"}
                 subprocess.Popen(arguments, creationflags=_DETACHED_PROCESS, close_fds=True, env=env)
         except OSError as exc:
             raise UpdateError(f"не удалось запустить установщик: {exc}") from exc

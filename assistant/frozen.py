@@ -24,10 +24,12 @@ from typing import Any
 FROZEN = bool(getattr(sys, "frozen", False))
 CONSOLE_EXE = "JarvisConsole.exe"  # та же сборка с окном консоли (Jarvis.exe — без него)
 RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"  # новый экземпляр exe — не дочерний процесс этого
+UPDATED_ENV = "JARVIS_UPDATED"  # запуск установщиком после обновления (для лога)
 CUDA_DIR = "cuda"  # DLL CUDA для Whisper на видеокарте — рядом с программой
 SILERO_DIR = "silero"  # PyTorch для голоса Silero — рядом с программой
-# Поиск DLL и PATH — общие для всего процесса: запуски из разных потоков идут по очереди.
-_LAUNCH_LOCK = threading.Lock()
+# Поиск DLL и PATH — общие для всего процесса: запуски из разных потоков идут по очереди, а пока
+# голос ищет и загружает DLL CUDA (keep_dll_search), ждут. Повторный вход из того же потока можно.
+_LAUNCH_LOCK = threading.RLock()
 
 
 def app_dir() -> Path:
@@ -85,6 +87,19 @@ def external_launch() -> Iterator[None]:
         finally:
             kernel32.SetDllDirectoryW(bundle)
             os.environ["PATH"] = original
+
+
+@contextlib.contextmanager
+def keep_dll_search() -> Iterator[None]:
+    """Пока выполняется блок, PATH и поиск DLL процесса не меняются: external_launch ждёт его конца.
+
+    CTranslate2 и CUDA находят свои DLL через PATH (папка cuda). Если в это время ассистент
+    запускает программу (PowerShell для списка приложений при старте), external_launch на миг
+    убирает папку cuda из PATH и вернёт свой PATH без только что добавленной папки. Блок —
+    короткий: проверка и загрузка DLL, а не вся загрузка модели (whisper_stt.missing_cuda_library).
+    """
+    with _LAUNCH_LOCK:
+        yield
 
 
 def run_program(

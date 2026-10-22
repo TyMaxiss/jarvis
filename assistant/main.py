@@ -40,7 +40,7 @@ from assistant.config import (
     load_config,
 )
 from assistant.console import ConsoleApp, ConsoleSpeaker
-from assistant.frozen import CONSOLE_EXE, FROZEN, RESET_ENV, app_dir, cuda_dir, external_launch
+from assistant.frozen import CONSOLE_EXE, FROZEN, RESET_ENV, UPDATED_ENV, app_dir, cuda_dir, external_launch
 from assistant.instance import RESTART_ENV, RESTART_WAIT, SingleInstance
 from assistant.journal import ActionJournal
 from assistant.llm.agent import Agent
@@ -375,7 +375,8 @@ def start_voice(
             raise VoiceSetupError(f"{exc}. Нужен интернет для первой загрузки") from exc
         except Exception as exc:
             log.exception("Не удалось загрузить Whisper")
-            raise VoiceSetupError(f"не удалось загрузить Whisper ({exc})") from exc
+            gpu = f"; видеокарта: {stt.gpu_error}" if stt.gpu_error else ""
+            raise VoiceSetupError(f"не удалось загрузить Whisper ({exc}{gpu})") from exc
         if stt.cuda_problem:
             out.write(f"! {stt.cuda_problem}\n")
         where = "видеокарте" if stt.device == "cuda" else "процессоре"
@@ -666,7 +667,13 @@ def main(argv: list[str] | None = None) -> int:
         masker,
         console_level="DEBUG" if debug else "WARNING",
     )
-    log.info("Запуск: Python %s, %s, dry-run=%s", platform.python_version(), platform.platform(), dry_run)
+    # Как запущен: установщиком после обновления, после «Перезапустить» или как обычно.
+    launch = (
+        "после обновления" if os.environ.pop(UPDATED_ENV, "")
+        else "после «Перезапустить»" if os.environ.get(RESTART_ENV) else "обычный"
+    )  # fmt: skip
+    python, system = platform.python_version(), platform.platform()
+    log.info("Запуск (%s): Python %s, %s, dry-run=%s", launch, python, system, dry_run)
 
     if args.download_models:
         from assistant.models import download_all

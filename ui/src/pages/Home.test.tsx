@@ -46,6 +46,24 @@ describe('TimersCard', () => {
   })
 })
 
+describe('Голос не запустился', () => {
+  it('объясняет почему и предлагает перезапустить', async () => {
+    const state = await createMockApi(() => {}).get_state()
+    const problem = 'Голос недоступен: не удалось загрузить Whisper (Unable to open file)'
+    render(<Home state={{ ...state, voice: { ...state.voice, enabled: false, problem, failed: true } }} onOpenSettings={() => {}} />)
+    expect(screen.getByText(problem)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Перезапустить' }))
+    expect(call).toHaveBeenCalledWith('restart')
+  })
+
+  it('голос выключен в настройках — перезапускать нечего', async () => {
+    const state = await createMockApi(() => {}).get_state()
+    render(<Home state={{ ...state, voice: { ...state.voice, enabled: false, problem: '' } }} onOpenSettings={() => {}} />)
+    expect(screen.getByText('Голос выключен в настройках')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Перезапустить' })).toBeNull()
+  })
+})
+
 describe('Кнопка микрофона', () => {
   async function stateWith(voiceState: AppState['voice']['state'], busy = false, enabled = true): Promise<AppState> {
     const state = await createMockApi(() => {}).get_state()

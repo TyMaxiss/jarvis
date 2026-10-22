@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from assistant import __version__, autostart, instance, updates
-from assistant.frozen import RESET_ENV
+from assistant.frozen import RESET_ENV, UPDATED_ENV
 from assistant.updates import (
     Release,
     UpdateError,
@@ -354,6 +354,7 @@ def test_install_runs_installer_silently(monkeypatch: pytest.MonkeyPatch, tmp_pa
     ]
     # Установщик живёт дольше программы, а новую версию запускает самостоятельным экземпляром.
     assert options["creationflags"] == 0x00000008 and options["env"][RESET_ENV] == "1"
+    assert options["env"][UPDATED_ENV] == "1"  # новая версия запишет в лог, что запущена после обновления
     assert log_file.parent.is_dir()
     launched.error = OSError("нет доступа")
     with pytest.raises(UpdateError, match="не удалось запустить установщик"):
