@@ -49,7 +49,37 @@ Compression=lzma2/max
 SolidCompression=yes
 LZMANumBlockThreads=4
 WizardStyle=modern
-; Программу закрывает не Restart Manager, а сама программа (обновление) или пользователь — см. [Code]
+; Программу закрывает не Restart Manager, а сама программа (обновление) или пользователь — см. [Code].
+CloseApplications=no
+RestartApplications=no
+ShowLanguageDialog=no
+
+[Languages]
+Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[InstallDelete]
+; Обновление: библиотеки прежней версии не должны остаться рядом с новыми.
+Type: filesandordirs; Name: "{app}\_internal"
+
+[Files]
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{autoprograms}\Джарвис"; Filename: "{app}\Jarvis.exe"
+Name: "{autodesktop}\Джарвис"; Filename: "{app}\Jarvis.exe"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\Jarvis.exe"; Description: "{cm:LaunchProgram,Джарвис}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Jarvis.exe"; Flags: nowait; Check: Relaunch
+
+[UninstallDelete]
+; Ярлык автозапуска создаёт сама программа (настройка «Запускать вместе с Windows»).
+Type: files; Name: "{userstartup}\Джарвис.lnk"
+
+[Code]
 const
   AppMutex = 'Local\JarvisVoiceAssistant';
   CloseRequest = 'Джарвис запущен. Закройте его («Выход» в меню значка в трее) и нажмите OK.';

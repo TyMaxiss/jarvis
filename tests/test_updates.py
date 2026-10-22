@@ -9,6 +9,7 @@ import dataclasses
 import hashlib
 import io
 import json
+import re
 import tomllib
 import urllib.error
 import urllib.request
@@ -19,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from assistant import __version__, updates
+from assistant import __version__, autostart, instance, updates
 from assistant.frozen import RESET_ENV
 from assistant.updates import (
     Release,
@@ -362,3 +363,43 @@ def test_release_view_is_ready_for_windows() -> None:
     assert view is not None and json.loads(json.dumps(view, ensure_ascii=False)) == view
     assert set(view) == {"version", "title", "notes", "page", "installer", "size", "sha256"}
     assert release_view(None) is None
+
+
+# --- Установщик ----------------------------------------------------------------------------
+
+
+def test_installer_script_matches_program() -> None:
+    script = (ROOT / "packaging" / "jarvis.iss").read_bytes()
+    assert script.startswith(b"\xef\xbb\xbf")  # Inno Setup читает русский текст как UTF-8 только с BOM
+    text = script.decode("utf-8-sig")
+    sections = re.findall(r"^\[(\w+)\]$", text, re.M)
+    assert sections == [
+        "Setup",
+        "Languages",
+        "Tasks",
+        "InstallDelete",
+        "Files",
+        "Icons",
+        "Run",
+        "UninstallDelete",
+        "Code",
+    ]
+    # Установщик ждёт выхода программы по её мьютексу и убирает её ярлык автозапуска.
+    assert f"AppMutex = 'Local\\{instance.NAME}';" in text
+    assert f'Name: "{{userstartup}}\\{autostart.SHORTCUT}"' in text
+    # После тихого обновления (Updater.install) программа запускается снова.
+    assert "{param:RELAUNCH|no}" in text and "Check: Relaunch" in text
+    assert re.search(r"^PrivilegesRequired=lowest$", text, re.M)  # ставится без прав администратора
+    # CI проверяет запись в «Приложениях» по тому же AppId.
+    app_id = re.search(r"^AppId=\{\{([0-9A-F-]{36})\}$", text, re.M)
+    assert app_id is not None
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert f"{{{app_id[1]}}}_is1" in workflow
+
+
+def test_pascal_comments_do_not_nest() -> None:
+    # В Паскале комментарий { … } заканчивается на первой }: «{app}» внутри него сломал бы скрипт.
+    code = (ROOT / "packaging" / "jarvis.iss").read_text(encoding="utf-8-sig").split("\n[Code]\n", 1)[1]
+    code = re.sub(r"'[^'\n]*'", "''", code)  # строки в кавычках — не комментарии
+    for comment in re.findall(r"\{[^}]*\}", code):
+        assert "{" not in comment[1:], comment
