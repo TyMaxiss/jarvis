@@ -82,8 +82,13 @@ describe('Overlay', () => {
     const frames = () => act(() => new Promise((resolve) => setTimeout(resolve, 100)))
     await emit({ type: 'overlay', payload: { visible: false, glass: true } }) // страница загрузилась
     expect([stage().contains('orb-glass'), stage().contains('orb-present')]).toEqual([true, false])
-    await emit({ type: 'overlay', payload: { visible: true, glass: true } })
-    expect(stage().contains('orb-present')).toBe(true) // уже полупрозрачная — раскрывается сразу
+    await emit({ type: 'overlay', payload: { visible: true, glass: true } }) // первый показ
+    expect(['orb-snap', 'orb-present'].map((name) => stage().contains(name))).toEqual([true, false])
+    await frames() // сначала невидимая, кадром позже раскрывается
+    expect(['orb-snap', 'orb-present'].map((name) => stage().contains(name))).toEqual([false, true])
+    await emit({ type: 'overlay', payload: { visible: false, glass: true } })
+    await emit({ type: 'overlay', payload: { visible: true, glass: true } }) // снова, пока сворачивалась
+    expect(['orb-snap', 'orb-present'].map((name) => stage().contains(name))).toEqual([false, true]) // разворот плавный
     await emit({ type: 'overlay', payload: { visible: false, glass: false } }) // прозрачность выключили
     expect(stage().contains('orb-glass')).toBe(true) // уезжая, сфера не меняется
     await act(() => new Promise((resolve) => setTimeout(resolve, 350)))

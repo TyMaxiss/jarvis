@@ -34,12 +34,14 @@ export function Overlay({ framed = false }: { framed?: boolean }) {
         if (showing.current && !visible) hiddenAt.current = Date.now()
         showing.current = visible
         setNextGlass(next)
-        const switching = visible && next !== glass
-        setSnap(switching)
-        if (switching) {
-          // Прозрачность сменилась, пока сфера была спрятана: сначала она сразу невидимая в новом
-          // виде (orb-snap), и лишь кадром позже раскрывается — иначе переходу (index.css, .orb-pop)
-          // не от чего начаться.
+        // Сфера появляется заново: сменилась прозрачность или полупрозрачная сфера давно спрятана —
+        // спрятанное окно WebView2 могло не отрисовать её невидимой. Тогда сначала она сразу невидимая
+        // (orb-snap) и лишь кадром позже раскрывается — иначе переходу (index.css, .orb-pop) не от чего
+        // начаться. Показанная снова, пока ещё сворачивается, она плавно разворачивается обратно.
+        const settled = Date.now() - hiddenAt.current >= STYLE_SWITCH_MS
+        const restart = visible && (next !== glass || (next && settled))
+        setSnap(restart)
+        if (restart) {
           setGlass(next)
           afterFrames(2, () => {
             if (turn.current !== mine) return
