@@ -378,6 +378,41 @@ def test_calibration_whisper(piper: PiperTTS, stt: WhisperSTT) -> None:
         )  # fmt: skip
 
 
+# Голоса Microsoft, которые проверяются на русском: многоязычные сами узнают язык текста.
+EDGE_CANDIDATES = (
+    "ru-RU-DmitryNeural",
+    "en-US-AndrewMultilingualNeural",
+    "en-US-BrianMultilingualNeural",
+    "en-US-AvaMultilingualNeural",
+    "en-US-EmmaMultilingualNeural",
+    "de-DE-FlorianMultilingualNeural",
+    "de-DE-SeraphinaMultilingualNeural",
+    "fr-FR-RemyMultilingualNeural",
+    "it-IT-GiuseppeMultilingualNeural",
+)
+RUSSIAN_CHECK = "Добрый вечер. Все системы работают в штатном режиме. Напомнить о встрече в шесть вечера?"
+
+
+def test_calibration_edge_voices_in_russian(stt: WhisperSTT) -> None:
+    """Читают ли голоса Microsoft по-русски: синтез через интернет → Whisper → сходство с текстом."""
+    from rapidfuzz import fuzz
+
+    from assistant.nlu.normalize import basic_clean
+    from assistant.tts.base import TTSError
+    from assistant.tts.edge_tts import EdgeTTS
+
+    for voice in EDGE_CANDIDATES:
+        try:
+            audio, rate = EdgeTTS(voice).synthesize(RUSSIAN_CHECK)
+        except TTSError as exc:
+            log.warning("КАЛИБРОВКА голос %s: не озвучил — %s", voice, exc)
+            continue
+        text = stt.transcribe(to_int16(resample(audio, rate))).text
+        score = fuzz.ratio(basic_clean(text), basic_clean(RUSSIAN_CHECK))
+        seconds = len(audio) / rate
+        log.warning("КАЛИБРОВКА голос %s: сходство %.0f, %.1f с — «%s»", voice, score, seconds, text)
+
+
 def test_calibration_answers(vosk_model: object) -> None:
     """Что Vosk слышит в ответах на вопрос подтверждения, без приманок и с ними (все голоса)."""
     variants = {
