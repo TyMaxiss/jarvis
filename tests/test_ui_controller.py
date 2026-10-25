@@ -33,7 +33,10 @@ from assistant.updates import Release, UpdateError
 from tests.conftest import NO_WINDOW, ROOT, RecordingSpeaker, wait_until
 from tests.ui_fakes import FakeAgent, FakeHost, FakeVoice, FakeVolume, RecordingBus
 
-KEYS = ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "CUSTOM_LLM_API_KEY")
+KEYS = (
+    "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_API_KEY", "CUSTOM_LLM_API_KEY",
+    "YANDEX_API_KEY",
+)  # fmt: skip
 SCENARIO = """
 - id: work_mode
   phrases: ["рабочий режим"]
@@ -555,6 +558,97 @@ def test_open_missing_file_shows_toast(world: SimpleNamespace) -> None:
     world.controller.open_path("log")
     world.controller.open_path("unknown")
     assert world.bus.of("toast") == [{"kind": "info", "text": "Файла assistant.log пока нет"}]
+
+
+def test_voice_keys_are_saved_and_shared_with_chatgpt(world: SimpleNamespace) -> None:
+    controller = world.controller
+    controller.llm_save({"profile": "openai", "model": "gpt-6-luna", "key": "sk-old-openai-1234567890"})
+    agent = world.pipeline.agent
+    result = controller.tts_save_key("openai", " sk-new-openai-0987654321 ")
+    assert result["ok"] and result["settings"]["tts_keys"]["openai"] == {
+        "set": True, "hint": "••••4321", "from_system": False,
+    }  # fmt: skip
+    assert world.settings.key("OPENAI_API_KEY") == "sk-new-openai-0987654321"  # тот же ключ, что у ChatGPT
+    assert len(agent.reconfigured) == 1  # нейросеть ChatGPT — клиент с новым ключом
+    assert "sk-new-openai" not in str(result)  # ключ обратно не уходит
+    assert controller.tts_save_key("yandex", "AQVNtest-yandex-key")["ok"]
+    assert world.settings.key("YANDEX_API_KEY") == "AQVNtest-yandex-key" and len(agent.reconfigured) == 1
+    assert not controller.tts_save_key("yandex", "мой ключ")["ok"]  # не похож на ключ
+    assert not controller.tts_save_key("piper", "sk-anything-12345")["ok"]
+    assert controller.tts_forget_key("yandex")["settings"]["tts_keys"]["yandex"]["set"] is False
+    assert "YANDEX_API_KEY" not in world.env_path.read_text(encoding="utf-8")
+
+
+def test_voice_key_pages(world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(controller_module.webbrowser, "open", opened.append)
+    for engine in ("openai", "yandex", "piper"):
+        world.controller.open_tts_key_page(engine)
+    assert opened == [
+        "https://platform.openai.com/settings/organization/api-keys",
+        "https://yandex.cloud/ru/docs/iam/operations/authentication/manage-api-keys",
+    ]
+
+
+def test_preview_of_keyed_voice_uses_unsaved_settings(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+
+    from assistant.tts.openai_tts import OpenAITTS
+    from assistant.tts.yandex_tts import YandexTTS
+
+    heard: list[tuple[str, ...]] = []
+
+    def openai_synthesize(engine: OpenAITTS, text: str) -> tuple[np.ndarray, int]:
+        heard.append((engine.voice, engine.style, engine.base_url, str(engine.rate)))
+        return np.zeros(10, np.float32), 24_000
+
+    def yandex_synthesize(engine: YandexTTS, text: str) -> tuple[np.ndarray, int]:
+        heard.append((engine.voice, engine.role, str(engine.rate)))
+        return np.zeros(10, np.float32), 48_000
+
+    monkeypatch.setattr(OpenAITTS, "synthesize", openai_synthesize)
+    monkeypatch.setattr(YandexTTS, "synthesize", yandex_synthesize)
+    preview = world.controller._preview_engine
+    assert (
+        preview({"engine": "openai", "openai_voice": "onyx", "openai_style": "Бодро"}, 1.2, "Привет")[1]
+        == 24_000
+    )
+    assert preview({"engine": "yandex", "yandex_voice": "alexander"}, 0.9, "Привет")[1] == 48_000
+    assert heard == [("onyx", "Бодро", "https://api.openai.com/v1", "1.2"), ("alexander", "", "0.9")]
+
+
+def test_failed_voice_is_explained_in_a_toast(world: SimpleNamespace) -> None:
+    from assistant.tts.base import SpeechQueue
+
+    class Silent:
+        name = "yandex"
+
+        def synthesize(self, text: str) -> Any:
+            raise RuntimeError("нет ключа Yandex SpeechKit")
+
+    class Player:
+        def reset(self) -> None: ...
+
+        def play(self, audio: Any, samplerate: int) -> bool:
+            return True
+
+        def stop(self) -> None: ...
+
+    queue = SpeechQueue(Silent(), Player())
+    UiController(
+        config=world.controller.config, store=world.settings, pipeline=world.pipeline,
+        executor=world.executor, commands=world.controller.commands, make_agent=FakeAgent, speech=queue,
+        volume=FakeVolume(), bus=world.bus, activity=Activity(world.bus),
+        confirmer=UiConfirmer(world.bus, timeout=0.3), log_file=Path("a.log"), journal_file=Path("j.jsonl"),
+    )  # fmt: skip
+    assert queue.on_failure is not None
+    queue.on_failure("yandex", "нет ключа Yandex SpeechKit")
+    text = world.bus.of("toast")[-1]["text"]
+    assert text.startswith("Не удалось озвучить голосом Яндекса: нет ключа Yandex SpeechKit.")
+    assert text.endswith("Пока говорю запасным голосом")
+    queue.close()
 
 
 def test_preview_without_speech_is_explained(world: SimpleNamespace) -> None:

@@ -1,5 +1,8 @@
 import {
   AudioLines,
+  ExternalLink,
+  Eye,
+  EyeOff,
   FileText,
   FolderOpen,
   Keyboard,
@@ -9,13 +12,23 @@ import {
   RotateCw,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Volume2,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { HotkeyInput, LevelMeter, Segmented, Swatches } from '../components/controls'
-import { Button, Card, CardTitle, Field, Select, Slider, TextInput, Toggle } from '../components/ui'
+import { Button, Card, CardTitle, cx, Field, IconButton, inputClass, Select, Slider, TextInput, Toggle } from '../components/ui'
 import { call } from '../lib/bridge'
-import type { OverlayStyle, SaveResult, Settings, SettingsPatch, TtsEngine, UpdateState } from '../lib/types'
+import type {
+  KeyedEngine,
+  OverlayStyle,
+  SaveResult,
+  Settings,
+  SettingsPatch,
+  TtsEngine,
+  TtsKey,
+  UpdateState,
+} from '../lib/types'
 import { LlmSection } from './LlmSection'
 import { UpdatesCard } from './Updates'
 
@@ -239,7 +252,7 @@ export function SettingsPage({ updates }: { updates: UpdateState }) {
 
       <Card>
         <CardTitle icon={<Volume2 size={16} />} title="Голос ассистента" />
-        <Field label="Синтез речи" hint={engineHint(tts.engine, settings.choices.silero_ready)}>
+        <Field label="Синтез речи" hint={engineHint(tts.engine, settings.choices.silero_ready)} stacked>
           <Segmented<TtsEngine>
             label="Синтез речи"
             value={tts.engine}
@@ -248,6 +261,8 @@ export function SettingsPage({ updates }: { updates: UpdateState }) {
               { value: 'silero', title: 'Silero' },
               { value: 'edge', title: 'Microsoft' },
               { value: 'sapi', title: 'Windows' },
+              { value: 'openai', title: 'OpenAI' },
+              { value: 'yandex', title: 'Яндекс' },
             ]}
             onChange={(engine) => update('tts', { engine })}
           />
@@ -285,10 +300,60 @@ export function SettingsPage({ updates }: { updates: UpdateState }) {
               onChange={(sapi_voice) => update('tts', { sapi_voice })}
             />
           )}
+          {tts.engine === 'openai' && (
+            <Select
+              label="Голос OpenAI"
+              value={tts.openai_voice}
+              options={settings.choices.openai_voices}
+              onChange={(openai_voice) => update('tts', { openai_voice })}
+            />
+          )}
+          {tts.engine === 'yandex' && (
+            <Select
+              label="Голос Яндекса"
+              value={tts.yandex_voice}
+              options={settings.choices.yandex_voices}
+              onChange={(yandex_voice) => update('tts', { yandex_voice })}
+            />
+          )}
           <Button icon={<Play size={14} />} onClick={() => void call('preview_voice', tts)}>
             Прослушать
           </Button>
         </Field>
+        {tts.engine === 'openai' && (
+          <>
+            <Field
+              label="Манера речи"
+              hint="Как говорить: характер, тон, темп. По умолчанию — вежливый ИИ-дворецкий в духе Джарвиса"
+              stacked
+            >
+              <StyleInput
+                value={tts.openai_style}
+                fallback={settings.choices.openai_style_default}
+                onSave={(openai_style) => update('tts', { openai_style })}
+              />
+            </Field>
+            <Field label="Адрес API" hint="Можно OpenAI-совместимый прокси-сервис">
+              <LineInput
+                label="Адрес API"
+                value={tts.openai_base_url}
+                onSave={(openai_base_url) => update('tts', { openai_base_url })}
+              />
+            </Field>
+          </>
+        )}
+        {(tts.engine === 'openai' || tts.engine === 'yandex') && (
+          <Field label={tts.engine === 'openai' ? 'Ключ OpenAI' : 'Ключ Yandex Cloud'} hint={keyHint(tts.engine)} stacked>
+            <VoiceKey
+              engine={tts.engine}
+              info={settings.tts_keys[tts.engine]}
+              onResult={(result) => {
+                apply(result)
+                if (result?.ok && result.settings) setSettings(result.settings)
+              }}
+            />
+          </Field>
+        )}
         <Field label="Скорость речи">
           <div className="flex w-56 items-center gap-3">
             <Slider
@@ -440,8 +505,158 @@ export function engineHint(engine: TtsEngine, sileroReady: boolean): string {
         ? 'Офлайн, нейросеть. Только для некоммерческого использования'
         : 'Офлайн, нейросеть. После перезапуска скачается около 270 МБ. Только для некоммерческого использования'
     case 'edge':
-      return 'Голоса Microsoft через интернет. Без интернета говорит запасной голос'
+      return (
+        'Голоса Microsoft через интернет, бесплатно. Многоязычные — новее и живее, но может слышаться ' +
+        'лёгкий акцент. Без интернета говорит запасной голос'
+      )
     case 'sapi':
       return 'Голоса, установленные в Windows'
+    case 'openai':
+      return (
+        'Голоса OpenAI через интернет, по ключу: живая речь, манеру задаёте словами. ' +
+        'Около 1,5 ₽ за минуту речи. Без интернета и ключа говорит запасной голос'
+      )
+    case 'yandex':
+      return (
+        'Yandex SpeechKit через интернет, по ключу Yandex Cloud: родной русский, работает в России. ' +
+        'Около 0,2 ₽ за фразу. Без интернета и ключа говорит запасной голос'
+      )
   }
+}
+
+function keyHint(engine: KeyedEngine) {
+  return (
+    <>
+      {engine === 'openai'
+        ? 'Тот же ключ, что у ChatGPT в разделе «Нейросеть». '
+        : 'API-ключ сервисного аккаунта с ролью ai.speechkit-tts.user. '}
+      <button
+        type="button"
+        aria-label="Где взять ключ голоса"
+        onClick={() => void call('open_tts_key_page', engine)}
+        className="inline-flex items-center gap-1 whitespace-nowrap text-accent hover:underline"
+      >
+        Где взять ключ <ExternalLink size={12} />
+      </button>
+    </>
+  )
+}
+
+/** Подсказка в поле ключа голоса: какой ключ уже есть или какой нужен. */
+export function voiceKeyPlaceholder(engine: KeyedEngine, info: TtsKey): string {
+  if (info.set) {
+    return info.from_system
+      ? `Из переменной Windows ${info.hint} — вставьте ключ, чтобы сохранить свой`
+      : `Сохранён ${info.hint} — вставьте новый, чтобы заменить`
+  }
+  return engine === 'openai' ? 'Вставьте ключ: sk-…' : 'Вставьте API-ключ Yandex Cloud'
+}
+
+/** Ключ голоса по ключу: сохраняется кнопкой в .env; сохранённый можно удалить. */
+function VoiceKey({
+  engine,
+  info,
+  onResult,
+}: {
+  engine: KeyedEngine
+  info: TtsKey
+  onResult: (result: SaveResult | undefined) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const run = async (action: () => Promise<SaveResult | undefined>) => {
+    setBusy(true)
+    try {
+      const result = await action()
+      if (result?.ok) setDraft('')
+      onResult(result)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex w-full items-center gap-2">
+      <div className="relative flex-1">
+        <TextInput
+          aria-label="Ключ голоса"
+          type={show ? 'text' : 'password'}
+          autoComplete="off"
+          spellCheck={false}
+          className="w-full pr-10 font-mono"
+          placeholder={voiceKeyPlaceholder(engine, info)}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && draft.trim()) void run(() => call('tts_save_key', engine, draft.trim()))
+          }}
+        />
+        <IconButton label={show ? 'Скрыть ключ' : 'Показать ключ'} className="absolute top-0.5 right-0.5" onClick={() => setShow(!show)}>
+          {show ? <EyeOff size={15} /> : <Eye size={15} />}
+        </IconButton>
+      </div>
+      <Button
+        aria-label="Сохранить ключ голоса"
+        disabled={busy || !draft.trim()}
+        onClick={() => void run(() => call('tts_save_key', engine, draft.trim()))}
+      >
+        Сохранить
+      </Button>
+      {info.set && !info.from_system && (
+        <IconButton label="Удалить сохранённый ключ" disabled={busy} onClick={() => void run(() => call('tts_forget_key', engine))}>
+          <Trash2 size={15} />
+        </IconButton>
+      )}
+    </div>
+  )
+}
+
+/** Манера речи: сохраняется при уходе с поля; «Как у Джарвиса» возвращает описание по умолчанию. */
+function StyleInput({ value, fallback, onSave }: { value: string; fallback: string; onSave: (value: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <textarea
+        aria-label="Манера речи"
+        rows={6}
+        spellCheck={false}
+        className={cx(inputClass, 'h-auto w-full resize-y py-2 leading-relaxed')}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => draft.trim() !== value.trim() && onSave(draft.trim())}
+      />
+      {draft.trim() !== fallback && (
+        <div>
+          <Button
+            icon={<RotateCw size={14} />}
+            onClick={() => {
+              setDraft(fallback)
+              onSave(fallback)
+            }}
+          >
+            Как у Джарвиса
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Строка, которая сохраняется по Enter или при уходе с поля. */
+function LineInput({ label, value, onSave }: { label: string; value: string; onSave: (value: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const commit = () => (draft.trim() && draft.trim() !== value ? onSave(draft.trim()) : setDraft(value))
+  return (
+    <TextInput
+      aria-label={label}
+      spellCheck={false}
+      className="w-72"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => event.key === 'Enter' && commit()}
+    />
+  )
 }

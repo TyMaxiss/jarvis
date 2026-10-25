@@ -7,6 +7,7 @@ import type {
   AssistantEvent,
   HistoryItem,
   HistoryQuery,
+  KeyedEngine,
   LlmProfileInfo,
   LlmRequest,
   RecentItem,
@@ -15,6 +16,13 @@ import type {
   UpdateInfo,
 } from './types'
 import { createMockCommands } from './mockCommands'
+
+// Манера речи голосов OpenAI по умолчанию (assistant/config.py, JARVIS_STYLE).
+const JARVIS_STYLE =
+  'Голос: собранный, интеллигентный ИИ-дворецкий; тёплый бархатный баритон. Произношение: чистый литературный русский, ' +
+  'правильные ударения, без акцента. Тон: безупречно вежливый, спокойный и уверенный; лёгкая сухая ирония, когда фраза ' +
+  'к этому располагает, — без сарказма и театральности. Темп: размеренный, без спешки; короткие паузы перед важным; ' +
+  'чёткая дикция. Эмоции: сдержанная теплота.'
 
 const profiles: LlmProfileInfo[] = [
   {
@@ -314,8 +322,16 @@ function makeSettings(state: AppState): Settings {
       silero_speaker: 'aidar',
       edge_voice: 'ru-RU-DmitryNeural',
       sapi_voice: '',
+      openai_voice: 'cedar',
+      openai_style: JARVIS_STYLE,
+      openai_base_url: 'https://api.openai.com/v1',
+      yandex_voice: 'kirill:strict',
       rate: 1,
       volume: 1,
+    },
+    tts_keys: {
+      openai: { set: false, hint: '', from_system: false },
+      yandex: { set: false, hint: '', from_system: false },
     },
     llm: { enabled: true, profile: state.llm.profile, profiles },
     ui: state.ui,
@@ -349,6 +365,17 @@ function makeSettings(state: AppState): Settings {
         { value: 'ru-RU-DmitryNeural', title: 'Дмитрий' },
         { value: 'ru-RU-SvetlanaNeural', title: 'Светлана' },
       ],
+      openai_voices: [
+        { value: 'cedar', title: 'Cedar — мужской, лучший по качеству' },
+        { value: 'onyx', title: 'Onyx — низкий мужской' },
+        { value: 'marin', title: 'Marin — женский, лучший по качеству' },
+      ],
+      yandex_voices: [
+        { value: 'kirill:strict', title: 'Кирилл — строгий, в духе Джарвиса' },
+        { value: 'alexander', title: 'Александр' },
+        { value: 'alena', title: 'Алёна' },
+      ],
+      openai_style_default: JARVIS_STYLE,
       silero_ready: false,
     },
     restart_pending: false,
@@ -467,6 +494,15 @@ export function createMockApi(emit: (event: AssistantEvent) => void): AssistantA
       return { ok: true, errors: [], restart: false, settings: structuredClone(settings) }
     },
     async open_key_page() {},
+    async tts_save_key(engine: KeyedEngine, key: string) {
+      settings = { ...settings, tts_keys: { ...settings.tts_keys, [engine]: { set: true, hint: `••••${key.slice(-4)}`, from_system: false } } }
+      return { ok: true, errors: [], restart: false, settings: structuredClone(settings) }
+    },
+    async tts_forget_key(engine: KeyedEngine) {
+      settings = { ...settings, tts_keys: { ...settings.tts_keys, [engine]: { set: false, hint: '', from_system: false } } }
+      return { ok: true, errors: [], restart: false, settings: structuredClone(settings) }
+    },
+    async open_tts_key_page() {},
     async voice_pause(paused: boolean) {
       state.voice.paused = paused
       state.voice.state = paused ? 'paused' : 'idle'

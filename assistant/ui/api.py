@@ -76,6 +76,18 @@ class Api:
         return self._controller.llm_forget_key(profile)
 
     @_logged
+    def tts_save_key(self, engine: str, key: str) -> dict[str, Any]:
+        return self._controller.tts_save_key(engine, key)
+
+    @_logged
+    def tts_forget_key(self, engine: str) -> dict[str, Any]:
+        return self._controller.tts_forget_key(engine)
+
+    @_logged
+    def open_tts_key_page(self, engine: str) -> None:
+        self._controller.open_tts_key_page(engine)
+
+    @_logged
     def open_key_page(self, profile: str) -> None:
         self._controller.open_key_page(profile)
 

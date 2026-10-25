@@ -37,11 +37,13 @@ from assistant.llm.providers import (
     with_profile,
 )
 from assistant.timers import Alarm, Alarms
+from assistant.tts.yandex_tts import KEY_URL as YANDEX_KEY_URL
 from assistant.ui.activity import Activity
 from assistant.ui.confirm import UiConfirmer
 from assistant.ui.events import EventBus
 from assistant.ui.overlay import OverlayController
 from assistant.ui.settings import (
+    TTS_KEY_ENVS,
     Choices,
     SettingsError,
     SettingsStore,
@@ -63,6 +65,11 @@ log = logging.getLogger(__name__)
 WINDOWS = ("main", "overlay", "chat")
 MAIN_MIN = (880, 600)  # наименьший размер главного окна
 PREVIEW_TEXT = "Привет! Я {name}. Так звучит мой голос."
+# Названия движков озвучки в сообщениях: «голосом OpenAI».
+ENGINE_TITLES = {
+    "piper": "Piper", "silero": "Silero", "edge": "Microsoft", "sapi": "Windows", "openai": "OpenAI",
+    "yandex": "Яндекса",
+}  # fmt: skip
 
 
 class WindowHost(Protocol):
@@ -168,6 +175,8 @@ class UiController:
         self.commands = commands
         self._make_agent = make_agent
         self.speech = speech
+        if speech is not None:
+            speech.on_failure = self._speech_failed
         self._volume = volume
         self.bus = bus
         self.activity = activity
@@ -905,6 +914,54 @@ class UiController:
             with external_launch():
                 webbrowser.open(url)
 
+    def _speech_failed(self, engine: str, problem: str) -> None:
+        """Выбранный голос не сработал (нет сети или ключа) — пользователь узнаёт, почему звучит другой."""
+        title = ENGINE_TITLES.get(engine, engine)
+        text = f"Не удалось озвучить голосом {title}: {problem}. Пока говорю запасным голосом"
+        self.bus.emit("toast", {"kind": "error", "text": text})
+
+    # --- Ключи голосов ---------------------------------------------------------------
+
+    def tts_save_key(self, engine: str, key: str) -> dict[str, Any]:
+        """Сохраняет в .env ключ голоса по ключу (OpenAI — общий с профилем ChatGPT).
+
+        Голос читает ключ при каждой фразе — новый работает сразу, без перезапуска.
+        """
+        env = TTS_KEY_ENVS.get(engine)
+        if env is None:
+            return self._save_result(False, [f"У голоса «{engine}» нет ключа"])
+        try:
+            self.store.save_key(env, key)
+        except SettingsError as exc:
+            return self._save_result(False, exc.errors)
+        log.info("Ключ голоса %s сохранён", engine)
+        self._key_changed(env)
+        self.push_state()
+        return self._save_result(True, [])
+
+    def tts_forget_key(self, engine: str) -> dict[str, Any]:
+        """Удаляет сохранённый ключ голоса."""
+        env = TTS_KEY_ENVS.get(engine)
+        if env is None:
+            return self._save_result(False, [f"У голоса «{engine}» нет ключа"])
+        self.store.forget_key(env)
+        self._key_changed(env)
+        self.push_state()
+        return self._save_result(True, [])
+
+    def open_tts_key_page(self, engine: str) -> None:
+        """Страница, где создают ключ голоса (адрес — из списка, а не из окна)."""
+        url = {"openai": provider_info("openai", None).key_url, "yandex": YANDEX_KEY_URL}.get(engine)
+        if url:
+            with external_launch():
+                webbrowser.open(url)
+
+    def _key_changed(self, env: str) -> None:
+        """Ключ общий с профилем нейросети (OPENAI_API_KEY) — агенту нужен клиент с новым ключом."""
+        agent = self.pipeline.agent
+        if agent is not None and self.config.llm.active.api_key_env == env:
+            agent.reconfigure(self.config.llm)
+
     # --- Озвучка ---------------------------------------------------------------------
 
     def preview_voice(self, tts: Mapping[str, Any]) -> None:
@@ -938,6 +995,16 @@ class UiController:
             from assistant.tts.edge_tts import EdgeTTS
 
             return EdgeTTS(str(tts.get("edge_voice") or ""), rate).synthesize(text)
+        if engine in ("openai", "yandex"):
+            from assistant.tts.openai_tts import openai_engine
+            from assistant.tts.yandex_tts import YandexTTS
+
+            fields = ("openai_voice", "openai_style", "openai_base_url", "yandex_voice")
+            unsaved = {name: str(tts[name]) for name in fields if tts.get(name) is not None}
+            chosen = self.config.tts.model_copy(update={**unsaved, "rate": rate})
+            if engine == "openai":
+                return openai_engine(chosen).synthesize(text)
+            return YandexTTS(chosen.yandex_voice, rate).synthesize(text)
         if engine == "silero":
             from assistant.tts.silero_tts import SileroTTS
 

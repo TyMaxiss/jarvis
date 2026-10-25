@@ -7,6 +7,7 @@ TTSEngine синтезирует звук, Player проигрывает его,
 
 from __future__ import annotations
 
+import collections
 import logging
 import queue
 import re
@@ -61,6 +62,40 @@ class Player(Protocol):
         ...
 
 
+def pcm16_to_float(data: bytes) -> np.ndarray:
+    """Сырой PCM (16 бит, little-endian, моно) в float32 [-1, 1]; лишний последний байт отбрасывается."""
+    usable = len(data) // 2 * 2
+    return np.frombuffer(data[:usable], dtype="<i2").astype(np.float32) / 32768.0
+
+
+class PhraseCache:
+    """Звук недавних фраз облачного голоса: одни и те же ответы («Готово», «Громкость 60%»)
+    не синтезируются заново — быстрее и бесплатно.
+
+    Args:
+        size: сколько фраз помнить (по 2–3 с звука — до мегабайта на фразу).
+    """
+
+    def __init__(self, size: int = 64) -> None:
+        self._size = size
+        self._items: collections.OrderedDict[str, np.ndarray] = collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, text: str) -> np.ndarray | None:
+        with self._lock:
+            audio = self._items.get(text)
+            if audio is not None:
+                self._items.move_to_end(text)
+            return audio
+
+    def put(self, text: str, audio: np.ndarray) -> None:
+        with self._lock:
+            self._items[text] = audio
+            self._items.move_to_end(text)
+            while len(self._items) > self._size:
+                self._items.popitem(last=False)
+
+
 def split_sentences(text: str) -> list[str]:
     """Делит текст на предложения: озвучка первого начинается, не дожидаясь остальных."""
     return [part.strip() for part in _SENTENCE_RE.split(text.strip()) if part.strip()]
@@ -109,6 +144,8 @@ class SpeechQueue:
         self._retry_after = retry_after
         self._clock = clock
         self._primary_down_until = 0.0
+        # Основной голос не смог озвучить фразу: (движок, причина) — не чаще раза в retry_after.
+        self.on_failure: Callable[[str, str], None] | None = None
         self._texts: queue.Queue[_Item | None] = queue.Queue()
         self._sounds: queue.Queue[_Item | None] = queue.Queue()
         self._ahead = threading.Semaphore(1)  # сколько фраз можно синтезировать впрок
@@ -223,7 +260,7 @@ class SpeechQueue:
             return fallback.synthesize(text)
         try:
             return self.engine.synthesize(text)
-        except Exception:
+        except Exception as exc:
             if fallback is None:
                 raise
             log.warning(
@@ -231,6 +268,11 @@ class SpeechQueue:
                 self.engine.name, self._retry_after, fallback.name, exc_info=True,
             )  # fmt: skip
             self._primary_down_until = self._clock() + self._retry_after
+            if self.on_failure is not None:
+                try:
+                    self.on_failure(self.engine.name, str(exc))
+                except Exception:
+                    log.exception("Не удалось сообщить о сбое голоса")
             return fallback.synthesize(text)
 
 

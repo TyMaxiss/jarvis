@@ -64,6 +64,62 @@ describe('SettingsPage', () => {
   })
 })
 
+describe('Голоса по ключу', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 10))
+
+  it('OpenAI: голос, манера речи в духе Джарвиса, ключ сохраняется кнопкой', async () => {
+    await renderPage()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'OpenAI' }))
+      await tick()
+    })
+    expect(call).toHaveBeenCalledWith('save_settings', { tts: { engine: 'openai' } })
+    expect((screen.getByRole('combobox', { name: 'Голос OpenAI' }) as HTMLSelectElement).value).toBe('cedar')
+    const style = screen.getByRole('textbox', { name: 'Манера речи' }) as HTMLTextAreaElement
+    expect(style.value).toMatch(/ИИ-дворецкий/)
+    expect(screen.queryByRole('button', { name: 'Как у Джарвиса' })).toBeNull() // и так по умолчанию
+    // Своя манера сохраняется, когда уходят с поля; «Как у Джарвиса» возвращает исходную.
+    await act(async () => {
+      fireEvent.change(style, { target: { value: 'Говори бодро и быстро' } })
+      fireEvent.blur(style)
+      await tick()
+    })
+    expect(call).toHaveBeenCalledWith('save_settings', { tts: { openai_style: 'Говори бодро и быстро' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Как у Джарвиса' }))
+      await tick()
+    })
+    expect((call.mock.calls.at(-1) as unknown[])[1]).toEqual({ tts: { openai_style: expect.stringMatching(/ИИ-дворецкий/) } })
+
+    const key = screen.getByLabelText('Ключ голоса') as HTMLInputElement
+    expect(key.placeholder).toBe('Вставьте ключ: sk-…')
+    expect(screen.getByText(/Тот же ключ, что у ChatGPT/)).toBeTruthy()
+    await act(async () => {
+      fireEvent.change(key, { target: { value: 'sk-test-1234abcd' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Сохранить ключ голоса' }))
+      await tick()
+    })
+    expect(call).toHaveBeenCalledWith('tts_save_key', 'openai', 'sk-test-1234abcd')
+    expect(key.value).toBe('')
+    expect(key.placeholder).toBe('Сохранён ••••abcd — вставьте новый, чтобы заменить')
+    fireEvent.click(screen.getByRole('button', { name: 'Прослушать' }))
+    expect(call).toHaveBeenCalledWith('preview_voice', expect.objectContaining({ engine: 'openai', openai_voice: 'cedar' }))
+  })
+
+  it('Яндекс: свой список голосов и ключ Yandex Cloud, без манеры речи', async () => {
+    await renderPage()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Яндекс' }))
+      await tick()
+    })
+    expect((screen.getByRole('combobox', { name: 'Голос Яндекса' }) as HTMLSelectElement).value).toBe('kirill:strict')
+    expect(screen.queryByRole('textbox', { name: 'Манера речи' })).toBeNull()
+    expect((screen.getByLabelText('Ключ голоса') as HTMLInputElement).placeholder).toBe('Вставьте API-ключ Yandex Cloud')
+    fireEvent.click(screen.getByRole('button', { name: 'Где взять ключ голоса' }))
+    expect(call).toHaveBeenCalledWith('open_tts_key_page', 'yandex')
+  })
+})
+
 describe('Оформление оверлея', () => {
   it('сфера выбирается и сохраняется сразу, без оверлея выбор недоступен', async () => {
     await renderPage()
@@ -105,5 +161,7 @@ describe('engineHint', () => {
     expect(engineHint('silero', true)).not.toMatch(/скачается/)
     expect(engineHint('edge', false)).toMatch(/через интернет/)
     expect(engineHint('piper', false)).toMatch(/Офлайн/)
+    expect(engineHint('openai', false)).toMatch(/по ключу/)
+    expect(engineHint('yandex', false)).toMatch(/работает в России/)
   })
 })

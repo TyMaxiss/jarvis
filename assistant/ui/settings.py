@@ -23,6 +23,7 @@ from ruamel.yaml.error import YAMLError
 
 from assistant.config import (
     DEFAULT_LLM_PROFILES,
+    JARVIS_STYLE,
     AppConfig,
     LlmProfile,
     format_validation_error,
@@ -31,7 +32,11 @@ from assistant.config import (
 from assistant.llm.keys import clean_key, format_problem
 from assistant.llm.providers import CUSTOM_KEY_ENV, CUSTOM_PROFILE, CUSTOM_TITLE, provider_info
 from assistant.tts.edge_tts import EDGE_VOICES
+from assistant.tts.openai_tts import KEY_ENV as OPENAI_KEY_ENV
+from assistant.tts.openai_tts import OPENAI_VOICES
 from assistant.tts.silero_tts import SILERO_SPEAKERS
+from assistant.tts.yandex_tts import KEY_ENV as YANDEX_KEY_ENV
+from assistant.tts.yandex_tts import YANDEX_VOICES
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +60,19 @@ UI_FIELDS: dict[str, frozenset[str]] = {
     ),
     "stt": frozenset({"model", "device"}),
     "tts": frozenset(
-        {"engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "rate", "volume"}
+        {
+            "engine",
+            "piper_voice",
+            "silero_speaker",
+            "edge_voice",
+            "sapi_voice",
+            "openai_voice",
+            "openai_style",
+            "openai_base_url",
+            "yandex_voice",
+            "rate",
+            "volume",
+        }
     ),
     "ui": frozenset({"theme", "accent", "overlay", "overlay_style", "overlay_keep", "quick_chat_key"}),
     "llm": frozenset({"enabled"}),
@@ -338,6 +355,16 @@ def piper_voices(config: AppConfig) -> list[tuple[str, str]]:
     return voices
 
 
+# Голоса по ключу: движок → переменная .env с ключом. Ключ OpenAI — общий с профилем ChatGPT.
+TTS_KEY_ENVS = {"openai": OPENAI_KEY_ENV, "yandex": YANDEX_KEY_ENV}
+
+
+def key_view(store: SettingsStore, env: str) -> dict[str, Any]:
+    """Сохранён ли ключ и как он выглядит («••••3f2a»); ключ задан в Windows, а не в .env."""
+    key = store.key(env)
+    return {"set": bool(key), "hint": key_hint(key), "from_system": store.key_from_system(env)}
+
+
 def _choices(items: list[tuple[str, str]], current: str) -> list[dict[str, str]]:
     """Список для интерфейса; текущее значение есть в нём, даже если его не нашли."""
     result = [{"value": value, "title": title} for value, title in items]
@@ -444,9 +471,15 @@ def settings_view(config: AppConfig, store: SettingsStore, choices: Choices) -> 
             "silero_speaker": tts.silero_speaker,
             "edge_voice": tts.edge_voice,
             "sapi_voice": tts.sapi_voice,
+            "openai_voice": tts.openai_voice,
+            "openai_style": tts.openai_style,
+            "openai_base_url": tts.openai_base_url,
+            "yandex_voice": tts.yandex_voice,
             "rate": tts.rate,
             "volume": tts.volume,
         },
+        # Ключи голосов: сохранён ли (сам ключ интерфейс не получает).
+        "tts_keys": {name: key_view(store, env) for name, env in TTS_KEY_ENVS.items()},
         "llm": {
             "enabled": config.llm.enabled,
             "profile": config.llm.profile,
@@ -465,6 +498,9 @@ def settings_view(config: AppConfig, store: SettingsStore, choices: Choices) -> 
             ],
             "silero_speakers": _choices(list(SILERO_SPEAKERS), tts.silero_speaker),
             "edge_voices": _choices(list(EDGE_VOICES), tts.edge_voice),
+            "openai_voices": _choices(list(OPENAI_VOICES), tts.openai_voice),
+            "yandex_voices": _choices(list(YANDEX_VOICES), tts.yandex_voice),
+            "openai_style_default": JARVIS_STYLE,
             "silero_ready": silero_ready(config),
             "stt_models": _choices(choices.stt_models, stt.model),
         },

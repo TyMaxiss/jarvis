@@ -190,6 +190,18 @@ def test_edge_voice_with_windows_voice_as_fallback(tmp_path: Path, windows_voice
     speech.close()
 
 
+@pytest.mark.parametrize(("engine", "voice"), [("openai", "cedar"), ("yandex", "kirill")])
+def test_keyed_voice_with_windows_voice_as_fallback(
+    tmp_path: Path, windows_voices: None, engine: str, voice: str
+) -> None:
+    # Голос по ключу создаётся без сети и без ключа: без них фразу скажет запасной голос.
+    speech = main.create_speech(tts_config(tmp_path, engine), io.StringIO())
+    assert speech is not None
+    assert (speech.engine.name, speech.engine.voice) == (engine, voice)  # type: ignore[attr-defined]
+    assert speech._fallback is not None and speech._fallback.name == "sapi"
+    speech.close()
+
+
 def test_silero_is_downloaded_then_replaces_fallback_voice(
     tmp_path: Path, windows_voices: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

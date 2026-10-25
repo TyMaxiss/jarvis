@@ -182,31 +182,59 @@ def test_settings_view_matches_interface(settings: SettingsStore) -> None:
     config = settings.load()
     view = settings_view(config, settings, Choices(microphones=[(1, "Микрофон (Realtek)"), (3, "USB Audio")]))
     # Ключи — как в типе Settings в ui/src/lib/types.ts.
-    assert set(view) == {"general", "voice", "stt", "tts", "llm", "ui", "choices"}
+    assert set(view) == {"general", "voice", "stt", "tts", "tts_keys", "llm", "ui", "choices"}
     assert set(view["general"]) == {"name", "dry_run", "check_updates"}  # autostart добавляет UiController
     assert set(view["voice"]) == {
         "enabled", "wake_word", "push_to_talk", "push_to_talk_key", "push_to_talk_mode", "stop_key",
         "input_device", "wake_confidence", "followup_seconds", "min_silence_ms", "sounds",
     }  # fmt: skip
     assert set(view["tts"]) == {
-        "engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "rate", "volume",
+        "engine", "piper_voice", "silero_speaker", "edge_voice", "sapi_voice", "openai_voice", "openai_style",
+        "openai_base_url", "yandex_voice", "rate", "volume",
     }  # fmt: skip
+    assert view["tts_keys"] == {
+        "openai": {"set": False, "hint": "", "from_system": False},
+        "yandex": {"set": False, "hint": "", "from_system": False},
+    }
     assert set(view["ui"]) == {
         "theme", "accent", "overlay", "overlay_style", "overlay_keep", "quick_chat_key",
     }  # fmt: skip
     assert set(view["choices"]) == {
         "microphones", "piper_voices", "sapi_voices", "stt_models", "silero_speakers", "edge_voices",
-        "silero_ready",
+        "openai_voices", "yandex_voices", "openai_style_default", "silero_ready",
     }  # fmt: skip
-    assert [c["value"] for c in view["choices"]["edge_voices"]] == [
+    # Голос по ключу в духе Джарвиса — по умолчанию: вежливый ИИ-дворецкий.
+    assert view["tts"]["openai_voice"] == "cedar" and "ИИ-дворецкий" in view["tts"]["openai_style"]
+    assert view["choices"]["openai_style_default"] == view["tts"]["openai_style"]
+    assert view["choices"]["yandex_voices"][0]["value"] == "kirill:strict"
+    assert [c["value"] for c in view["choices"]["edge_voices"]][:3] == [
         "ru-RU-DmitryNeural",
         "ru-RU-SvetlanaNeural",
+        "en-US-BrianMultilingualNeural",
     ]
     assert view["choices"]["silero_speakers"][0] == {"value": "aidar", "title": "Айдар"}
     assert view["choices"]["silero_ready"] is False
     assert view["voice"]["input_device"] == ""
     assert [c["value"] for c in view["choices"]["microphones"]] == ["", "Микрофон (Realtek)", "USB Audio"]
     assert view["tts"]["piper_voice"] == "models/piper/ru_RU-dmitri-medium.onnx"
+
+
+def test_keyed_voice_settings_are_checked(settings: SettingsStore) -> None:
+    config = settings.update(
+        {"tts": {"engine": "yandex", "yandex_voice": "alexander", "openai_style": "Говори бодро"}}
+    )
+    assert (config.tts.engine, config.tts.yandex_voice, config.tts.openai_style) == (
+        "yandex",
+        "alexander",
+        "Говори бодро",
+    )
+    for bad in (
+        {"openai_voice": "Cedar!"},
+        {"yandex_voice": "kirill strict"},
+        {"openai_base_url": "api.openai.com"},
+    ):
+        with pytest.raises(SettingsError):
+            settings.update({"tts": bad})
 
 
 def test_microphone_number_from_config_is_shown_by_name(settings: SettingsStore) -> None:

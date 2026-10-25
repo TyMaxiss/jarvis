@@ -97,7 +97,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--test-voice",
-        choices=("piper", "silero", "edge", "sapi"),
+        choices=("piper", "silero", "edge", "sapi", "openai", "yandex"),
         help="озвучить пробную фразу этим голосом (без воспроизведения) и выйти",
     )
     # Процесс синтеза Silero запускается из __main__ раньше main(); здесь — чтобы ключ был известен.
@@ -182,10 +182,12 @@ def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
     """
     from assistant.models import piper_voice_ready, silero_runtime
     from assistant.tts.edge_tts import EdgeTTS
+    from assistant.tts.openai_tts import openai_engine
     from assistant.tts.piper_tts import PiperTTS
     from assistant.tts.player import SoundDevicePlayer
     from assistant.tts.sapi_tts import SapiTTS
     from assistant.tts.silero_tts import silero_engine
+    from assistant.tts.yandex_tts import YandexTTS
 
     tts = config.tts
     sapi = SapiTTS(tts.sapi_voice, tts.rate) if sys.platform == "win32" else None
@@ -207,6 +209,10 @@ def create_speech(config: AppConfig, out: TextIO) -> SpeechQueue | None:
             out.write("Голос Piper скачаю при запуске голоса, а пока говорю голосом Windows (SAPI).\n")
     elif tts.engine == "edge":
         chosen = EdgeTTS(tts.edge_voice, tts.rate)
+    elif tts.engine == "openai":
+        chosen = openai_engine(tts)
+    elif tts.engine == "yandex":
+        chosen = YandexTTS(tts.yandex_voice, tts.rate)
     elif tts.engine == "silero":
         if silero_runtime()[0] and config.resolve(tts.silero_model).is_file():
             silero = silero_engine(config)

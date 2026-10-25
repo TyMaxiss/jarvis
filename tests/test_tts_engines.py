@@ -174,9 +174,12 @@ def test_failed_primary_is_skipped_for_a_while() -> None:
     now = [100.0]
     edge, piper = Engine("edge", fail=True), Engine("piper")
     queue = SpeechQueue(edge, Player(), piper, retry_after=60, clock=lambda: now[0])
+    failures: list[tuple[str, str]] = []
+    queue.on_failure = lambda engine, problem: failures.append((engine, problem))
     queue.say("Раз. Два.")
     assert queue.wait_idle(timeout=5)
     assert edge.texts == ["Раз."] and piper.texts == ["Раз.", "Два."]  # «Два» — сразу запасным
+    assert failures == [("edge", "нет сети")]  # о сбое — один раз, а не на каждую фразу
     now[0] += 61
     edge.fail = False
     queue.say("Три.")

@@ -83,12 +83,21 @@ stt:
 tts:
   engine: piper                  # piper — офлайн, по умолчанию;
                                  # silero — офлайн, нейросеть (при первом выборе скачивается ~300 МБ);
-                                 # edge — голоса Microsoft через интернет; sapi — голоса Windows
+                                 # edge — голоса Microsoft через интернет; sapi — голоса Windows;
+                                 # openai — голоса OpenAI по ключу (OPENAI_API_KEY), манера речи — словами;
+                                 # yandex — Yandex SpeechKit по ключу (YANDEX_API_KEY), работает и в России
   piper_voice: models/piper/ru_RU-dmitri-medium.onnx  # ещё есть irina, denis, ruslan
   silero_speaker: aidar          # голос Silero: aidar, eugene (мужские), baya, kseniya, xenia (женские)
   silero_model: models/silero/v5_6_ru.pt
-  edge_voice: ru-RU-DmitryNeural # или ru-RU-SvetlanaNeural
+  edge_voice: ru-RU-DmitryNeural # или ru-RU-SvetlanaNeural; многоязычные: en-US-BrianMultilingualNeural и др.
   sapi_voice: ""                 # часть названия голоса Windows; пусто — первый русский
+  openai_voice: cedar            # cedar, onyx, ash, ballad, echo, verse, fable, alloy (мужские и нейтральные),
+                                 # marin, coral, nova, sage, shimmer (женские)
+  openai_model: gpt-4o-mini-tts
+  openai_base_url: https://api.openai.com/v1  # можно OpenAI-совместимый прокси-сервис
+  # openai_style: "…"            # как говорить; по умолчанию — вежливый ИИ-дворецкий в духе Джарвиса
+  yandex_voice: kirill:strict    # голос[:амплуа]: kirill, alexander, anton, filipp, ermil, zahar (мужские),
+                                 # alena, dasha, julia, lera, marina, masha (женские)
   rate: 1.0                      # скорость речи
   volume: 1.0
 

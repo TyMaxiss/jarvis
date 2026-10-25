@@ -177,11 +177,27 @@ class SttConfig(_Section):
     prompt_app_names: int = Field(30, ge=0, le=200, description="Сколько названий программ подсказывать")
 
 
+# Манера речи голосов OpenAI по умолчанию — в духе Джарвиса: вежливый ИИ-дворецкий. Голос не
+# копирует ни актёра фильма, ни кого-то ещё: характер задаёт только это описание.
+JARVIS_STYLE = (
+    "Голос: собранный, интеллигентный ИИ-дворецкий; тёплый бархатный баритон. "
+    "Произношение: чистый литературный русский, правильные ударения, без акцента. "
+    "Тон: безупречно вежливый, спокойный и уверенный; лёгкая сухая ирония, когда фраза к этому "
+    "располагает, — без сарказма и театральности. "
+    "Темп: размеренный, без спешки; короткие паузы перед важным; чёткая дикция. "
+    "Эмоции: сдержанная теплота."
+)
+
+
 class TtsConfig(_Section):
     """Озвучка ответов."""
 
-    engine: Literal["piper", "silero", "edge", "sapi"] = Field(
-        "piper", description="piper, silero (офлайн, нейросеть), edge (онлайн, Microsoft) или sapi (Windows)"
+    engine: Literal["piper", "silero", "edge", "sapi", "openai", "yandex"] = Field(
+        "piper",
+        description=(
+            "piper, silero (офлайн, нейросеть), edge (онлайн, Microsoft), sapi (Windows), "
+            "openai (онлайн, по ключу) или yandex (онлайн, Yandex SpeechKit по ключу)"
+        ),
     )
     piper_voice: Path = Path("models/piper/ru_RU-dmitri-medium.onnx")
     silero_model: Path = Path("models/silero/v5_6_ru.pt")
@@ -190,6 +206,17 @@ class TtsConfig(_Section):
         "ru-RU-DmitryNeural", pattern=r"^[a-z]{2}-[A-Z]{2}-\w+Neural$", description="Голос Microsoft"
     )
     sapi_voice: str = Field("", description="Часть названия голоса SAPI; пусто — первый русский")
+    openai_voice: str = Field("cedar", pattern=r"^[a-z]+$", description="Голос OpenAI")
+    openai_model: str = Field("gpt-4o-mini-tts", min_length=1, description="Модель озвучки OpenAI")
+    openai_base_url: str = Field(
+        "https://api.openai.com/v1", pattern=r"^https?://", description="Адрес OpenAI-совместимого API"
+    )
+    openai_style: str = Field(
+        JARVIS_STYLE, max_length=4000, description="Как говорить (instructions): манера, темп, характер"
+    )
+    yandex_voice: str = Field(
+        "kirill:strict", pattern=r"^[a-z_]+(:[a-z_]+)?$", description="Голос Yandex SpeechKit[:амплуа]"
+    )
     rate: float = Field(1.0, ge=0.5, le=2.0, description="Скорость речи")
     volume: float = Field(1.0, ge=0.1, le=2.0)
 

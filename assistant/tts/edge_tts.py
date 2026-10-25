@@ -18,8 +18,20 @@ from assistant.tts.base import TTSError
 
 log = logging.getLogger(__name__)
 
-# Русские голоса сервиса (edge_tts.list_voices(), локаль ru-RU).
-EDGE_VOICES = (("ru-RU-DmitryNeural", "Дмитрий"), ("ru-RU-SvetlanaNeural", "Светлана"))
+# Голоса сервиса для русского: свои (локаль ru-RU) и многоязычные — новее и живее, они сами узнают
+# язык текста (может слышаться лёгкий акцент). Калибровка в CI (tests/test_voice_e2e.py): русскую
+# фразу, озвученную многоязычными голосами, Whisper распознаёт на 96–100 из 100.
+EDGE_VOICES = (
+    ("ru-RU-DmitryNeural", "Дмитрий"),
+    ("ru-RU-SvetlanaNeural", "Светлана"),
+    ("en-US-BrianMultilingualNeural", "Брайан — многоязычный, мужской"),
+    ("en-US-AndrewMultilingualNeural", "Эндрю — многоязычный, мужской"),
+    ("de-DE-FlorianMultilingualNeural", "Флориан — многоязычный, мужской"),
+    ("it-IT-GiuseppeMultilingualNeural", "Джузеппе — многоязычный, мужской"),
+    ("fr-FR-RemyMultilingualNeural", "Реми — многоязычный, мужской"),
+    ("en-US-EmmaMultilingualNeural", "Эмма — многоязычный, женский"),
+    ("de-DE-SeraphinaMultilingualNeural", "Серафина — многоязычный, женский"),
+)
 SAMPLE_RATE = 24_000  # формат ответа сервиса: audio-24khz-48kbitrate-mono-mp3
 CONNECT_TIMEOUT = 5  # секунд: без сети быстрее перейти на запасной голос
 RECEIVE_TIMEOUT = 15

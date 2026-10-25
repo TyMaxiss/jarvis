@@ -268,7 +268,15 @@ export interface Choice {
 }
 
 // piper и silero — офлайн, edge — голоса Microsoft через интернет, sapi — голоса Windows.
-export type TtsEngine = 'piper' | 'silero' | 'edge' | 'sapi'
+export type TtsEngine = 'piper' | 'silero' | 'edge' | 'sapi' | 'openai' | 'yandex'
+export type KeyedEngine = 'openai' | 'yandex' // голоса по ключу
+
+// Ключ голоса: сохранён ли и как выглядит («••••3f2a»); сам ключ интерфейс не получает.
+export interface TtsKey {
+  set: boolean
+  hint: string
+  from_system: boolean // задан переменной Windows, а не сохранён в .env
+}
 
 export interface Settings {
   general: {
@@ -297,9 +305,14 @@ export interface Settings {
     silero_speaker: string
     edge_voice: string
     sapi_voice: string
+    openai_voice: string
+    openai_style: string // как говорить (instructions)
+    openai_base_url: string
+    yandex_voice: string // голос[:амплуа]
     rate: number
     volume: number
   }
+  tts_keys: Record<KeyedEngine, TtsKey>
   llm: { enabled: boolean; profile: string; profiles: LlmProfileInfo[] }
   ui: UiSettings
   choices: {
@@ -309,13 +322,16 @@ export interface Settings {
     stt_models: Choice[]
     silero_speakers: Choice[]
     edge_voices: Choice[]
+    openai_voices: Choice[]
+    yandex_voices: Choice[]
+    openai_style_default: string // манера речи по умолчанию — в духе Джарвиса
     silero_ready: boolean // PyTorch и модель Silero уже скачаны
   }
   restart_pending: boolean // есть изменения, которые применятся после перезапуска
 }
 
 export type SettingsPatch = {
-  [K in keyof Omit<Settings, 'choices' | 'llm'>]?: Partial<Settings[K]>
+  [K in keyof Omit<Settings, 'choices' | 'llm' | 'tts_keys'>]?: Partial<Settings[K]>
 } & { llm?: { enabled?: boolean } }
 
 export interface SaveResult {
@@ -386,6 +402,9 @@ export interface AssistantApi {
   llm_save(request: LlmRequest): Promise<SaveResult>
   llm_forget_key(profile: string): Promise<SaveResult>
   open_key_page(profile: string): Promise<void>
+  tts_save_key(engine: KeyedEngine, key: string): Promise<SaveResult>
+  tts_forget_key(engine: KeyedEngine): Promise<SaveResult>
+  open_tts_key_page(engine: KeyedEngine): Promise<void>
   voice_pause(paused: boolean): Promise<AppState>
   voice_listen(): Promise<void>
   voice_stop(): Promise<void> // остановить задачу, речь и прослушивание (как Ctrl+Alt+Q)
