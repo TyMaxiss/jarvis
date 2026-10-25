@@ -21,12 +21,17 @@
 * «Джарвис, стоп» в покое Vosk слышит сразу, без Whisper.
 Кнопка на главной и Ctrl+Alt+Q останавливают через interrupt() — и фразу, которая ещё
 распознаётся.
+
+Команда — только то, что сказано после имени: «Слушай, Маша, пойдём. Джарвис, открой ютуб» —
+это «Открой ютуб». Звук до имени (по времени слова у Vosk) не получает Whisper, а текст до
+имени отрезается в том, что Whisper распознал.
 """
 
 from __future__ import annotations
 
 import logging
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -36,7 +41,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, AudioSource
+from assistant.audio.capture import BLOCK_MS, BLOCK_SIZE, SAMPLE_RATE, AudioSource
 from assistant.audio.vad import SegmentEvent, SpeechSegmenter
 from assistant.audio.wakeword import SpotResult
 from assistant.nlu.names import skeleton
@@ -49,6 +54,11 @@ log = logging.getLogger(__name__)
 
 # После окончания речи ассистента ещё немного не слушаем: эхо и реверберация.
 _ECHO_GUARD_MS = 300
+# Сколько звука до имени (по времени слова у Vosk) всё же отдать Whisper: Vosk отмечает начало
+# слова с точностью ~0,1 с, а обрезанное начало имени Whisper не узнал бы.
+_NAME_LEAD_S = 0.4
+_WORD_RE = re.compile(r"\w+")
+_LEADING_PUNCT = " \t\n,.!?;:…—–-\"'«»()"
 # Сколько после начала сигнала «слушаю» ещё может длиться его воспроизведение (задержка вывода).
 _CHIME_MARGIN_MS = 500
 # Слова-приманки, похожие на «стоп» по звучанию: их нет в грамматике стоп-слов. Калибровка
@@ -469,19 +479,40 @@ class VoiceLoop:
         span_ms = self._segmenter.speech_span_ms
         if only_name and span_ms <= self._name_only_ms:
             self._listen(chime=True)
-        else:
-            log.debug("Речь с именем %d мс — распознаю целиком", span_ms)
-            self._process(self._segmenter.segment_audio, "wake")
+            return
+        log.debug("Речь с именем %d мс — распознаю с имени", span_ms)
+        audio = self._segmenter.segment_audio
+        start = heard.start_of(self._wake_phrase, self._settings.wake_confidence)
+        cut = int(((start or 0.0) - _NAME_LEAD_S) * SAMPLE_RATE)
+        if cut >= BLOCK_SIZE:  # до имени говорили — это не команда, Whisper этого не услышит
+            log.info("До имени %.1f с речи — распознаю только с имени", start)
+            audio = audio[cut:]
+        self._process(audio, "wake")
 
     def mentions_name(self, text: str) -> bool:
         """Есть ли имя ассистента в тексте (с учётом вариантов написания: «Jarvis», «Джервис»)."""
+        return self._name_in(text) is not None
+
+    def after_name(self, text: str) -> str | None:
+        """Что сказано после первого обращения по имени, с заглавной буквы; None — имени в тексте нет.
+
+        «Слушай, Джарвис, открой ютуб.» → «Открой ютуб.»; «Открой ютуб, Джарвис.» → «».
+        """
+        name = self._name_in(text)
+        if name is None:
+            return None
+        rest = text[name.end() :].lstrip(_LEADING_PUNCT)
+        return rest[:1].upper() + rest[1:]
+
+    def _name_in(self, text: str) -> re.Match[str] | None:
+        """Первое слово текста, в котором узнаётся имя ассистента."""
         from rapidfuzz import fuzz
 
-        for word in basic_clean(text).split():
-            word_skeleton = skeleton(word)
-            if any(fuzz.ratio(word_skeleton, name) >= 80 for name in self._wake_skeletons):
-                return True
-        return False
+        for word in _WORD_RE.finditer(text):
+            word_skeleton = skeleton(basic_clean(word.group()))
+            if word_skeleton and any(fuzz.ratio(word_skeleton, name) >= 80 for name in self._wake_skeletons):
+                return word
+        return None
 
     def _enter_idle(self) -> None:
         self._hold_buffer = []
@@ -632,24 +663,31 @@ class VoiceLoop:
         if not transcript.text:
             self._enter_idle()
             return
-        if origin == "wake" and self._settings.verify_wake_word and not self.mentions_name(transcript.text):
-            # Vosk «услышал» имя, а Whisper его не слышит — скорее всего, ложное срабатывание.
-            log.info("Имени нет в распознанном «%s» — игнорирую", transcript.text)
-            self._enter_idle()
-            return
-        normalized = self._normalizer.normalize(transcript.text)
+        text = transcript.text
+        if origin == "wake":
+            if self._settings.verify_wake_word and not self.mentions_name(text):
+                # Vosk «услышал» имя, а Whisper его не слышит — скорее всего, ложное срабатывание.
+                log.info("Имени нет в распознанном «%s» — игнорирую", text)
+                self._enter_idle()
+                return
+            command = self.after_name(text)
+            if command is not None and command != text:
+                # Сказанное до имени обращено не к ассистенту: команда — только то, что после него.
+                log.info("Команда после имени: «%s»", command)
+                text = command
+        normalized = self._normalizer.normalize(text)
         if not normalized:
-            # Во фразе было только имя — ждём саму команду.
+            # Во фразе было только имя (или всё сказано до него) — ждём саму команду.
             self._listen(chime=True)
             return
         if is_stop_phrase(normalized):
             # «Стоп» вместо команды: остановить ассистента, а не искать команду.
-            self._stop_heard(transcript.text)
+            self._stop_heard(text)
             self._enter_idle()
             return
-        self._report("recognized", transcript.text)
+        self._report("recognized", text)
         started = time.perf_counter()
-        result, stopped = self._run_task(transcript.text)
+        result, stopped = self._run_task(text)
         action_ms = (time.perf_counter() - started) * 1000
         total_ms = pause_ms + transcript.duration_ms + action_ms
         log.info("Текст → результат: %.0f мс; конец речи → результат: %.0f мс", action_ms, total_ms)

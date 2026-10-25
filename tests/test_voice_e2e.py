@@ -145,7 +145,19 @@ def speech_span_ms(audio: np.ndarray) -> int:
     return -1
 
 
-def run_loop(audio: np.ndarray, vosk_model: object, stt: WhisperSTT) -> tuple[list[str], int]:
+class HeardSTT:
+    """Whisper, который запоминает, сколько звука (секунд) ему дали распознать."""
+
+    def __init__(self, stt: WhisperSTT) -> None:
+        self.stt = stt
+        self.seconds: list[float] = []
+
+    def transcribe(self, audio: np.ndarray) -> Any:
+        self.seconds.append(len(audio) / 16_000)
+        return self.stt.transcribe(audio)
+
+
+def run_loop(audio: np.ndarray, vosk_model: object, stt: WhisperSTT | HeardSTT) -> tuple[list[str], int]:
     """Прогоняет звук через голосовой цикл: что ушло в конвейер и сколько раз прозвучал сигнал."""
     handled: list[str] = []
     speech = FakeSpeech()
@@ -406,6 +418,26 @@ def test_wake_word_and_command_in_one_phrase(piper: PiperTTS, vosk_model: object
     audio = np.concatenate([gap(1.0), say(piper, "Джарвис открой ютуб."), gap(1.5)])
     handled, chimes = run_loop(audio, vosk_model, stt)
     assert len(handled) == 1 and chimes == 0, handled
+
+
+def test_words_before_name_are_not_the_command(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
+    # Разговор и обращение одним духом: звук до имени Whisper не получает, текст до имени
+    # в конвейер не уходит.
+    said = say(piper, "Ну что пойдём гулять Джарвис открой ютуб.")
+    heard = HeardSTT(stt)
+    handled, chimes = run_loop(np.concatenate([gap(1.0), said, gap(1.5)]), vosk_model, heard)
+    log.warning("Whisper получил %s с из %.1f с фразы", heard.seconds, len(said) / 16_000)
+    assert len(handled) == 1 and chimes == 0, handled
+    assert not {"пойдем", "пойдём", "гулять"} & set(handled[0].lower().replace(",", " ").split()), handled
+    assert heard.seconds[0] < len(said) / 16_000 - 0.5, heard.seconds  # звук обрезан до имени
+
+
+def test_command_before_name_is_not_executed(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
+    # «Открой ютуб, Джарвис»: команда сказана до обращения — её нет, ассистент ждёт новую.
+    audio = np.concatenate([gap(1.0), say(piper, "Открой ютуб Джарвис."), gap(1.5)])
+    handled, chimes = run_loop(audio, vosk_model, stt)
+    log.warning("Команда до имени: сигналов «слушаю» %d", chimes)
+    assert handled == []
 
 
 @pytest.mark.parametrize("pause", [1.2, 0.8], ids=["пауза 1.2 с", "команда во время сигнала"])

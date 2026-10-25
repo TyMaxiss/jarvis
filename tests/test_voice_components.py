@@ -394,6 +394,65 @@ def test_spot_result_find() -> None:
     assert parse_result('{"text": "да", "result": [{"word": "да", "conf": 0.75}]}').words == (("да", 0.75),)
 
 
+def test_spot_result_knows_when_name_was_said() -> None:
+    raw = json.dumps({
+        "text": "ну джарвис [unk]",
+        "result": [
+            {"word": "ну", "conf": 0.9, "start": 12.0, "end": 12.3},
+            {"word": "джарвис", "conf": 1.0, "start": 12.42, "end": 12.9},
+            {"word": "[unk]", "conf": 1.0, "start": 13.0, "end": 13.6},
+        ],
+    })  # fmt: skip
+    heard = parse_result(raw, origin=11.5)  # время у Vosk — от начала потока, а нужно — от начала фразы
+    assert heard.times[1] == pytest.approx((0.92, 1.4))
+    assert heard.start_of("джарвис", 0.8) == pytest.approx(0.92)
+    assert heard.start_of("джарвис", 1.01) is None and heard.start_of("компьютер", 0.5) is None
+    later = heard + parse_result(json.dumps({"text": "джарвис", "result": [
+        {"word": "джарвис", "conf": 1.0, "start": 14.0, "end": 14.5}]}), origin=11.5)  # fmt: skip
+    assert later.start_of("джарвис", 0.8) == pytest.approx(0.92)  # первое вхождение
+    untimed = heard + SpotResult("да", (("да", 1.0),))  # без времени у части слов — времени нет
+    assert untimed.times == () and untimed.start_of("джарвис", 0.8) is None
+
+
+def test_grammar_spotter_counts_time_from_phrase_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    import vosk
+
+    class FakeRecognizer:
+        """Как Vosk: время слова — от начала всего звука, поданного распознавателю."""
+
+        def __init__(self, model: object, rate: int, grammar: str) -> None:
+            self.seconds = 0.0
+
+        def SetWords(self, enabled: bool) -> None:
+            pass
+
+        def AcceptWaveform(self, data: bytes) -> bool:
+            self.seconds += len(data) / 2 / 16_000
+            return False
+
+        def FinalResult(self) -> str:
+            word = {"word": "джарвис", "conf": 1.0, "start": self.seconds - 0.5, "end": self.seconds}
+            return json.dumps({"text": "джарвис", "result": [word]})
+
+        def Reset(self) -> None:
+            pass
+
+    monkeypatch.setattr(vosk, "KaldiRecognizer", FakeRecognizer)
+    spotter = wake_spotter(FakeVoskModel({"джарвис"}), "джарвис")
+    block = np.ones(512, np.int16)
+    for _ in range(50):  # 1,6 с — первая фраза
+        spotter.accept(block)
+    assert spotter.finish().start_of("джарвис", 0.9) == pytest.approx(1.1)
+    for _ in range(25):  # 0,8 с — вторая: время от её начала, а не от начала потока
+        spotter.accept(block)
+    assert spotter.finish().start_of("джарвис", 0.9) == pytest.approx(0.3)
+    spotter.accept(block)
+    spotter.reset()  # фраза оборвалась — следующая начнётся с нового отсчёта
+    for _ in range(25):
+        spotter.accept(block)
+    assert spotter.finish().start_of("джарвис", 0.9) == pytest.approx(0.3)
+
+
 # --- Whisper ---------------------------------------------------------------------
 
 

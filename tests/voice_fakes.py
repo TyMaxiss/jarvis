@@ -67,6 +67,7 @@ class FakeSpotter:
 
     conf — уверенность, с которой «распознано» слово; unk=False — остальные слова
     не отмечаются как [unk] (так Vosk иногда «проглатывает» команду после имени).
+    Время слова — с первого его блока, секунды от начала фразы (как у GrammarSpotter).
     """
 
     def __init__(
@@ -76,25 +77,34 @@ class FakeSpotter:
         self.word = word
         self.unk = unk
         self.value = value
-        self._seen_wake = False
-        self._seen_other = False
+        self.reset()
 
     def accept(self, block: np.ndarray) -> SpotResult | None:
+        at = self._blocks * BLOCK_MS / 1000
+        self._blocks += 1
         if int(block[0]) == self.value:
-            self._seen_wake = True
+            self._wake_at = at if self._wake_at is None else self._wake_at
         elif int(block[0]):
-            self._seen_other = True
+            self._other_at = at if self._other_at is None else self._other_at
         return None
 
     def finish(self) -> SpotResult:
-        words = ([(self.word, self.conf)] if self._seen_wake else []) + (
-            [("[unk]", 1.0)] if self._seen_other and self.unk else []
-        )
+        end = self._blocks * BLOCK_MS / 1000
+        words: list[tuple[tuple[str, float], tuple[float, float]]] = []
+        if self._wake_at is not None:
+            words.append(((self.word, self.conf), (self._wake_at, end)))
+        if self._other_at is not None and self.unk:
+            words.append((("[unk]", 1.0), (self._other_at, end)))
+        words.sort(key=lambda item: item[1][0])
         self.reset()
-        return SpotResult(" ".join(w for w, _ in words), tuple(words))
+        return SpotResult(
+            " ".join(word for (word, _), _ in words), tuple(w for w, _ in words), tuple(t for _, t in words)
+        )
 
     def reset(self) -> None:
-        self._seen_wake = self._seen_other = False
+        self._blocks = 0
+        self._wake_at: float | None = None
+        self._other_at: float | None = None
 
 
 class WordsSpotter:

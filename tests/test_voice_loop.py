@@ -43,6 +43,8 @@ SCRIPT = {
     5008: "Джарвис, отмена.",
     WAKE: "Джарвис.",
     6666: "Джарвис, субтитры сделал DimaTorzok",
+    5009: "Слушай, Маша, пойдём гулять. Джарвис, открой ютуб.",  # имя посреди разговора
+    5010: "Открой ютуб, Джарвис.",  # имя после команды
 }
 ECHO = 4444  # голос ассистента из колонок в микрофоне
 
@@ -122,8 +124,50 @@ class Harness:
 def test_wake_word_inside_phrase() -> None:
     audio = np.concatenate([silence(500), speech(WAKE, 300), speech(5001, 700), silence(1200)])
     h = Harness(audio).run()
-    assert h.handled == ["Джарвис, открой ютуб."]
-    assert ("recognized", "Джарвис, открой ютуб.") in h.status.events
+    assert h.handled == ["Открой ютуб."]
+    assert ("recognized", "Открой ютуб.") in h.status.events
+
+
+def test_only_words_after_name_are_the_command() -> None:
+    # «Слушай, Маша, пойдём гулять. Джарвис, открой ютуб» одним духом: сказанное до имени
+    # обращено не к ассистенту — ни Whisper (звук до имени), ни конвейер (текст) его не получают.
+    audio = np.concatenate(
+        [silence(300), speech(5009, 1500), speech(WAKE, 300), speech(5009, 700), silence(1200)]
+    )
+    h = Harness(audio).run()
+    assert h.handled == ["Открой ютуб."]
+    assert ("recognized", "Открой ютуб.") in h.status.events
+    # Whisper получил звук с 0,4 с до имени: 400 мс разговора, имя и команду, а не все 2,5 с.
+    assert h.stt.speech_ms == [pytest.approx(1400, abs=32)]
+    whole = Harness(np.concatenate([silence(500), speech(WAKE, 300), speech(5001, 700), silence(1200)])).run()
+    assert whole.stt.speech_ms == [1000]  # с имени и начинали — обрезать нечего
+
+
+def test_command_said_before_name_is_not_executed() -> None:
+    # «Открой ютуб, Джарвис»: после имени ничего — сигнал, и ассистент ждёт команду.
+    audio = np.concatenate(
+        [silence(300), speech(5010, 900), speech(WAKE, 300), silence(1000), speech(5002, 800), silence(1200)]
+    )
+    h = Harness(audio).run()
+    assert h.handled == ["Сделай громче."]
+    assert h.speech.sounds == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "command"),
+    [
+        ("Слушай, Джарвис, открой ютуб.", "Открой ютуб."),
+        ("Джарвис, открой ютуб.", "Открой ютуб."),
+        ("Джарвис.", ""),
+        ("Открой ютуб, Джарвис!", ""),
+        ("Jarvis, open YouTube", "Open YouTube"),
+        ("Эй, Джервис — который час?", "Который час?"),
+        ("Джарвис, скажи «Джарвис».", "Скажи «Джарвис»."),
+        ("Сделай тише", None),
+    ],
+)
+def test_after_name(text: str, command: str | None) -> None:
+    assert Harness(silence(100)).loop.after_name(text) == command
 
 
 def test_only_name_then_command() -> None:
@@ -152,7 +196,7 @@ def test_name_with_command_in_one_breath_has_no_live_words() -> None:
     audio = np.concatenate([silence(500), speech(WAKE, 300), speech(5001, 700), silence(1200)])
     h = Harness(audio, dictation=FakeDictation()).run()
     assert not [event for event in h.status.events if event[0] == "partial"]
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
 
 
 def test_noise_clears_live_words() -> None:
@@ -243,7 +287,7 @@ def test_name_and_command_when_vosk_hears_only_name() -> None:
     # Vosk вернул только «джарвис» без [unk], но речь длинная — значит, была и команда.
     audio = np.concatenate([silence(300), speech(WAKE, 400), speech(5001, 900), silence(1200)])
     h = Harness(audio, spotter=FakeSpotter(unk=False)).run()
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
     assert h.speech.sounds == 0  # без сигнала «слушаю»: команда уже прозвучала
 
 
@@ -332,7 +376,7 @@ def test_follow_up_without_name() -> None:
         [speech(WAKE, 300), speech(5001, 700), silence(1500), speech(5002, 700), silence(1500)]
     )
     h = Harness(audio).run()
-    assert h.handled == ["Джарвис, открой ютуб.", "Сделай громче."]
+    assert h.handled == ["Открой ютуб.", "Сделай громче."]
 
 
 def test_no_follow_up_after_unknown_command() -> None:
@@ -342,7 +386,7 @@ def test_no_follow_up_after_unknown_command() -> None:
         [speech(WAKE, 300), speech(5001, 700), silence(1500), speech(5002, 700), silence(1500)]
     )
     h = Harness(audio, understood=False).run()
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
     assert h.loop.state is VoiceState.IDLE
 
 
@@ -360,7 +404,7 @@ def test_follow_up_window_expires() -> None:
         [speech(WAKE, 300), speech(5001, 700), silence(4500), speech(5002, 700), silence(1500)]
     )
     h = Harness(audio).run()
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
 
 
 def test_follow_up_counts_from_end_of_reply() -> None:
@@ -369,7 +413,7 @@ def test_follow_up_counts_from_end_of_reply() -> None:
         [speech(WAKE, 300), speech(5001, 700), silence(4500), speech(5002, 700), silence(1500)]
     )
     h = Harness(audio, speech_out=FakeSpeech(speak_blocks=80)).run()
-    assert h.handled == ["Джарвис, открой ютуб.", "Сделай громче."]
+    assert h.handled == ["Открой ютуб.", "Сделай громче."]
 
 
 def test_half_duplex_ignores_own_speech() -> None:
@@ -385,14 +429,14 @@ def test_half_duplex_ignores_own_speech() -> None:
         ]
     )
     h = Harness(audio, speech_out=FakeSpeech(speak_blocks=100)).run()
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
 
 
 def test_hallucination_and_silence_are_not_commands() -> None:
     audio = np.concatenate([speech(WAKE, 300), speech(6666, 700), silence(1500)])
     h = Harness(audio).run()
     # Фейковый STT не фильтрует; фильтр «галлюцинаций» проверяется в test_voice_components.
-    assert h.handled == ["Джарвис, субтитры сделал DimaTorzok"]
+    assert h.handled == ["Субтитры сделал DimaTorzok"]
     empty = Harness(np.concatenate([speech(WAKE, 300), speech(4999, 700), silence(1500)])).run()
     assert empty.handled == []  # STT ничего не распознал
 
@@ -427,7 +471,7 @@ def test_status_events() -> None:
     assert kinds.index("latency") < kinds.index("listening")
     latency = dict(h.status.events)["latency"]
     assert "мс от конца речи: пауза 500 + распознавание" in latency  # min_silence_ms в Harness — 500
-    assert h.status.results == ["Джарвис, открой ютуб."]
+    assert h.status.results == ["Открой ютуб."]
 
 
 def test_waiting_for_wake_word_uses_little_cpu() -> None:
@@ -481,7 +525,7 @@ def test_stop_word_cancels_running_task() -> None:
     h.run()
     assert interrupted == [True]
     assert ("stopped", "стоп") in h.status.events and h.speech.stops >= 1
-    assert h.handled == ["Джарвис, открой ютуб.", "Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб.", "Открой ютуб."]
     assert 5002 not in h.stt.calls
 
 
@@ -596,7 +640,7 @@ def test_resume_after_pause_listens_again() -> None:
     h.loop.set_paused(True)
     h.loop.set_paused(False)
     h.run()
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
     assert not h.loop.paused
     states = [state for state, _ in h.status.events]
     assert states.index("paused") < len(states) - 1 - states[::-1].index("idle")
@@ -632,7 +676,7 @@ def test_stop_phrase_ends_follow_up() -> None:
         ]
     )  # fmt: skip
     h = Harness(audio).run()
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
     assert ("stopped", "Хватит!") in h.status.events and h.speech.stops >= 1
     assert 5002 not in h.stt.calls
 
@@ -651,7 +695,7 @@ def test_name_and_stop_word_outside_name_grammar() -> None:
     audio = np.concatenate([silence(300), speech(WAKE, 300), speech(5008, 500), silence(1200)])
     h = Harness(audio).run()
     assert h.stt.calls == [5008] and h.handled == []
-    assert ("stopped", "Джарвис, отмена.") in h.status.events
+    assert ("stopped", "Отмена.") in h.status.events
 
 
 def test_stop_command_is_not_a_stop_phrase() -> None:
@@ -692,7 +736,7 @@ def test_stop_button_while_phrase_is_recognized() -> None:
 
     stt.transcribe = once  # type: ignore[method-assign]
     h.run()
-    assert h.handled == ["Джарвис, открой ютуб."]  # первая фраза распознана, но не выполнена; вторая — да
+    assert h.handled == ["Открой ютуб."]  # первая фраза распознана, но не выполнена; вторая — да
     assert len(stt_calls) == 2
     assert h.speech.stops >= 1
 
@@ -723,7 +767,7 @@ def test_name_works_again_after_task() -> None:
     h = Harness(audio, stop=True)
     h.loop._busy = lambda: h.loop._clock_ms < 2000
     h.run()
-    assert h.handled == ["Джарвис, открой ютуб."] and h.stt.calls == [5001]
+    assert h.handled == ["Открой ютуб."] and h.stt.calls == [5001]
     assert not h.stopped.is_set()
 
 
@@ -739,7 +783,7 @@ def test_idle_loop_leaves_microphone_to_confirmation() -> None:
     assert h.source.reads == 0
     confirmer.listening = False
     thread.join(timeout=10)
-    assert h.handled == ["Джарвис, открой ютуб."]
+    assert h.handled == ["Открой ютуб."]
 
 
 # --- «Джарвис, стоп» поверх речи ассистента (колонки) --------------------------------------

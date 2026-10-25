@@ -79,19 +79,40 @@ def _normalize(text: str) -> str:
 
 @dataclass(frozen=True)
 class SpotResult:
-    """Окончательный результат Vosk по фразе: слова с уверенностью."""
+    """Окончательный результат Vosk по фразе: слова с уверенностью.
+
+    times — где каждое слово началось и кончилось, секунды от начала фразы (пусто, если Vosk
+    времени не дал).
+    """
 
     text: str = ""
     words: tuple[tuple[str, float], ...] = field(default_factory=tuple)
+    times: tuple[tuple[float, float], ...] = field(default_factory=tuple)
 
     def find(self, phrases: Sequence[str], min_conf: float) -> str | None:
         """Первая фраза, все слова которой распознаны подряд с уверенностью не ниже min_conf."""
         for phrase in phrases:
-            parts = phrase.split()
-            for start in range(len(self.words) - len(parts) + 1):
-                window = self.words[start : start + len(parts)]
-                if [w for w, _ in window] == parts and all(conf >= min_conf for _, conf in window):
-                    return phrase
+            if self._first(phrase, min_conf) is not None:
+                return phrase
+        return None
+
+    def start_of(self, phrase: str, min_conf: float) -> float | None:
+        """Когда (секунды от начала фразы) началось первое уверенное вхождение phrase.
+
+        None — phrase не распознана или Vosk не дал времени слов.
+        """
+        index = self._first(phrase, min_conf)
+        if index is None or len(self.times) != len(self.words):
+            return None
+        return self.times[index][0]
+
+    def _first(self, phrase: str, min_conf: float) -> int | None:
+        """Номер первого слова первого вхождения phrase, все слова которой не ниже min_conf."""
+        parts = phrase.split()
+        for start in range(len(self.words) - len(parts) + 1):
+            window = self.words[start : start + len(parts)]
+            if [w for w, _ in window] == parts and all(conf >= min_conf for _, conf in window):
+                return start
         return None
 
     @property
@@ -106,20 +127,27 @@ class SpotResult:
 
     def __add__(self, other: SpotResult) -> SpotResult:
         """Склеивает результаты, если Vosk разбил одну фразу на части."""
-        return SpotResult(f"{self.text} {other.text}".strip(), self.words + other.words)
+        timed = all(len(part.times) == len(part.words) for part in (self, other))
+        times = self.times + other.times if timed else ()
+        return SpotResult(f"{self.text} {other.text}".strip(), self.words + other.words, times)
 
     def describe(self) -> str:
         """Строка для лога: слова с уверенностью."""
         return " ".join(f"{w}({conf:.2f})" for w, conf in self.words) or "—"
 
 
-def parse_result(raw: str) -> SpotResult:
-    """Разбирает JSON результата Vosk (с SetWords(True))."""
+def parse_result(raw: str, origin: float = 0.0) -> SpotResult:
+    """Разбирает JSON результата Vosk (с SetWords(True)).
+
+    origin — с какой секунды потока, поданного распознавателю, началась фраза: Vosk считает
+    время слов от начала всего потока, а нужно — от начала фразы.
+    """
     data = json.loads(raw)
-    words = tuple(
-        (_normalize(str(item["word"])), float(item.get("conf", 0.0))) for item in data.get("result", [])
-    )
-    return SpotResult(_normalize(data.get("text", "")), words)
+    items = data.get("result", [])
+    words = tuple((_normalize(str(item["word"])), float(item.get("conf", 0.0))) for item in items)
+    timed = all("start" in item and "end" in item for item in items)
+    times = tuple((float(i["start"]) - origin, float(i["end"]) - origin) for i in items) if timed else ()
+    return SpotResult(_normalize(data.get("text", "")), words, times)
 
 
 class GrammarSpotter:
@@ -150,6 +178,8 @@ class GrammarSpotter:
         grammar = json.dumps([*self.phrases, *self.decoys, "[unk]"], ensure_ascii=False)
         self._recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE, grammar)
         self._recognizer.SetWords(True)
+        self._fed = 0  # сэмплов подано распознавателю: от начала этого потока Vosk считает время слов
+        self._origin: float | None = None  # с какой секунды потока началась текущая фраза
 
     @property
     def usable(self) -> bool:
@@ -157,20 +187,28 @@ class GrammarSpotter:
         return bool(self.phrases)
 
     def accept(self, block: np.ndarray) -> SpotResult | None:
-        """Подаёт блок звука. Возвращает результат, когда Vosk сам решил, что фраза кончилась."""
+        """Подаёт блок звука. Возвращает результат, когда Vosk сам решил, что фраза кончилась.
+
+        Первый блок после finish() или reset() — начало новой фразы: от него считается время слов.
+        """
+        if self._origin is None:
+            self._origin = self._fed / SAMPLE_RATE
+        self._fed += len(block)
         if self._recognizer.AcceptWaveform(block.astype(np.int16).tobytes()):
-            return parse_result(self._recognizer.Result())
+            return parse_result(self._recognizer.Result(), self._origin)
         return None
 
     def finish(self) -> SpotResult:
         """Завершает фразу (после паузы) и возвращает окончательный результат."""
-        result = parse_result(self._recognizer.FinalResult())
+        result = parse_result(self._recognizer.FinalResult(), self._origin or 0.0)
         self._recognizer.Reset()
+        self._origin = None
         return result
 
     def reset(self) -> None:
         """Забывает услышанное."""
         self._recognizer.Reset()
+        self._origin = None
 
 
 class Dictation:
