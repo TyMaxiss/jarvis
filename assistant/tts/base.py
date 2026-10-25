@@ -69,15 +69,18 @@ def pcm16_to_float(data: bytes) -> np.ndarray:
 
 
 class PhraseCache:
-    """Звук недавних фраз облачного голоса: одни и те же ответы («Готово», «Громкость 60%»)
-    не синтезируются заново — быстрее и бесплатно.
+    """Звук недавних коротких фраз облачного голоса: одни и те же ответы («Готово», «Громкость 60%»)
+    не синтезируются заново — быстрее и бесплатно. Длинные фразы (ответы нейросети) почти
+    не повторяются, а память занимают: секунда звука 48 кГц — около 0,2 МБ.
 
     Args:
-        size: сколько фраз помнить (по 2–3 с звука — до мегабайта на фразу).
+        size: сколько фраз помнить.
+        max_chars: фразы длиннее не запоминаются.
     """
 
-    def __init__(self, size: int = 64) -> None:
+    def __init__(self, size: int = 64, max_chars: int = 40) -> None:
         self._size = size
+        self._max_chars = max_chars
         self._items: collections.OrderedDict[str, np.ndarray] = collections.OrderedDict()
         self._lock = threading.Lock()
 
@@ -89,6 +92,8 @@ class PhraseCache:
             return audio
 
     def put(self, text: str, audio: np.ndarray) -> None:
+        if len(text) > self._max_chars:
+            return
         with self._lock:
             self._items[text] = audio
             self._items.move_to_end(text)

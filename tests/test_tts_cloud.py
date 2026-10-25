@@ -26,6 +26,9 @@ def test_pcm_and_phrase_cache() -> None:
     assert cache.get("раз") is one  # «раз» теперь самая свежая
     cache.put("три", two)
     assert cache.get("два") is None and cache.get("раз") is one
+    long = "Длинный ответ нейросети почти не повторяется, а память занимает."
+    cache.put(long, one)
+    assert cache.get(long) is None and cache.get("раз") is one  # и короткие не вытеснил
 
 
 # --- OpenAI ------------------------------------------------------------------------------
@@ -58,6 +61,8 @@ def fake_openai(monkeypatch: pytest.MonkeyPatch) -> type[FakeOpenAI]:
 
 
 def test_openai_voice_speaks_in_jarvis_manner(fake_openai: type[FakeOpenAI]) -> None:
+    import openai
+
     tts = AppConfig().tts.model_copy(update={"rate": 1.1})
     engine = openai_engine(tts)
     engine._factory = fake_openai
@@ -72,7 +77,8 @@ def test_openai_voice_speaks_in_jarvis_manner(fake_openai: type[FakeOpenAI]) -> 
             "base_url": "https://api.openai.com/v1",
             "api_key": "sk-test-key-1234",
             "max_retries": 1,
-            "timeout": 20.0,
+            # Без сети — 5 с на соединение; с повтором фраза ждёт не дольше ~20 с, потом запасной голос.
+            "timeout": openai.Timeout(10.0, connect=5.0),
         }
     ]
     engine.synthesize("Добрый вечер.")  # повтор — из памяти, без запроса
@@ -148,7 +154,7 @@ def test_yandex_voice_with_role_speed_and_key(monkeypatch: pytest.MonkeyPatch) -
     audio, rate = engine.synthesize("Температура 42°, а C++ — язык.")
     assert rate == 48_000 and audio.tolist() == pytest.approx(pcm16_to_float(PCM).tolist())
     url, headers, body, timeout = post.calls[0]
-    assert url == "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis" and timeout == 20.0
+    assert url == "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis" and timeout == 10.0
     assert headers["Authorization"] == "Api-Key AQVN-test-key"
     assert body == {
         "text": "Температура 42°, а C плюс  плюс  — язык.",  # «+» у SpeechKit — ударение

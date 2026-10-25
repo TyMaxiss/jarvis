@@ -210,6 +210,7 @@ class VoiceLoop:
         self._settings = settings
         names = [basic_clean(n) for n in (wake_names or ["джарвис"]) if basic_clean(n)]
         self._wake_phrase = names[0]
+        self._wake_names = frozenset(names)
         self._wake_skeletons = {skeleton(n) for n in names}
         self._name_only_ms = name_only_limit_ms(self._wake_phrase)
         self._heard = SpotResult()
@@ -494,25 +495,38 @@ class VoiceLoop:
         return self._name_in(text) is not None
 
     def after_name(self, text: str) -> str | None:
-        """Что сказано после первого обращения по имени, с заглавной буквы; None — имени в тексте нет.
+        """Что сказано после обращения по имени, с заглавной буквы; None — имени в тексте нет.
 
-        «Слушай, Джарвис, открой ютуб.» → «Открой ютуб.»; «Открой ютуб, Джарвис.» → «».
+        «Слушай, Джарвис, открой ютуб.» → «Открой ютуб.»; «Открой ютуб, Джарвис.» → «»;
+        «Джарвис! Джарвис, открой ютуб.» → «Открой ютуб.»
         """
         name = self._name_in(text)
         if name is None:
             return None
         rest = text[name.end() :].lstrip(_LEADING_PUNCT)
+        while (again := _WORD_RE.match(rest)) is not None and self._sounds_like_name(again.group()):
+            rest = rest[again.end() :].lstrip(_LEADING_PUNCT)  # позвали ещё раз — это тоже не команда
         return rest[:1].upper() + rest[1:]
 
     def _name_in(self, text: str) -> re.Match[str] | None:
-        """Первое слово текста, в котором узнаётся имя ассистента."""
+        """Обращение по имени: первое слово, равное имени или варианту его написания, а если
+        такого нет — первое похожее («Джервис»).
+
+        Поэтому в «Попрошу Джарвиса. Джарвис, открой ютуб» обращение — второе: «Джарвиса» —
+        упоминание имени, а не обращение.
+        """
+        words = list(_WORD_RE.finditer(text))
+        exact = next((word for word in words if basic_clean(word.group()) in self._wake_names), None)
+        return exact or next((word for word in words if self._sounds_like_name(word.group())), None)
+
+    def _sounds_like_name(self, word: str) -> bool:
+        """Узнаётся ли в слове имя ассистента: «Jarvis», «Джервис», «Джарвису»."""
         from rapidfuzz import fuzz
 
-        for word in _WORD_RE.finditer(text):
-            word_skeleton = skeleton(basic_clean(word.group()))
-            if word_skeleton and any(fuzz.ratio(word_skeleton, name) >= 80 for name in self._wake_skeletons):
-                return word
-        return None
+        word_skeleton = skeleton(basic_clean(word))
+        if not word_skeleton:
+            return False
+        return any(fuzz.ratio(word_skeleton, name) >= 80 for name in self._wake_skeletons)
 
     def _enter_idle(self) -> None:
         self._hold_buffer = []

@@ -185,6 +185,33 @@ def test_index_is_rebuilt_when_app_is_missing() -> None:
     assert found is not None and found.name == "Яндекс Музыка"
 
 
+def test_failed_rebuild_keeps_the_list() -> None:
+    calculator = AppEntry("Калькулятор", "start_app", "Microsoft.WindowsCalculator!App")
+    telegram = AppEntry("Telegram", "shortcut", "t.lnk")
+    scans: list[list[AppEntry] | Exception] = [
+        [telegram, calculator],
+        [telegram],
+        RuntimeError("сбой"),
+        [telegram, calculator],
+    ]
+
+    def scanner() -> list[AppEntry]:
+        result = scans.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return list(result)
+
+    index = AppIndex(AppsConfig(), scanner=scanner)
+    index.refresh()
+    index.refresh()  # PowerShell не ответил: только ярлыки — приложения «Пуска» остаются прежние
+    assert index.entries() == [telegram, calculator]
+    index.refresh()  # сканирование упало — прежний список
+    assert index.entries() == [telegram, calculator]
+    scans[0] = [AppEntry("Discord", "shortcut", "d.lnk"), calculator]
+    index.refresh()  # PowerShell ответил: удалённый Telegram из списка уходит
+    assert [entry.name for entry in index.entries()] == ["Discord", "Калькулятор"]
+
+
 def test_missing_app_error_names_similar_ones() -> None:
     from assistant.actions.apps import register
     from assistant.actions.registry import ActionError, ActionRegistry

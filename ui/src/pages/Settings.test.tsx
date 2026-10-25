@@ -118,6 +118,22 @@ describe('Голоса по ключу', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Где взять ключ голоса' }))
     expect(call).toHaveBeenCalledWith('open_tts_key_page', 'yandex')
   })
+
+  it('несохранённый ключ не переходит к другому голосу', async () => {
+    await renderPage()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Яндекс' }))
+      await tick()
+    })
+    fireEvent.change(screen.getByLabelText('Ключ голоса'), { target: { value: 'AQVN-yandex-key' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'OpenAI' }))
+      await tick()
+    })
+    // Иначе «Сохранить» записал бы ключ Яндекса вместо ключа OpenAI — общего с ChatGPT.
+    expect((screen.getByLabelText('Ключ голоса') as HTMLInputElement).value).toBe('')
+    expect((screen.getByRole('button', { name: 'Сохранить ключ голоса' }) as HTMLButtonElement).disabled).toBe(true)
+  })
 })
 
 describe('Оформление оверлея', () => {

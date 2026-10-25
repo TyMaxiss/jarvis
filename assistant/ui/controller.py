@@ -70,6 +70,7 @@ ENGINE_TITLES = {
     "piper": "Piper", "silero": "Silero", "edge": "Microsoft", "sapi": "Windows", "openai": "OpenAI",
     "yandex": "Яндекса",
 }  # fmt: skip
+ENGINE_ERROR_PREFIXES = ("OpenAI: ", "Yandex SpeechKit: ", "edge-tts: ")  # с чего начинаются их ошибки
 
 
 class WindowHost(Protocol):
@@ -917,7 +918,9 @@ class UiController:
     def _speech_failed(self, engine: str, problem: str) -> None:
         """Выбранный голос не сработал (нет сети или ключа) — пользователь узнаёт, почему звучит другой."""
         title = ENGINE_TITLES.get(engine, engine)
-        text = f"Не удалось озвучить голосом {title}: {problem}. Пока говорю запасным голосом"
+        for prefix in ENGINE_ERROR_PREFIXES:  # «голосом OpenAI: OpenAI: …» — название уже сказано
+            problem = problem.removeprefix(prefix)
+        text = f"Не удалось озвучить голосом {title}: {problem.rstrip('.')}. Пока говорю запасным голосом"
         self.bus.emit("toast", {"kind": "error", "text": text})
 
     # --- Ключи голосов ---------------------------------------------------------------

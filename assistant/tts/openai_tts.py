@@ -22,7 +22,9 @@ log = logging.getLogger(__name__)
 
 KEY_ENV = "OPENAI_API_KEY"  # общий с профилем нейросети ChatGPT
 SAMPLE_RATE = 24_000  # response_format="pcm"
-TIMEOUT = 20.0  # секунд на фразу: без ответа говорит запасной голос
+# Без ответа говорит запасной голос. С одним повтором фраза ждёт не дольше ~20 с.
+CONNECT_TIMEOUT = 5.0  # секунд на соединение: без сети быстрее перейти на запасной голос
+RECEIVE_TIMEOUT = 10.0  # секунд ожидания очередной части ответа
 # Голоса OpenAI. Лучшие по качеству, по словам OpenAI, — cedar и marin.
 OPENAI_VOICES = (
     ("cedar", "Cedar — мужской, лучший по качеству"),
@@ -125,12 +127,11 @@ class OpenAITTS:
                 "нет ключа OpenAI: вставьте его в «Настройки → Голос ассистента» (или OPENAI_API_KEY в .env)"
             )
         if self._client is None or key != self._client_key:
-            factory = self._factory
-            if factory is None:
-                from openai import OpenAI
+            import openai
 
-                factory = OpenAI
-            self._client = factory(base_url=self.base_url, api_key=key, max_retries=1, timeout=TIMEOUT)
+            factory = self._factory or openai.OpenAI
+            timeout = openai.Timeout(RECEIVE_TIMEOUT, connect=CONNECT_TIMEOUT)
+            self._client = factory(base_url=self.base_url, api_key=key, max_retries=1, timeout=timeout)
             self._client_key = key
         return self._client
 

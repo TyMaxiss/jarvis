@@ -648,6 +648,9 @@ def test_failed_voice_is_explained_in_a_toast(world: SimpleNamespace) -> None:
     text = world.bus.of("toast")[-1]["text"]
     assert text.startswith("Не удалось озвучить голосом Яндекса: нет ключа Yandex SpeechKit.")
     assert text.endswith("Пока говорю запасным голосом")
+    queue.on_failure("openai", "OpenAI: ключ не подходит (401)")  # название голоса — один раз
+    toast = world.bus.of("toast")[-1]["text"]
+    assert toast == "Не удалось озвучить голосом OpenAI: ключ не подходит (401). Пока говорю запасным голосом"
     queue.close()
 
 

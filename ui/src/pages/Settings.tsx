@@ -345,6 +345,7 @@ export function SettingsPage({ updates }: { updates: UpdateState }) {
         {(tts.engine === 'openai' || tts.engine === 'yandex') && (
           <Field label={tts.engine === 'openai' ? 'Ключ OpenAI' : 'Ключ Yandex Cloud'} hint={keyHint(tts.engine)} stacked>
             <VoiceKey
+              key={tts.engine}
               engine={tts.engine}
               info={settings.tts_keys[tts.engine]}
               onResult={(result) => {
@@ -552,7 +553,11 @@ export function voiceKeyPlaceholder(engine: KeyedEngine, info: TtsKey): string {
   return engine === 'openai' ? 'Вставьте ключ: sk-…' : 'Вставьте API-ключ Yandex Cloud'
 }
 
-/** Ключ голоса по ключу: сохраняется кнопкой в .env; сохранённый можно удалить. */
+/**
+ * Ключ голоса по ключу: сохраняется кнопкой в .env; сохранённый можно удалить.
+ * У каждого голоса поле своё (key={engine}): ключ Яндекса, вставленный до переключения
+ * на OpenAI, не сохранится как ключ OpenAI.
+ */
 function VoiceKey({
   engine,
   info,

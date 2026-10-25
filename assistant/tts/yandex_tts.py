@@ -27,7 +27,7 @@ URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
 KEY_ENV = "YANDEX_API_KEY"
 KEY_URL = "https://yandex.cloud/ru/docs/iam/operations/authentication/manage-api-keys"
 SAMPLE_RATE = 48_000
-TIMEOUT = 20.0  # секунд на фразу: без ответа говорит запасной голос
+TIMEOUT = 10.0  # секунд на соединение и на каждую часть ответа: без ответа говорит запасной голос
 LIMIT = 250  # символов в одном запросе; длиннее — unsafeMode: сервис сам делит текст
 # Голоса SpeechKit для русского (голос[:амплуа]). Kirill, alexander и anton есть только в API v3.
 YANDEX_VOICES = (

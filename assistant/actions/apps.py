@@ -224,14 +224,22 @@ class AppIndex:
         threading.Thread(target=self.refresh, name="app-index", daemon=True).start()
 
     def refresh(self) -> None:
-        """Пересканирует приложения."""
+        """Пересканирует приложения.
+
+        Пересборка не удалась или ничего не нашла — остаётся прежний список; PowerShell не ответил —
+        приложения меню «Пуск» (их знает только он) тоже берутся из прежнего списка, а не пропадают.
+        """
         started = time.perf_counter()
         try:
-            entries = filter_entries(self._scanner(), self._config.exclude)
+            scanned = filter_entries(self._scanner(), self._config.exclude)
         except Exception:
             log.exception("Ошибка при построении индекса приложений")
-            entries = []
+            scanned = []
         with self._lock:
+            entries = scanned or self._entries
+            if scanned and not any(entry.kind == "start_app" for entry in scanned):
+                kept = [entry for entry in self._entries if entry.kind == "start_app"]
+                entries = filter_entries(scanned + kept, self._config.exclude)
             self._entries = entries
             self._refreshed_at = self._clock()
         self._ready.set()
