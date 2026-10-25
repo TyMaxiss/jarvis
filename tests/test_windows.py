@@ -251,6 +251,39 @@ def test_installed_apps_are_found() -> None:
     assert found is not None and "powershell" in found.name.lower()
 
 
+def test_app_list_keeps_russian_names_without_console(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Jarvis.exe — окно без консоли: PowerShell, запущенный из него, пишет не в UTF-8, и русские
+    # названия программ (и папки вроде C:\\Users\\Александр) приходили искажёнными. Список программ
+    # теперь приходит как JSON в base64. Проверяется из pythonw — тоже процесса без консоли.
+    import json
+
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if not pythonw.exists():
+        pytest.skip("нет pythonw.exe")
+    result = tmp_path / "result.json"
+    code = f"""
+import json, subprocess
+from assistant.actions.apps import powershell_json
+new = powershell_json("@{{ name = 'Яндекс Музыка'; programs = [Environment]::GetFolderPath('Programs') }}")
+old = subprocess.run(
+    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output 'Яндекс Музыка'"],
+    capture_output=True, creationflags=0x08000000,
+).stdout.decode("utf-8-sig", errors="replace").strip()
+open(r"{result}", "w", encoding="utf-8").write(json.dumps({{"new": new, "old": old}}))
+"""
+    subprocess.run(
+        [str(pythonw), "-c", code], timeout=120, check=True, cwd=Path(__file__).resolve().parents[1]
+    )
+    data = json.loads(result.read_text(encoding="utf-8"))
+    with capsys.disabled():
+        print(f"\nПрежний способ из процесса без консоли: {data['old']!r}")
+    assert data["new"]["name"] == "Яндекс Музыка"
+    assert Path(data["new"]["programs"]).is_dir()
+
+
 def test_volume_controller_round_trip() -> None:
     controller = VolumeController()
     try:

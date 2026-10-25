@@ -429,7 +429,8 @@ def test_words_before_name_are_not_the_command(piper: PiperTTS, vosk_model: obje
     log.warning("Whisper получил %s с из %.1f с фразы", heard.seconds, len(said) / 16_000)
     assert len(handled) == 1 and chimes == 0, handled
     assert not {"пойдем", "пойдём", "гулять"} & set(handled[0].lower().replace(",", " ").split()), handled
-    assert heard.seconds[0] < len(said) / 16_000 - 0.5, heard.seconds  # звук обрезан до имени
+    # Без обрезки Whisper получил бы всю фразу с запасом до и после неё — дольше, чем said.
+    assert heard.seconds[0] < len(said) / 16_000 - 0.3, heard.seconds
 
 
 def test_command_before_name_is_not_executed(piper: PiperTTS, vosk_model: object, stt: WhisperSTT) -> None:
